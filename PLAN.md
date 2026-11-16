@@ -18,11 +18,10 @@
    - 每波间隙通过原生 `<dialog>` 弹出 **三选一战术强化芯片**（含召唤具备真实螺旋桨骨骼动画的双翼护航僚机）；通关第 3 幕母舰后可选择直接结算或跃迁进入 **无尽深空模式** 冲分。
 
 > [!NOTE]
-> **当前工程进度（v1.3 深度审计修复 & 自动化 E2E 验证体系）**：在 v1.2 全量 Phase 1–5 代码与 `public/ui/icons` **21 枚**透明图标/徽章/勋章落盘基础上，v1.3 对引擎管线、战斗玩法、UI 响应式与无障碍进行了全面审计加固：
-> - **引擎与资产管线**：[AssetLoader.ts](./src/engine/AssetLoader.ts) 扩展 `warmPools(..., extraWarmupObjects)` 并在 `initCorridorProps()` 前预编译 VFX 着色器，补齐 `UI_PRELOAD_URLS` 全量 26 项图标/UI 预加载与对象池视觉重置防护；[AnimationRig.ts](./src/engine/AnimationRig.ts) 将 `prop_gate` 开启触发提前至 `z >= -165`（`timeScale = 1.65`）适配高速推进；[SoundEngine.ts](./src/engine/SoundEngine.ts) 确保无头/锁定音频上下文安全降级。
-> - **玩法与 VFX**：[VfxSystem.ts](./src/game/VfxSystem.ts) 暴露预热网格并将 6 枚爆炸点光源预挂载于容器避免战中 `NUM_POINT_LIGHTS` 重编译；[WaveDirector.ts](./src/game/WaveDirector.ts) 修正星门 Y 轴归零对齐与 Boss `detachQueue` 祖先节点去重；[Game.ts](./src/game/Game.ts) / [Upgrades.ts](./src/game/Upgrades.ts) / [SaveStore.ts](./src/game/SaveStore.ts) 补齐 `ship_aero` +15% 基础暴击与 16m 折射紫光弹射、`ship_morph` +1 基础穿透、Boss 击杀即刻清弹/3s 无敌与 `rawDt` 驱动的 1.8s 慢动作解体、无尽模式持久化及 `window.__STARFORGE__` QA 遥测接口。
-> - **UI / CSS 与 `<dialog>` 合规**：[index.html](./index.html) 与 [style.css](./src/style.css) 将 `.boot-screen` 背景切换为相对路径 `<img src="./ui/bootloader_bg.png" class="boot-bg" ...>` 兼容 `base: './'` 子路径部署，配置相对路径 `./ui/logo_emblem.png` 站点图标消除 `/favicon.ico` 404，全部静态 `<img>` 补充 `width`/`height` 防 CLS，严格落实原生 `<dialog>` + `showModal()`、`dialog:modal` / `dialog::backdrop` `overscroll-behavior: contain`、仅 `dialog[open]` 布局作用域、高对比 `:focus-visible` 焦点环与 `:active` 按压反馈，并优化 `1440×900` 与 `1280×720` 双分辨率零溢出零遮挡布局。
-> - **无头 E2E 自动化回归**：新增 `tests/headless-e2e.mjs`（`npm run test:e2e`），基于 `playwright-core` 与 `vite preview` 面向 `dist/` 执行 8 阶段全链路 WebGL 渲染、三选一弹窗、三幕 Boss 破部位、无尽模式与 `1280×720` 响应式校验。
+> **当前工程进度（v2.0 场景次世代氛围重构 & 弹道粒子精修）**：在 v1.3 引擎/玩法/UI 深度审计与无头 E2E 体系基础上，v2.0 彻底重构了空域照明、三幕 3D 生态、HDR 后处理与弹道粒子表现，并通过 8 阶段 `105` 项自动化断言（含全画布亮度与跨幕像素分化量化校验）：
+> - **全景天穹、IBL 反射与三幕立体生态（`public/env/` + [EnvironmentSystem.ts](./src/game/EnvironmentSystem.ts)）**：新增 4 张 `1920×1080` WebP 全景远景贴图（`sky_hangar_dock.webp`、`sky_act1_metropolis.webp`、`sky_act2_nebula.webp`、`sky_act3_citadel.webp`），由 [AssetLoader.ts](./src/engine/AssetLoader.ts) `preloadAll()` 并行预加载（`SRGBColorSpace` + 安全 1x1 降级）并通过 `getEnvTextures()` 注入；内置 `PMREMGenerator` + `RoomEnvironment` PBR IBL（`environmentIntensity = 1.2`）、跟随相机的 GLSL 极光星空天穹球、边缘羽化 155° 弧形远景环幕、240 束高斯星尘高速流、3D 轨道机库甲板与龙门探照灯，以及差异化的三幕 3D 生态（Act 1 云海光轨高速 + 装甲面板接缝高架台面 + 56 座天际线塔群 + `prop_city_tile` 专属城市区块；Act 2 48 座旋转晶石小行星带 + 跃迁等离子河 + 85 通道骨骼跃迁星门；Act 3 熔核战舰甲板 + 32 座多层阶梯装甲隔舱扶壁 + 8 道扫射探照光柱）。
+> - **HDR 泛光后处理与弹道/护盾着色器（[ProjectileVisuals.ts](./src/game/ProjectileVisuals.ts) + [VfxSystem.ts](./src/game/VfxSystem.ts) + [Game.ts](./src/game/Game.ts)）**：主渲染管线接入 `EffectComposer`（`HalfFloatType` MSAA `WebGLRenderTarget` + `RenderPass` + `UnrealBloomPass(res, 0.35, 0.30, 0.90)` + `OutputPass`），在消除白色战机壳体泛白过曝的同时保留 `>2.0` HDR 光束与爆炸眩光；调亮 [manifest.ts](./src/assets/manifest.ts) `ACT_THEMES` 并降低场景指数雾密度至 `0.0022`；全面替换旧版方块弹丸与光球，新增 5 种舰艇专属 HDR 交叉光束弹丸（280 槽）、3D 掠翼追踪导弹弹头与 640 段高饱和橙金→品红→深紫 18 轨分明尾焰环缓冲、高对比度敌方双戒环等离子弹幕（320 槽）、48 槽枪口星芒焰、64 槽命中微爆（暴击双倍 8 芒金爆）、双马赫环加力喷口 + 360 槽翼尖拉烟，以及中心通透（`0.12–0.24`）边缘锐利的菲涅尔六边形晶格翻滚护盾；升级 [VfxSystem.ts](./src/game/VfxSystem.ts) 440 槽流线型 HDR 火花针、折射紫光光晕与闪电链；所有 GLSL `pow(...)` 与 `normalize(...)` 均内置防 `NaN` 钳位，确保 `HalfFloatType` 泛光管线零黑屏溢出。
+> - **玩法与无头 E2E 回归（[WaveDirector.ts](./src/game/WaveDirector.ts) + [tests/headless-e2e.mjs](./tests/headless-e2e.mjs)）**：[WaveDirector.ts](./src/game/WaveDirector.ts) 按幕精确控制 `prop_city_tile` 仅在 Act 1 战斗显示；`npm run test:e2e` 现包含 105 项断言，覆盖 1440×900 与 1280×720 布局、全画布亮度均值（机库 `> 26`，Act 1/2/3 `> 24`）及三幕间像素均值差异（`meanDiff > 6.0`），并自动采集 6 张实机验收截图。
 
 ---
 
@@ -41,7 +40,9 @@ flowchart TD
     Game --> Rig["AnimationRig.ts (3 级纯正骨骼 / 关键帧 / FK 机械关节)"]
     Game --> Director["WaveDirector.ts (3 幕波次编队 & Boss 阶段 AI)"]
     Game --> Upgrades["Upgrades.ts (12 种肉鸽芯片 & 骨骼双翼僚机)"]
-    Game --> VFX["VfxSystem.ts (5 层程序化爆炸 / 全 Boss 部件解体 / 走廊)"]
+    Game --> Env["EnvironmentSystem.ts (IBL / 2K 环幕 / 3 幕立体生态)"]
+    Game --> ProjVFX["ProjectileVisuals.ts (HDR 弹丸 / 马赫环 / 菲涅尔盾)"]
+    Game --> VFX["VfxSystem.ts (5 层程序化爆炸 / 全 Boss 部件解体)"]
     Game --> Audio["SoundEngine.ts (Web Audio 合成音效 & 电音循环)"]
 ```
 
@@ -57,9 +58,10 @@ starforge-3d/
 ├── scripts/
 │   └── fetch-and-optimize-models.mjs   # Hugging Face 14 资产下载（保护骨骼/关键帧，仅转换 WebP 贴图）
 ├── tests/
-│   └── headless-e2e.mjs                # 基于 playwright-core + vite preview 的 8 阶段无头 Chrome WebGL E2E 回归套件
+│   └── headless-e2e.mjs                # 基于 playwright-core + vite preview 的 8 阶段（105 断言）无头 Chrome WebGL E2E 回归套件
 ├── public/
 │   ├── draco/                          # 本地化 Draco 解码器（零外部 CDN 依赖）
+│   ├── env/                            # 4 张 1920×1080 WebP 机库/三幕全景远景贴图
 │   ├── models/                         # 14 个全精度可动/带骨骼本地 .glb 资产（85.81 MB）
 │   └── ui/                             # Codex 战术重工 UI 背景原画、透明边框（5 件）与裁切图标集
 │       └── icons/                      # 两批透明图集一次生成 + 自动裁切的 21 枚 256×256 透明小图标与徽章勋章
@@ -67,17 +69,19 @@ starforge-3d/
     ├── main.ts                         # 入口引导启动
     ├── style.css                       # 战术遥测风样式、1280×720/1440×900 响应式布局、dialog:modal 滚动遏制与焦点规范
     ├── assets/
-    │   └── manifest.ts                 # 14 个模型 URL、AI 来源、原始 Prompt、底座/罐体剥离与 Boss 可破坏部位
+    │   └── manifest.ts                 # 14 个模型 URL、AI 来源、原始 Prompt、ACT_THEMES 高通透配色与 Boss 可破坏部位
     ├── engine/
-    │   ├── AssetLoader.ts              # SkeletonUtils 克隆、静态子网格无损合批、对象池预热与 compileAsync
+    │   ├── AssetLoader.ts              # SkeletonUtils 克隆、静态子网格无损合批、全景贴图预载、对象池预热与 compileAsync
     │   ├── AnimationRig.ts             # 3 级纯正骨骼与机械关节驱动（SkinnedMesh / 百轨锁帧 / FK）
     │   └── SoundEngine.ts              # 零外部音频依赖的 Web Audio 合成音效与背景律动
     └── game/
         ├── SaveStore.ts                # localStorage 单舰战绩、通关耗时与静音偏好持久化存档
         ├── Upgrades.ts                 # 12 种战术肉鸽芯片池与数值叠加计算
-        ├── VfxSystem.ts                # 5 层程序化爆炸、Boss 实时/终结真实子部件解体、闪电链
-        ├── WaveDirector.ts             # 3 幕波次脚本、全息加速环、无尽模式难度曲线与可破部位 Boss 生成
-        └── Game.ts                     # 主循环、机库展台相机、追尾空战物理、Boss 部位优先判定与 HUD/弹窗交互
+        ├── EnvironmentSystem.ts        # RoomEnvironment IBL、GLSL 天穹、2K 弧形环幕、机库栈桥与 3 幕差异化 3D 生态
+        ├── ProjectileVisuals.ts        # HDR 弹道光束、追踪导弹烟迹、敌军戒环弹幕、枪口焰、马赫环与六边形护盾
+        ├── VfxSystem.ts                # 5 层程序化爆炸、HDR 火花针、Boss 实时/终结真实子部件解体、闪电链
+        ├── WaveDirector.ts             # 3 幕波次脚本、按幕城市块显隐控制、全息加速环、无尽模式与可破部位 Boss 生成
+        └── Game.ts                     # EffectComposer + UnrealBloomPass 主循环、机库/空战物理、Boss 部位判定与 HUD/弹窗交互
 ```
 
 ---
@@ -206,4 +210,4 @@ starforge-3d/
 | **Phase 2：3 级纯正动画系统与 3D 机库** | 实现 `AnimationRig.ts`（L1 `SkinnedMesh` 蒙皮、L2 `AnimationMixer` 百轨机械变形、L3 FK 父子机械腿与炮塔联动），搭好可拖拽的 4 战机机库与 Prompt 铭牌 | 四架战机在展台展示各自真实旋翼/折翼/起落架/舵面动作，切换秒开、朝向正确、金属通透 |
 | **Phase 3：高速走廊飞行与 5 层爆炸特效** | 实现追尾推进相机、键鼠双模移动侧倾（实时联动副翼与短舱）、双层预测准星、自动/手动开火、滚筒翻滚无敌弹反、4 阵营大招与 5 层程序化爆炸 | 可流畅穿梭射击、弹反敌弹、释放大招，击毁爆破具备闪光/冲击波/黑烟/碎片层次 |
 | **Phase 4：三幕战役、全 Boss 解体与肉鸽芯片** | 接入 3 幕走廊（城市块 / 85 通道骨骼跃迁星门）、4 类可动敌军、3 尊 Boss 步态炮塔 AI 与 1.8s 慢动作子部件崩飞解体、原生 `<dialog>` 12 种芯片与无尽模式 | 完整走通 3 幕可动 Boss 战、部件崩飞解体演出、芯片三选一（含骨骼螺旋桨僚机）与无尽模式 |
-| **Phase 5：音效打磨与自动化无头 E2E 验收** | 接入 `SoundEngine.ts` 合成音效与电音循环；完成 v1.3 管线/玩法/UI 响应式审计；编写 `tests/headless-e2e.mjs`（`playwright-core` + `vite preview` 实测 `dist/`）并检验 `1440×900` 与 `1280×720` | 构建零报错、HTTP 404/Console 零错误、加载页/机库 4 舰/战斗被动与大招/三选一弹窗/Boss 破部位/凯旋无尽模式与 6 张实机截图验收全部通过 |
+| **Phase 5：音效打磨与自动化无头 E2E 验收** | 接入 `SoundEngine.ts` 合成音效与电音循环；完成 v1.3 管线/玩法/UI 响应式审计与 v2.0 天穹生态/HDR 后处理/弹道着色器升级；编写 `tests/headless-e2e.mjs`（`playwright-core` + `vite preview` 实测 `dist/`）检验 `1440×900`/`1280×720` 与全画布亮度/跨幕差异 | 构建零报错、HTTP 404/Console 零错误、加载页/机库 4 舰/战斗被动与大招/三选一弹窗/Boss 破部位/凯旋无尽模式、机库与三幕亮度分化与 6 张 v2.0 实机截图验收全部通过 |

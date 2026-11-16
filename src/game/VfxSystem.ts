@@ -8,7 +8,8 @@ const SHOCKWAVE_VERT = `
     vUv = uv;
     vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
     vViewPos = -mvPos.xyz;
-    vNormalView = normalize(normalMatrix * normal);
+    vec3 nrm = normalMatrix * normal;
+    vNormalView = length(nrm) > 1e-5 ? normalize(nrm) : vec3(0.0, 0.0, 1.0);
     gl_Position = projectionMatrix * mvPos;
   }
 `;
@@ -23,11 +24,16 @@ const SHOCKWAVE_FRAG = `
   void main() {
     vec2 centered = vUv - vec2(0.5);
     float dist = length(centered) * 2.0;
-    float band = smoothstep(0.45, 0.78, dist) * (1.0 - smoothstep(0.84, 1.0, dist));
-    float alpha = band * (1.0 - uProgress) * (1.0 - uProgress);
-    if (alpha < 0.01) discard;
-    vec3 col = mix(vec3(1.0), uColor, smoothstep(0.0, 0.45, uProgress));
-    gl_FragColor = vec4(col * 1.9, alpha);
+    float outerBand = smoothstep(0.56, 0.78, dist) * (1.0 - smoothstep(0.83, 0.99, dist));
+    float innerRipple = smoothstep(0.30, 0.46, dist) * (1.0 - smoothstep(0.50, 0.65, dist)) * 0.38;
+    float band = clamp(outerBand + innerRipple, 0.0, 1.0);
+    float fade = (1.0 - uProgress) * (1.0 - uProgress);
+    float alpha = band * fade;
+    if (!(alpha >= 0.01)) discard;
+
+    vec3 hotCore = mix(vec3(1.0, 0.98, 0.92) * 2.25, uColor * 1.65, smoothstep(0.0, 0.42, uProgress));
+    vec3 col = mix(uColor * 1.5, hotCore, smoothstep(0.45, 0.92, outerBand));
+    gl_FragColor = vec4(col, alpha);
   }
 `;
 
@@ -62,8 +68,9 @@ const FIREBALL_VERT = `
     float n = noise3(position * 2.3 + vec3(uSeed, uProgress * 2.5, uSeed * 0.7));
     vec3 displaced = position + normal * ((n - 0.35) * (0.25 + uProgress * 0.55));
     vec4 mvPos = modelViewMatrix * vec4(displaced, 1.0);
-    vViewDir = normalize(-mvPos.xyz);
-    vNormalView = normalize(normalMatrix * normal);
+    vViewDir = length(mvPos.xyz) > 1e-5 ? normalize(-mvPos.xyz) : vec3(0.0, 0.0, 1.0);
+    vec3 nrm = normalMatrix * normal;
+    vNormalView = length(nrm) > 1e-5 ? normalize(nrm) : vec3(0.0, 0.0, 1.0);
     gl_Position = projectionMatrix * mvPos;
   }
 `;
@@ -100,21 +107,255 @@ const FIREBALL_FRAG = `
             + noise3(vLocalPos * 6.4 - vec3(uProgress * 4.0, uSeed, 0.0)) * 0.35;
 
     float threshold = smoothstep(0.18, 0.98, uProgress) * 1.05;
-    if (n < threshold) discard;
+    if (!(n >= threshold)) discard;
 
-    float rim = 1.0 - max(0.0, dot(normalize(vNormalView), normalize(vViewDir)));
-    vec3 coreWhite = vec3(1.0, 0.96, 0.82);
-    vec3 midFire = mix(vec3(1.0, 0.45, 0.08), uAccent, 0.35);
+    vec3 nView = length(vNormalView) > 1e-5 ? normalize(vNormalView) : vec3(0.0, 0.0, 1.0);
+    vec3 vDir = length(vViewDir) > 1e-5 ? normalize(vViewDir) : vec3(0.0, 0.0, 1.0);
+    float rim = clamp(1.0 - max(0.0, dot(nView, vDir)), 0.0, 1.0);
+    vec3 coreWhite = vec3(1.0, 0.88, 0.54) * 1.78;
+    vec3 midFire = mix(vec3(1.0, 0.32, 0.04), uAccent, 0.38) * 1.38;
     vec3 smokeDark = vec3(0.11, 0.12, 0.16);
 
-    vec3 col = mix(coreWhite, midFire, smoothstep(0.0, 0.32, uProgress));
-    col = mix(col, smokeDark, smoothstep(0.35, 0.85, uProgress));
-    col += uAccent * rim * (1.0 - uProgress) * 0.9;
+    float corePocket = smoothstep(threshold + 0.18, threshold + 0.52, n) * (1.0 - smoothstep(0.06, 0.40, uProgress));
+    vec3 col = mix(coreWhite, midFire, smoothstep(0.0, 0.20, uProgress));
+    col = mix(col, smokeDark, smoothstep(0.35, 0.84, uProgress));
+    col += coreWhite * corePocket * 0.35;
+    col += uAccent * rim * (1.0 - uProgress) * 1.15;
 
     float alpha = (1.0 - smoothstep(0.65, 1.0, uProgress)) * smoothstep(threshold, threshold + 0.14, n);
     gl_FragColor = vec4(col, alpha);
   }
 `;
+
+const SPARK_VERT = `
+  attribute float aSparkLife;
+  varying vec2 vUv;
+  varying vec3 vColor;
+  varying float vLife;
+
+  void main() {
+    vUv = uv;
+    vLife = clamp(aSparkLife, 0.0, 1.0);
+    #ifdef USE_INSTANCING_COLOR
+      vColor = instanceColor;
+    #else
+      vColor = vec3(1.0, 0.72, 0.28);
+    #endif
+
+    vec4 worldPos = vec4(position, 1.0);
+    #ifdef USE_INSTANCING
+      worldPos = instanceMatrix * worldPos;
+    #endif
+    gl_Position = projectionMatrix * modelViewMatrix * worldPos;
+  }
+`;
+
+const SPARK_FRAG = `
+  varying vec2 vUv;
+  varying vec3 vColor;
+  varying float vLife;
+
+  void main() {
+    float t = clamp(vUv.y, 0.0, 1.0); // 0 = rear tail, 1 = leading head
+    float u = abs(vUv.x - 0.5) * 2.0;
+
+    // Tapered needle profile: fine ionized tail expanding into bright droplet head around t=0.82
+    float needleW = mix(0.08, 0.85, pow(max(1e-4, t), 0.8)) * (1.0 - smoothstep(0.82, 1.0, t));
+    float d = u / max(0.03, needleW);
+
+    float headCore = exp(-d * d * 11.0) * smoothstep(0.42, 0.88, t) * (1.0 - smoothstep(0.92, 1.0, t));
+    float tailPlasma = exp(-d * d * 3.0) * smoothstep(0.0, 0.45, t) * (1.0 - smoothstep(0.88, 1.0, t));
+    float fade = 1.0 - smoothstep(0.22, 1.0, vLife);
+
+    float alpha = clamp((tailPlasma * 0.85 + headCore) * fade, 0.0, 1.0);
+    if (!(alpha >= 0.01)) discard;
+
+    vec3 headWhite = vec3(1.0, 0.98, 0.92) * 2.38;
+    vec3 tailCol = vColor * 1.65;
+    vec3 col = mix(tailCol, headWhite, clamp(headCore * 1.1 + smoothstep(0.72, 0.96, t) * 0.5, 0.0, 1.0));
+    gl_FragColor = vec4(col, alpha);
+  }
+`;
+
+const LIGHTNING_VERT = `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const LIGHTNING_FRAG = `
+  uniform vec3 uColor;
+  uniform float uOpacity;
+  uniform float uSeed;
+  varying vec2 vUv;
+
+  void main() {
+    float d = abs(vUv.x);
+    float core = exp(-d * d * 26.0);
+    float halo = exp(-d * d * 3.8);
+    float endFade = smoothstep(0.0, 0.06, vUv.y) * smoothstep(1.0, 0.94, vUv.y);
+    float flicker = 0.84 + 0.16 * sin(vUv.y * 28.0 + uSeed * 12.0);
+
+    float alpha = clamp((halo * 0.72 + core) * uOpacity * endFade * flicker, 0.0, 1.0);
+    if (!(alpha >= 0.01)) discard;
+
+    vec3 col = uColor * 1.7 * halo + vec3(1.0, 0.98, 1.0) * 2.4 * core;
+    gl_FragColor = vec4(col, alpha);
+  }
+`;
+
+const BEAM_HALO_VERT = `
+  varying vec2 vUv;
+  varying vec3 vNormalView;
+  varying vec3 vViewDir;
+
+  void main() {
+    vUv = uv;
+    vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+    vViewDir = length(mvPos.xyz) > 1e-5 ? normalize(-mvPos.xyz) : vec3(0.0, 0.0, 1.0);
+    vec3 nrm = normalMatrix * normal;
+    vNormalView = length(nrm) > 1e-5 ? normalize(nrm) : vec3(0.0, 0.0, 1.0);
+    gl_Position = projectionMatrix * mvPos;
+  }
+`;
+
+const BEAM_HALO_FRAG = `
+  uniform vec3 uColor;
+  uniform float uOpacity;
+  uniform float uProgress;
+  varying vec2 vUv;
+  varying vec3 vNormalView;
+  varying vec3 vViewDir;
+
+  void main() {
+    vec3 nView = length(vNormalView) > 1e-5 ? normalize(vNormalView) : vec3(0.0, 0.0, 1.0);
+    vec3 vDir = length(vViewDir) > 1e-5 ? normalize(vViewDir) : vec3(0.0, 0.0, 1.0);
+    float ndv = clamp(abs(dot(nView, vDir)), 0.0, 1.0);
+    float radial = pow(max(1e-4, ndv), 2.1);
+    float endFade = smoothstep(0.0, 0.08, vUv.y) * smoothstep(1.0, 0.92, vUv.y);
+    float shimmer = 0.85 + 0.15 * sin(vUv.y * 22.0 - uProgress * 24.0);
+
+    float alpha = clamp(radial * uOpacity * endFade * shimmer, 0.0, 1.0);
+    if (!(alpha >= 0.01)) discard;
+
+    vec3 col = mix(uColor * 1.68, vec3(1.0, 0.98, 1.0) * 2.1, pow(max(1e-4, ndv), 5.0) * 0.45);
+    gl_FragColor = vec4(col, alpha);
+  }
+`;
+
+function createCrossedSparkGeometry(): THREE.BufferGeometry {
+  const hw = 0.16;
+  const hl = 0.5;
+  const positions = new Float32Array([
+    // Horizontal XZ plane
+    -hw, 0, -hl,
+    hw, 0, -hl,
+    hw, 0, hl,
+    -hw, 0, hl,
+    // Vertical YZ plane
+    0, -hw, -hl,
+    0, hw, -hl,
+    0, hw, hl,
+    0, -hw, hl,
+  ]);
+  const uvs = new Float32Array([
+    0, 0,
+    1, 0,
+    1, 1,
+    0, 1,
+    0, 0,
+    1, 0,
+    1, 1,
+    0, 1,
+  ]);
+  const indices = [
+    0, 1, 2, 0, 2, 3,
+    4, 5, 6, 4, 6, 7,
+  ];
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  return geo;
+}
+
+function createLightningRibbonGeometry(jagged: THREE.Vector3[]): THREE.BufferGeometry {
+  const count = jagged.length;
+  const positions = new Float32Array(count * 4 * 3);
+  const uvs = new Float32Array(count * 4 * 2);
+  const indices: number[] = [];
+
+  const tangent = new THREE.Vector3();
+  const refUp = new THREE.Vector3(0, 1, 0);
+  const refAlt = new THREE.Vector3(1, 0, 0);
+  const sideA = new THREE.Vector3();
+  const sideB = new THREE.Vector3();
+
+  for (let i = 0; i < count; i++) {
+    const prev = jagged[Math.max(0, i - 1)];
+    const next = jagged[Math.min(count - 1, i + 1)];
+    tangent.subVectors(next, prev);
+    if (tangent.lengthSq() < 1e-6) {
+      tangent.set(0, 0, -1);
+    } else {
+      tangent.normalize();
+    }
+
+    const ref = Math.abs(tangent.y) < 0.9 ? refUp : refAlt;
+    sideA.crossVectors(tangent, ref).normalize();
+    sideB.crossVectors(tangent, sideA).normalize();
+
+    const t = count > 1 ? i / (count - 1) : 0;
+    const width = 0.44 * (0.68 + 0.32 * Math.sin(t * Math.PI));
+    const p = jagged[i];
+
+    // Ribbon A: vertices i*4 + 0, i*4 + 1
+    const baseV = i * 4;
+    const pOff = baseV * 3;
+    positions[pOff] = p.x - sideA.x * width;
+    positions[pOff + 1] = p.y - sideA.y * width;
+    positions[pOff + 2] = p.z - sideA.z * width;
+
+    positions[pOff + 3] = p.x + sideA.x * width;
+    positions[pOff + 4] = p.y + sideA.y * width;
+    positions[pOff + 5] = p.z + sideA.z * width;
+
+    // Ribbon B: vertices i*4 + 2, i*4 + 3
+    positions[pOff + 6] = p.x - sideB.x * width;
+    positions[pOff + 7] = p.y - sideB.y * width;
+    positions[pOff + 8] = p.z - sideB.z * width;
+
+    positions[pOff + 9] = p.x + sideB.x * width;
+    positions[pOff + 10] = p.y + sideB.y * width;
+    positions[pOff + 11] = p.z + sideB.z * width;
+
+    const uOff = baseV * 2;
+    uvs[uOff] = -1;
+    uvs[uOff + 1] = t;
+    uvs[uOff + 2] = 1;
+    uvs[uOff + 3] = t;
+    uvs[uOff + 4] = -1;
+    uvs[uOff + 5] = t;
+    uvs[uOff + 6] = 1;
+    uvs[uOff + 7] = t;
+
+    if (i < count - 1) {
+      const nextV = (i + 1) * 4;
+      // Ribbon A quad
+      indices.push(baseV, baseV + 1, nextV + 1, baseV, nextV + 1, nextV);
+      // Ribbon B quad
+      indices.push(baseV + 2, baseV + 3, nextV + 3, baseV + 2, nextV + 3, nextV + 2);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uvs, 2));
+  geo.setIndex(indices);
+  return geo;
+}
 
 interface ExplosionSlot {
   active: boolean;
@@ -168,15 +409,16 @@ interface DetachedPart {
 }
 
 interface LightningBolt {
-  line: THREE.Line;
-  mat: THREE.LineBasicMaterial;
+  mesh: THREE.Mesh;
+  mat: THREE.ShaderMaterial;
   age: number;
   maxAge: number;
 }
 
 interface RefractiveBeam {
-  mesh: THREE.Mesh;
-  mat: THREE.MeshBasicMaterial;
+  group: THREE.Group;
+  coreMat: THREE.MeshBasicMaterial;
+  haloMat: THREE.ShaderMaterial;
   age: number;
   maxAge: number;
 }
@@ -195,13 +437,16 @@ export class VfxSystem {
   private readonly flashGeo = new THREE.SphereGeometry(1, 14, 10);
   private readonly fireGeo = new THREE.IcosahedronGeometry(1, 2);
   private readonly ringGeo = new THREE.PlaneGeometry(2.6, 2.6);
-  private readonly beamGeo = new THREE.CylinderGeometry(0.11, 0.11, 1, 8);
+  private readonly beamCoreGeo = new THREE.CylinderGeometry(0.065, 0.065, 1, 8);
+  private readonly beamHaloGeo = new THREE.CylinderGeometry(0.36, 0.36, 1, 14, 1, true);
 
   private readonly debrisInst: THREE.InstancedMesh;
   private readonly debrisPool: DebrisParticle[] = [];
   private debrisCursor = 0;
 
   private readonly sparkInst: THREE.InstancedMesh;
+  private readonly sparkLifeAttr: THREE.InstancedBufferAttribute;
+  private readonly sparkLifeData = new Float32Array(MAX_SPARKS);
   private readonly sparkPool: SparkParticle[] = [];
   private sparkCursor = 0;
 
@@ -226,7 +471,7 @@ export class VfxSystem {
       group.visible = false;
 
       const flashMat = new THREE.MeshBasicMaterial({
-        color: 0xfff5d6,
+        color: new THREE.Color(2.1, 1.95, 1.62),
         transparent: true,
         opacity: 1,
         blending: THREE.AdditiveBlending,
@@ -319,13 +564,19 @@ export class VfxSystem {
       });
     }
 
-    // Instanced additive sparks / streaks
-    const sparkGeo = new THREE.BoxGeometry(0.08, 0.08, 0.75);
-    const sparkMat = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
+    // Instanced HDR tapered spark needles (custom GLSL ShaderMaterial)
+    const sparkGeo = createCrossedSparkGeometry();
+    this.sparkLifeData[0] = 0.15;
+    this.sparkLifeAttr = new THREE.InstancedBufferAttribute(this.sparkLifeData, 1);
+    this.sparkLifeAttr.setUsage(THREE.DynamicDrawUsage);
+    sparkGeo.setAttribute('aSparkLife', this.sparkLifeAttr);
+
+    const sparkMat = new THREE.ShaderMaterial({
+      vertexShader: SPARK_VERT,
+      fragmentShader: SPARK_FRAG,
       transparent: true,
-      opacity: 0.95,
       blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
       depthWrite: false,
     });
     this.sparkInst = new THREE.InstancedMesh(sparkGeo, sparkMat, MAX_SPARKS);
@@ -363,13 +614,15 @@ export class VfxSystem {
     const warmupFire = new THREE.Mesh(this.fireGeo, slot0.fireMat);
     const warmupRing = new THREE.Mesh(this.ringGeo, slot0.ringMat);
 
+    const identity = new THREE.Matrix4();
+
     const warmupDebris = new THREE.InstancedMesh(
       this.debrisInst.geometry,
       this.debrisInst.material,
       1
     );
     warmupDebris.frustumCulled = false;
-    warmupDebris.setMatrixAt(0, this.dummyObj.matrix);
+    warmupDebris.setMatrixAt(0, identity);
     warmupDebris.setColorAt(0, this.whiteColor);
     warmupDebris.count = 1;
 
@@ -379,31 +632,56 @@ export class VfxSystem {
       1
     );
     warmupSparks.frustumCulled = false;
-    warmupSparks.setMatrixAt(0, this.dummyObj.matrix);
+    warmupSparks.setMatrixAt(0, identity);
     warmupSparks.setColorAt(0, this.whiteColor);
     warmupSparks.count = 1;
 
-    const warmupBeam = new THREE.Mesh(
-      this.beamGeo,
+    const warmupBeamGroup = new THREE.Group();
+    const warmupBeamCore = new THREE.Mesh(
+      this.beamCoreGeo,
       new THREE.MeshBasicMaterial({
-        color: 0xc084fc,
+        color: new THREE.Color(2.2, 2.2, 2.3),
         transparent: true,
-        opacity: 0.9,
+        opacity: 0.95,
         blending: THREE.AdditiveBlending,
         depthWrite: false,
       })
     );
+    const warmupBeamHalo = new THREE.Mesh(
+      this.beamHaloGeo,
+      new THREE.ShaderMaterial({
+        uniforms: {
+          uColor: { value: new THREE.Color(0xc084fc) },
+          uOpacity: { value: 0.85 },
+          uProgress: { value: 0.1 },
+        },
+        vertexShader: BEAM_HALO_VERT,
+        fragmentShader: BEAM_HALO_FRAG,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+      })
+    );
+    warmupBeamGroup.add(warmupBeamHalo, warmupBeamCore);
 
-    const warmupLightning = new THREE.Line(
-      new THREE.BufferGeometry().setFromPoints([
+    const warmupLightning = new THREE.Mesh(
+      createLightningRibbonGeometry([
         new THREE.Vector3(0, 0, 0),
         new THREE.Vector3(0, 1, 0),
       ]),
-      new THREE.LineBasicMaterial({
-        color: 0x38bdf8,
+      new THREE.ShaderMaterial({
+        uniforms: {
+          uColor: { value: new THREE.Color(0x38bdf8) },
+          uOpacity: { value: 1.0 },
+          uSeed: { value: 0.5 },
+        },
+        vertexShader: LIGHTNING_VERT,
+        fragmentShader: LIGHTNING_FRAG,
         transparent: true,
-        opacity: 1,
         blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+        depthWrite: false,
       })
     );
 
@@ -413,9 +691,13 @@ export class VfxSystem {
       warmupRing,
       warmupDebris,
       warmupSparks,
-      warmupBeam,
+      warmupBeamGroup,
       warmupLightning,
     ];
+  }
+
+  clear(): void {
+    this.clearTransientEffects();
   }
 
   clearTransientEffects(): void {
@@ -435,15 +717,16 @@ export class VfxSystem {
     this.detachedParts.length = 0;
 
     for (const lb of this.lightningBolts) {
-      lb.line.removeFromParent();
-      lb.line.geometry.dispose();
+      lb.mesh.removeFromParent();
+      lb.mesh.geometry.dispose();
       lb.mat.dispose();
     }
     this.lightningBolts.length = 0;
 
     for (const rb of this.refractiveBeams) {
-      rb.mesh.removeFromParent();
-      rb.mat.dispose();
+      rb.group.removeFromParent();
+      rb.coreMat.dispose();
+      rb.haloMat.dispose();
     }
     this.refractiveBeams.length = 0;
   }
@@ -620,8 +903,8 @@ export class VfxSystem {
     if (this.lightningBolts.length >= MAX_LIGHTNING_BOLTS) {
       const oldest = this.lightningBolts.shift();
       if (oldest) {
-        oldest.line.removeFromParent();
-        oldest.line.geometry.dispose();
+        oldest.mesh.removeFromParent();
+        oldest.mesh.geometry.dispose();
         oldest.mat.dispose();
       }
     }
@@ -644,20 +927,28 @@ export class VfxSystem {
     }
     jagged.push(points[points.length - 1].clone());
 
-    const geo = new THREE.BufferGeometry().setFromPoints(jagged);
-    const mat = new THREE.LineBasicMaterial({
-      color: colorHex,
+    const geo = createLightningRibbonGeometry(jagged);
+    const mat = new THREE.ShaderMaterial({
+      uniforms: {
+        uColor: { value: new THREE.Color(colorHex) },
+        uOpacity: { value: 1.0 },
+        uSeed: { value: Math.random() },
+      },
+      vertexShader: LIGHTNING_VERT,
+      fragmentShader: LIGHTNING_FRAG,
       transparent: true,
-      opacity: 1,
       blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      depthWrite: false,
     });
-    const line = new THREE.Line(geo, mat);
-    this.container.add(line);
-    this.lightningBolts.push({ line, mat, age: 0, maxAge: 0.2 });
+    const mesh = new THREE.Mesh(geo, mat);
+    this.container.add(mesh);
+    this.lightningBolts.push({ mesh, mat, age: 0, maxAge: 0.22 });
   }
 
   /**
-   * Renders a crisp additive refractive laser bounce beam between two world points (used by Aero passive).
+   * Renders a crisp HDR refractive laser bounce beam (white-hot core + soft neon outer halo)
+   * between two world points (used by Aero passive).
    */
   spawnRefractiveBeam(from: THREE.Vector3, to: THREE.Vector3, colorHex = 0xc084fc): void {
     this.tmpDir.subVectors(to, from);
@@ -667,26 +958,45 @@ export class VfxSystem {
     if (this.refractiveBeams.length >= MAX_REFRACTIVE_BEAMS) {
       const oldest = this.refractiveBeams.shift();
       if (oldest) {
-        oldest.mesh.removeFromParent();
-        oldest.mat.dispose();
+        oldest.group.removeFromParent();
+        oldest.coreMat.dispose();
+        oldest.haloMat.dispose();
       }
     }
 
-    const mat = new THREE.MeshBasicMaterial({
-      color: colorHex,
+    const coreMat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(2.25, 2.2, 2.35),
       transparent: true,
-      opacity: 0.95,
+      opacity: 1.0,
       blending: THREE.AdditiveBlending,
       depthWrite: false,
     });
-    const mesh = new THREE.Mesh(this.beamGeo, mat);
-    mesh.position.addVectors(from, to).multiplyScalar(0.5);
-    this.tmpDir.divideScalar(dist);
-    mesh.quaternion.setFromUnitVectors(this.upY, this.tmpDir);
-    mesh.scale.set(1.25, dist, 1.25);
+    const haloMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uColor: { value: new THREE.Color(colorHex) },
+        uOpacity: { value: 0.9 },
+        uProgress: { value: 0.0 },
+      },
+      vertexShader: BEAM_HALO_VERT,
+      fragmentShader: BEAM_HALO_FRAG,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
 
-    this.container.add(mesh);
-    this.refractiveBeams.push({ mesh, mat, age: 0, maxAge: 0.22 });
+    const coreMesh = new THREE.Mesh(this.beamCoreGeo, coreMat);
+    const haloMesh = new THREE.Mesh(this.beamHaloGeo, haloMat);
+
+    const group = new THREE.Group();
+    group.add(haloMesh, coreMesh);
+    group.position.addVectors(from, to).multiplyScalar(0.5);
+    this.tmpDir.divideScalar(dist);
+    group.quaternion.setFromUnitVectors(this.upY, this.tmpDir);
+    group.scale.set(1.25, dist, 1.25);
+
+    this.container.add(group);
+    this.refractiveBeams.push({ group, coreMat, haloMat, age: 0, maxAge: 0.24 });
   }
 
   update(dt: number): void {
@@ -704,9 +1014,9 @@ export class VfxSystem {
         continue;
       }
 
-      const flashAlpha = Math.max(0, 1 - p / 0.24);
+      const flashAlpha = Math.max(0, 1 - p / 0.16);
       s.flashMesh.visible = flashAlpha > 0.01;
-      s.flashMesh.scale.setScalar(s.baseScale * (0.45 + p * 3.8));
+      s.flashMesh.scale.setScalar(s.baseScale * (0.45 + p * 3.4));
       s.flashMat.opacity = flashAlpha;
 
       const fireScale = s.baseScale * (0.55 + Math.pow(p, 0.55) * 1.85);
@@ -754,7 +1064,7 @@ export class VfxSystem {
     this.debrisInst.instanceMatrix.needsUpdate = true;
     if (this.debrisInst.instanceColor) this.debrisInst.instanceColor.needsUpdate = true;
 
-    // 3. Spark instances
+    // 3. Tapered HDR Spark Needles
     let activeSparks = 0;
     for (const sp of this.sparkPool) {
       if (!sp.active) continue;
@@ -780,16 +1090,18 @@ export class VfxSystem {
       this.dummyObj.scale.set(
         sp.thickness * fade,
         sp.thickness * fade,
-        sp.length * (0.4 + fade * 1.1)
+        sp.length * (0.45 + fade * 1.15)
       );
       this.dummyObj.updateMatrix();
       this.sparkInst.setMatrixAt(activeSparks, this.dummyObj.matrix);
       this.sparkInst.setColorAt(activeSparks, sp.color);
+      this.sparkLifeData[activeSparks] = p;
       activeSparks += 1;
     }
     this.sparkInst.count = activeSparks;
     this.sparkInst.instanceMatrix.needsUpdate = true;
     if (this.sparkInst.instanceColor) this.sparkInst.instanceColor.needsUpdate = true;
+    this.sparkLifeAttr.needsUpdate = true;
 
     // 4. Detached boss child fragments
     for (let i = this.detachedParts.length - 1; i >= 0; i--) {
@@ -816,36 +1128,40 @@ export class VfxSystem {
       }
     }
 
-    // 5. Chain lightning polylines
+    // 5. Chain lightning ribbons (inner white core + neon outer halo)
     for (let i = this.lightningBolts.length - 1; i >= 0; i--) {
       const lb = this.lightningBolts[i];
       lb.age += dt;
       const p = lb.age / lb.maxAge;
       if (p >= 1) {
-        lb.line.removeFromParent();
-        lb.line.geometry.dispose();
+        lb.mesh.removeFromParent();
+        lb.mesh.geometry.dispose();
         lb.mat.dispose();
         this.lightningBolts.splice(i, 1);
         continue;
       }
-      lb.mat.opacity = 1 - p;
+      lb.mat.uniforms.uOpacity.value = 1 - p;
     }
 
-    // 6. Refractive laser bounce beams
+    // 6. Refractive laser bounce beams (inner white core + neon outer halo)
     for (let i = this.refractiveBeams.length - 1; i >= 0; i--) {
       const rb = this.refractiveBeams[i];
       rb.age += dt;
       const p = rb.age / rb.maxAge;
       if (p >= 1) {
-        rb.mesh.removeFromParent();
-        rb.mat.dispose();
+        rb.group.removeFromParent();
+        rb.coreMat.dispose();
+        rb.haloMat.dispose();
         this.refractiveBeams.splice(i, 1);
         continue;
       }
-      rb.mat.opacity = 0.95 * (1 - p);
-      const radial = 1.25 * (1 - p * 0.65);
-      rb.mesh.scale.x = radial;
-      rb.mesh.scale.z = radial;
+      const fade = 1 - p;
+      rb.coreMat.opacity = fade;
+      rb.haloMat.uniforms.uOpacity.value = 0.9 * fade;
+      rb.haloMat.uniforms.uProgress.value = p;
+      const radial = 1.25 * (1 - p * 0.55);
+      rb.group.scale.x = radial;
+      rb.group.scale.z = radial;
     }
   }
 }

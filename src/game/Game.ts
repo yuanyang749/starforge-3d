@@ -1,4 +1,8 @@
 import * as THREE from 'three';
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer.js';
+import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import {
   ACT_THEMES,
   MODEL_ASSETS,
@@ -10,6 +14,8 @@ import {
 import { AssetLoader, type PooledModelInstance } from '../engine/AssetLoader';
 import { AnimationRig } from '../engine/AnimationRig';
 import { SoundEngine, type WeaponVoice } from '../engine/SoundEngine';
+import { EnvironmentSystem } from './EnvironmentSystem';
+import { ProjectileVisuals } from './ProjectileVisuals';
 import { SaveStore } from './SaveStore';
 import {
   UPGRADE_CARDS,
@@ -112,6 +118,7 @@ interface PlayerBullet {
   isDeflected: boolean;
   isWingman: boolean;
   isMainWeapon: boolean;
+  shipId: ShipId;
   age: number;
   maxAge: number;
   color: THREE.Color;
@@ -159,10 +166,14 @@ export class Game {
   private readonly renderer: THREE.WebGLRenderer;
   private readonly scene: THREE.Scene;
   private readonly camera: THREE.PerspectiveCamera;
+  private composer: EffectComposer | null = null;
+  private bloomPass: UnrealBloomPass | null = null;
 
   private readonly loader = new AssetLoader();
   private readonly sound: SoundEngine;
   private readonly save = new SaveStore();
+  private readonly envSystem: EnvironmentSystem;
+  private readonly projectileVisuals: ProjectileVisuals;
   private readonly vfx: VfxSystem;
   private readonly waves: WaveDirector;
 
@@ -170,12 +181,8 @@ export class Game {
   private readonly accentPointLight: THREE.PointLight;
   private readonly hangarPedestal = new THREE.Group();
   private readonly beamGroup = new THREE.Group();
-  private readonly shieldBubbleMesh: THREE.Mesh;
-  private readonly engineGlowMesh: THREE.Mesh;
 
-  // Instanced Projectiles & Pickups
-  private readonly playerBulletInst: THREE.InstancedMesh;
-  private readonly enemyBulletInst: THREE.InstancedMesh;
+  // Instanced Pickups
   private readonly repairPickupInst: THREE.InstancedMesh;
   private readonly energyPickupInst: THREE.InstancedMesh;
   private readonly dummy = new THREE.Object3D();
@@ -247,7 +254,7 @@ export class Game {
   private bossDetachTick = 0;
   private readonly tmpVec3 = new THREE.Vector3();
   private readonly tmpDir = new THREE.Vector3();
-  private readonly upZ = new THREE.Vector3(0, 0, 1);
+  private readonly tmpQuat = new THREE.Quaternion();
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -258,7 +265,7 @@ export class Game {
       antialias: true,
       powerPreference: 'high-performance',
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.25;
@@ -266,7 +273,7 @@ export class Game {
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(ACT_THEMES[0].bgColor);
-    this.scene.fog = new THREE.FogExp2(ACT_THEMES[0].fogColor, 0.0082);
+    this.scene.fog = new THREE.FogExp2(ACT_THEMES[0].fogColor, 0.0022);
 
     this.camera = new THREE.PerspectiveCamera(
       58,
@@ -287,8 +294,11 @@ export class Game {
     this.accentPointLight = new THREE.PointLight(0x00f0ff, 2.5, 22);
     this.scene.add(hemi, keyLight, rimCyan, fillWarm, this.accentPointLight);
 
+    this.envSystem = new EnvironmentSystem(this.scene, this.renderer);
+    this.projectileVisuals = new ProjectileVisuals(this.scene);
     this.vfx = new VfxSystem(this.scene);
     this.waves = new WaveDirector(this.scene, this.loader);
+    this.initPostProcessing();
 
     // Hangar turntable pedestal
     const padOuter = new THREE.Mesh(
@@ -315,36 +325,8 @@ export class Game {
     );
     padDisc.position.y = -1.68;
     this.hangarPedestal.add(padOuter, padInner, padDisc);
+    this.hangarPedestal.visible = false;
     this.scene.add(this.hangarPedestal);
-
-    // Player engine thruster aura & roll shield bubble
-    this.engineGlowMesh = new THREE.Mesh(
-      new THREE.SphereGeometry(0.45, 12, 10),
-      new THREE.MeshBasicMaterial({
-        color: 0x00f0ff,
-        transparent: true,
-        opacity: 0.78,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      })
-    );
-    this.engineGlowMesh.scale.set(0.9, 0.9, 2.6);
-    this.engineGlowMesh.visible = false;
-    this.scene.add(this.engineGlowMesh);
-
-    this.shieldBubbleMesh = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(2.2, 2),
-      new THREE.MeshBasicMaterial({
-        color: 0x00f0ff,
-        wireframe: true,
-        transparent: true,
-        opacity: 0.42,
-        blending: THREE.AdditiveBlending,
-        depthWrite: false,
-      })
-    );
-    this.shieldBubbleMesh.visible = false;
-    this.scene.add(this.shieldBubbleMesh);
 
     // Astra Ion Beam group
     const beamOuter = new THREE.Mesh(
@@ -376,33 +358,7 @@ export class Game {
     this.beamGroup.visible = false;
     this.scene.add(this.beamGroup);
 
-    // Instanced bullets & pickups
-    const pBulletGeo = new THREE.BoxGeometry(0.2, 0.2, 1.75);
-    const pBulletMat = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      blending: THREE.AdditiveBlending,
-      transparent: true,
-      opacity: 0.96,
-      depthWrite: false,
-    });
-    this.playerBulletInst = new THREE.InstancedMesh(pBulletGeo, pBulletMat, MAX_PLAYER_BULLETS);
-    this.playerBulletInst.frustumCulled = false;
-    this.playerBulletInst.setColorAt(0, new THREE.Color(0x00f0ff));
-    this.playerBulletInst.count = 0;
-
-    const eBulletGeo = new THREE.OctahedronGeometry(0.36, 1);
-    const eBulletMat = new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      blending: THREE.AdditiveBlending,
-      transparent: true,
-      opacity: 0.95,
-      depthWrite: false,
-    });
-    this.enemyBulletInst = new THREE.InstancedMesh(eBulletGeo, eBulletMat, MAX_ENEMY_BULLETS);
-    this.enemyBulletInst.frustumCulled = false;
-    this.enemyBulletInst.setColorAt(0, new THREE.Color(0xff4757));
-    this.enemyBulletInst.count = 0;
-
+    // Instanced Pickups
     const repairGeo = new THREE.OctahedronGeometry(0.7, 0);
     const repairMat = new THREE.MeshStandardMaterial({
       color: 0x10b981,
@@ -427,12 +383,7 @@ export class Game {
     this.energyPickupInst.frustumCulled = false;
     this.energyPickupInst.count = 0;
 
-    this.scene.add(
-      this.playerBulletInst,
-      this.enemyBulletInst,
-      this.repairPickupInst,
-      this.energyPickupInst
-    );
+    this.scene.add(this.repairPickupInst, this.energyPickupInst);
 
     // Query required DOM elements & native dialogs
     this.els = this.cacheDomElements([
@@ -521,6 +472,57 @@ export class Game {
     return map;
   }
 
+  private initPostProcessing(): void {
+    try {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const w = Math.max(1, window.innerWidth);
+      const h = Math.max(1, window.innerHeight);
+      const maxSamples = this.renderer.capabilities.isWebGL2
+        ? Math.min(4, this.renderer.capabilities.maxSamples || 0)
+        : 0;
+
+      const buildComposer = (samples: number): {
+        composer: EffectComposer;
+        bloomPass: UnrealBloomPass;
+      } => {
+        const renderTarget = new THREE.WebGLRenderTarget(
+          Math.max(1, Math.round(w * dpr)),
+          Math.max(1, Math.round(h * dpr)),
+          {
+            type: THREE.HalfFloatType,
+            samples,
+          }
+        );
+        const composer = new EffectComposer(this.renderer, renderTarget);
+        composer.setPixelRatio(dpr);
+        composer.setSize(w, h);
+        composer.addPass(new RenderPass(this.scene, this.camera));
+        const bloomPass = new UnrealBloomPass(
+          new THREE.Vector2(Math.round(w * dpr), Math.round(h * dpr)),
+          0.35,
+          0.30,
+          0.90
+        );
+        composer.addPass(bloomPass);
+        composer.addPass(new OutputPass());
+        return { composer, bloomPass };
+      };
+
+      try {
+        const built = buildComposer(maxSamples);
+        this.composer = built.composer;
+        this.bloomPass = built.bloomPass;
+      } catch {
+        const built = buildComposer(0);
+        this.composer = built.composer;
+        this.bloomPass = built.bloomPass;
+      }
+    } catch {
+      this.composer = null;
+      this.bloomPass = null;
+    }
+  }
+
   async init(): Promise<void> {
     this.startRenderLoop();
     this.updateMuteButtons();
@@ -537,6 +539,15 @@ export class Game {
       logEl.scrollTop = logEl.scrollHeight;
     });
 
+    this.envSystem.initEnvironment(this.loader.getEnvTextures());
+    this.envSystem.setMode('boot');
+
+    const extraWarmup: THREE.Object3D[] = [
+      ...this.vfx.getWarmupObjects(),
+      ...this.envSystem.getWarmupObjects(),
+      ...this.projectileVisuals.getWarmupObjects(),
+    ];
+
     await this.loader.warmPools(
       this.renderer,
       this.scene,
@@ -552,10 +563,11 @@ export class Game {
         logEl.appendChild(row);
         logEl.scrollTop = logEl.scrollHeight;
       },
-      this.vfx.getWarmupObjects()
+      extraWarmup
     );
 
     this.waves.initCorridorProps();
+    this.waves.setCombatActive(false);
 
     const enterBtn = this.els['boot-enter-btn'] as HTMLButtonElement;
     enterBtn.disabled = false;
@@ -588,9 +600,23 @@ export class Game {
 
   private bindEvents(): void {
     window.addEventListener('resize', () => {
-      this.camera.aspect = window.innerWidth / window.innerHeight;
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const w = Math.max(1, window.innerWidth);
+      const h = Math.max(1, window.innerHeight);
+      this.camera.aspect = w / h;
       this.camera.updateProjectionMatrix();
-      this.renderer.setSize(window.innerWidth, window.innerHeight);
+      this.renderer.setPixelRatio(dpr);
+      this.renderer.setSize(w, h);
+      if (this.composer) {
+        this.composer.setPixelRatio(dpr);
+        this.composer.setSize(w, h);
+      }
+      if (this.bloomPass) {
+        const resW = Math.round(w * dpr);
+        const resH = Math.round(h * dpr);
+        this.bloomPass.resolution.set(resW, resH);
+        this.bloomPass.setSize(resW, resH);
+      }
     });
 
     window.addEventListener('blur', () => {
@@ -764,12 +790,12 @@ export class Game {
     this.clearInputState();
     this.cleanupCombatObjects();
     this.state = 'hangar';
+    this.waves.setCombatActive(false);
+    this.envSystem.setMode('hangar');
     this.els['hangar-ui'].hidden = false;
     this.els['hud-ui'].hidden = true;
     this.els['boss-hud'].hidden = true;
     this.hangarPedestal.visible = true;
-    this.engineGlowMesh.visible = false;
-    this.shieldBubbleMesh.visible = false;
     this.beamGroup.visible = false;
 
     const saveData = this.save.getAll();
@@ -885,6 +911,8 @@ export class Game {
 
     this.state = 'playing';
     this.hangarPedestal.visible = false;
+    this.waves.setCombatActive(true);
+    this.envSystem.setMode('combat');
     this.els['hangar-ui'].hidden = true;
     this.els['hud-ui'].hidden = false;
     this.els['boss-hud'].hidden = true;
@@ -922,8 +950,6 @@ export class Game {
     this.playerInstance = pInst;
     this.playerRig = new AnimationRig(ship.modelKey, pInst.modelRoot, pInst.animations, 'combat');
 
-    (this.engineGlowMesh.material as THREE.MeshBasicMaterial).color.setHex(ship.engineColor);
-    this.engineGlowMesh.visible = true;
     this.accentPointLight.color.setHex(ship.accentHex);
 
     (this.els['hud-ship-badge'] as HTMLImageElement).src = ship.badgeIcon;
@@ -934,6 +960,7 @@ export class Game {
     this.sound.startBgm();
     const startEv = this.waves.startCampaign();
     this.handleWaveEvent(startEv);
+    this.envSystem.setAct(1, true);
     this.updateHud();
   }
 
@@ -941,26 +968,27 @@ export class Game {
     this.closeAllDialogs();
     this.clearInputState();
     this.state = 'playing';
+    this.waves.setCombatActive(true);
+    this.envSystem.setMode('combat');
     this.els['hud-ui'].hidden = false;
     this.els['boss-hud'].hidden = true;
     this.playerHp = Math.min(this.playerMaxHp, this.playerHp + Math.round(this.playerMaxHp * 0.45));
     const ev = this.waves.startEndlessMode();
     this.handleWaveEvent(ev);
+    this.envSystem.setAct(this.waves.getAct(), true);
     this.updateHud();
   }
 
   private cleanupCombatObjects(): void {
     this.vfx.clearTransientEffects();
+    this.projectileVisuals.clearTrails();
     this.waves.clearCombatEntities();
     this.playerBullets.length = 0;
     this.enemyBullets.length = 0;
     this.pickups.length = 0;
-    this.playerBulletInst.count = 0;
-    this.enemyBulletInst.count = 0;
     this.repairPickupInst.count = 0;
     this.energyPickupInst.count = 0;
     this.beamGroup.visible = false;
-    this.shieldBubbleMesh.visible = false;
 
     if (this.playerInstance) {
       this.loader.release(this.playerInstance);
@@ -1006,6 +1034,12 @@ export class Game {
 
     if (this.upgrades.rollBurstShots > 0) {
       const count = this.upgrades.rollBurstShots;
+      this.projectileVisuals.spawnMuzzleFlash(
+        this.playerPos.clone().add(new THREE.Vector3(0, 0, -1.6)),
+        new THREE.Vector3(0, 0, -1),
+        this.activeShip.accentHex,
+        0.95
+      );
       for (let i = 0; i < count; i++) {
         const spread = ((i / Math.max(1, count - 1)) - 0.5) * 0.65;
         this.spawnPlayerBullet(
@@ -1054,16 +1088,24 @@ export class Game {
         );
       }
       this.enemyBullets.length = 0;
-      this.enemyBulletInst.count = 0;
+      this.projectileVisuals.syncEnemyProjectiles(this.enemyBullets, 0, this.globalElapsed);
       this.vfx.spawnExplosion(this.playerPos, 3.2, 0x00f0ff, false);
+      this.projectileVisuals.spawnMuzzleFlash(
+        this.playerPos.clone().add(new THREE.Vector3(0, 0, -1.6)),
+        new THREE.Vector3(0, 0, -1),
+        0x00f0ff,
+        1.5
+      );
       this.showBanner('电磁护盾新星 · 弹幕转化!');
     } else if (id === 'morph') {
       for (let i = 0; i < 18; i++) {
         const angle = (i / 18) * Math.PI * 2;
         const offset = new THREE.Vector3(Math.cos(angle) * 1.8, Math.sin(angle) * 1.2, -1.4);
+        const vel = new THREE.Vector3(Math.cos(angle) * 24, Math.sin(angle) * 18, -68);
+        const launchPos = this.playerPos.clone().add(offset);
         this.spawnPlayerBullet(
-          this.playerPos.clone().add(offset),
-          new THREE.Vector3(Math.cos(angle) * 24, Math.sin(angle) * 18, -68),
+          launchPos,
+          vel,
           this.activeShip.bulletDamage * 1.9,
           0,
           true,
@@ -1072,6 +1114,9 @@ export class Game {
           false,
           0xff4757
         );
+        if (i % 3 === 0) {
+          this.projectileVisuals.spawnMuzzleFlash(launchPos, vel, 0xff4757, 0.9);
+        }
       }
       this.showBanner('幻影齐射风暴 // 18X MISSILE SALVO');
     } else {
@@ -1175,6 +1220,25 @@ export class Game {
     this.clearInputState();
     this.state = 'result';
     this.sound.stopBgm();
+    this.projectileVisuals.updateRollShield(
+      false,
+      this.playerPos,
+      0,
+      this.activeShip.accentHex,
+      this.globalElapsed
+    );
+    if (!victory) {
+      this.projectileVisuals.updatePlayerThrusters(
+        false,
+        this.playerPos,
+        this.tmpQuat,
+        this.playerVel,
+        this.activeShip.engineColor,
+        false,
+        0,
+        this.globalElapsed
+      );
+    }
 
     const deltaKills = Math.max(0, this.kills - this.recordedKillsThisRun);
     this.recordedKillsThisRun = this.kills;
@@ -1220,13 +1284,16 @@ export class Game {
 
   private handleWaveEvent(ev: ReturnType<WaveDirector['startCampaign']>): void {
     if (ev.type === 'act_banner') {
+      this.envSystem.setAct(ev.act, false);
       const theme = ACT_THEMES[Math.min(ACT_THEMES.length - 1, Math.max(0, ev.act - 1))];
       this.showBanner(`${theme.titleZh} · WAVE ${ev.waveInAct}`);
     } else if (ev.type === 'endless_wave') {
+      this.envSystem.setAct(ev.act, false);
       this.showBanner(`无尽深空 // ENDLESS WAVE ${ev.endlessWave}`);
     } else if (ev.type === 'upgrade_prompt') {
       this.openUpgradeDialog();
     } else if (ev.type === 'boss_intro' && ev.bossConfig) {
+      this.envSystem.setAct(ev.act, false);
       this.sound.playBossWarning();
       this.showBossHud(ev.bossConfig);
       this.showBanner(`⚠ 警报: ${ev.bossConfig.nameZh} 降临!`);
@@ -1314,7 +1381,11 @@ export class Game {
       this.globalElapsed += rawDt;
 
       this.frameUpdate(rawDt);
-      this.renderer.render(this.scene, this.camera);
+      if (this.composer) {
+        this.composer.render(rawDt);
+      } else {
+        this.renderer.render(this.scene, this.camera);
+      }
     };
     requestAnimationFrame(tick);
   }
@@ -1324,6 +1395,17 @@ export class Game {
       this.waves.updateEnvironment(rawDt, 0.75);
       this.camera.position.set(Math.sin(this.globalElapsed * 0.25) * 1.4, 1.8, 12);
       this.camera.lookAt(0, 0, -40);
+      this.envSystem.update(rawDt, this.globalElapsed, 36 * 0.75, this.camera);
+      this.projectileVisuals.updatePlayerThrusters(
+        false,
+        this.playerPos,
+        this.tmpQuat,
+        this.playerVel,
+        this.activeShip.engineColor,
+        false,
+        rawDt,
+        this.globalElapsed
+      );
       return;
     }
 
@@ -1341,6 +1423,17 @@ export class Game {
       this.camera.lookAt(0, -0.15, 0);
       this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, 50, rawDt * 5);
       this.camera.updateProjectionMatrix();
+      this.envSystem.update(rawDt, this.globalElapsed, 36 * 0.35, this.camera);
+      this.projectileVisuals.updatePlayerThrusters(
+        false,
+        this.playerPos,
+        this.tmpQuat,
+        this.playerVel,
+        this.activeShip.engineColor,
+        false,
+        rawDt,
+        this.globalElapsed
+      );
       return;
     }
 
@@ -1361,6 +1454,7 @@ export class Game {
     if (this.hitStopTimer > 0) {
       this.hitStopTimer -= rawDt;
       this.updateCameraAndFloatingTexts(rawDt);
+      this.envSystem.update(0, this.globalElapsed, 0, this.camera);
       return;
     }
 
@@ -1417,8 +1511,9 @@ export class Game {
     this.updatePickups(dt);
     this.vfx.update(dt);
 
-    // 6. Camera, Floating Numbers, Reticle & HUD
+    // 6. Camera, Atmosphere Sync, Floating Numbers & HUD
     this.updateCameraAndFloatingTexts(rawDt);
+    this.envSystem.update(dt, this.globalElapsed, 36 * envBoost, this.camera);
     this.updateHud();
   }
 
@@ -1474,19 +1569,21 @@ export class Game {
     let rollZ = THREE.MathUtils.clamp(-this.playerVel.x * 0.036, -0.58, 0.58);
     if (this.rollTimer > 0) {
       this.rollTimer = Math.max(0, this.rollTimer - dt);
-      rollZ +=
-        (1 - this.rollTimer / Math.max(0.01, this.rollDuration)) *
-        Math.PI *
-        2 *
-        this.rollDir;
-      this.shieldBubbleMesh.visible = this.rollTimer > 0;
-      this.shieldBubbleMesh.position.copy(this.playerPos);
-      this.shieldBubbleMesh.rotation.y += dt * 7;
+      const rollProgress = 1 - this.rollTimer / Math.max(0.01, this.rollDuration);
+      rollZ += rollProgress * Math.PI * 2 * this.rollDir;
+      this.projectileVisuals.updateRollShield(
+        this.rollTimer > 0,
+        this.playerPos,
+        rollProgress,
+        this.activeShip.accentHex,
+        this.globalElapsed
+      );
 
       // Deflect enemy bullets nearby
       for (let i = this.enemyBullets.length - 1; i >= 0; i--) {
         const eb = this.enemyBullets[i];
         if (eb.pos.distanceToSquared(this.playerPos) < 12.5) {
+          this.projectileVisuals.spawnBulletImpact(eb.pos, 0x00f0ff, false);
           this.spawnPlayerBullet(
             eb.pos.clone(),
             new THREE.Vector3(-eb.vel.x * 0.4, -eb.vel.y * 0.4, -85),
@@ -1504,7 +1601,13 @@ export class Game {
         }
       }
     } else {
-      this.shieldBubbleMesh.visible = false;
+      this.projectileVisuals.updateRollShield(
+        false,
+        this.playerPos,
+        0,
+        this.activeShip.accentHex,
+        this.globalElapsed
+      );
     }
 
     if (this.playerInstance && this.playerRig) {
@@ -1520,9 +1623,18 @@ export class Game {
       });
     }
 
-    // Engine glow flicker & light
-    this.engineGlowMesh.position.set(this.playerPos.x, this.playerPos.y, this.playerPos.z + 1.45);
-    this.engineGlowMesh.scale.z = 2.2 + Math.sin(this.globalElapsed * 42) * 0.45;
+    // Dual Mach-diamond afterburners, wingtip contrails & point light
+    const playerQuat = this.playerInstance ? this.playerInstance.root.quaternion : this.tmpQuat;
+    this.projectileVisuals.updatePlayerThrusters(
+      true,
+      this.playerPos,
+      playerQuat,
+      this.playerVel,
+      this.activeShip.engineColor,
+      this.boostFovTimer > 0 || this.ultimateActiveTimer > 0,
+      dt,
+      this.globalElapsed
+    );
     this.accentPointLight.position.set(this.playerPos.x, this.playerPos.y + 0.8, this.playerPos.z + 1.2);
 
     // Wingmen escort biplanes
@@ -1574,9 +1686,12 @@ export class Game {
     if (ship.id === 'opus') {
       // Triple plasma spread
       for (const ang of [-0.14, 0, 0.14]) {
+        const muzzlePos = this.playerPos.clone().add(new THREE.Vector3(Math.sin(ang) * 0.9, 0, -1.6));
+        const vel = new THREE.Vector3(Math.sin(ang) * bSpeed * 0.45, 0, -bSpeed);
+        this.projectileVisuals.spawnMuzzleFlash(muzzlePos, vel, ship.accentHex, 0.78);
         this.spawnPlayerBullet(
-          this.playerPos.clone().add(new THREE.Vector3(Math.sin(ang) * 0.9, 0, -1.6)),
-          new THREE.Vector3(Math.sin(ang) * bSpeed * 0.45, 0, -bSpeed),
+          muzzlePos,
+          vel,
           baseDmg,
           pierce,
           false,
@@ -1589,9 +1704,12 @@ export class Game {
     } else if (ship.id === 'astra' || ship.id === 'morph') {
       // Twin parallel cannons
       for (const side of [-0.72, 0.72]) {
+        const muzzlePos = this.playerPos.clone().add(new THREE.Vector3(side, -0.05, -1.6));
+        const vel = new THREE.Vector3(0, 0, -bSpeed);
+        this.projectileVisuals.spawnMuzzleFlash(muzzlePos, vel, ship.accentHex, 0.85);
         this.spawnPlayerBullet(
-          this.playerPos.clone().add(new THREE.Vector3(side, -0.05, -1.6)),
-          new THREE.Vector3(0, 0, -bSpeed),
+          muzzlePos,
+          vel,
           baseDmg,
           pierce,
           false,
@@ -1603,9 +1721,12 @@ export class Game {
       }
     } else {
       // Aero center laser
+      const muzzlePos = this.playerPos.clone().add(new THREE.Vector3(0, -0.05, -1.65));
+      const vel = new THREE.Vector3(0, 0, -bSpeed);
+      this.projectileVisuals.spawnMuzzleFlash(muzzlePos, vel, ship.accentHex, 0.95);
       this.spawnPlayerBullet(
-        this.playerPos.clone().add(new THREE.Vector3(0, -0.05, -1.65)),
-        new THREE.Vector3(0, 0, -bSpeed),
+        muzzlePos,
+        vel,
         baseDmg * 1.25,
         pierce,
         false,
@@ -1642,9 +1763,12 @@ export class Game {
     ) {
       for (let m = 0; m < this.upgrades.homingSalvoCount; m++) {
         const side = m % 2 === 0 ? -1 : 1;
+        const launchPos = this.playerPos.clone().add(new THREE.Vector3(side * 1.2, 0.3, -1.0));
+        const vel = new THREE.Vector3(side * 18, 6, -64);
+        this.projectileVisuals.spawnMuzzleFlash(launchPos, vel, 0xffb347, 0.72);
         this.spawnPlayerBullet(
-          this.playerPos.clone().add(new THREE.Vector3(side * 1.2, 0.3, -1.0)),
-          new THREE.Vector3(side * 18, 6, -64),
+          launchPos,
+          vel,
           baseDmg * 1.45,
           0,
           true,
@@ -1659,9 +1783,12 @@ export class Game {
     // Wingman biplanes fire synchronized shots
     if (this.wingmen.length > 0 && this.shotCounter % 2 === 0) {
       for (const w of this.wingmen) {
+        const muzzlePos = w.pos.clone().add(new THREE.Vector3(0, 0, -1.0));
+        const vel = new THREE.Vector3(0, 0, -bSpeed * 0.95);
+        this.projectileVisuals.spawnMuzzleFlash(muzzlePos, vel, 0x38bdf8, 0.62);
         this.spawnPlayerBullet(
-          w.pos.clone().add(new THREE.Vector3(0, 0, -1.0)),
-          new THREE.Vector3(0, 0, -bSpeed * 0.95),
+          muzzlePos,
+          vel,
           baseDmg * 0.72,
           0,
           false,
@@ -1695,6 +1822,7 @@ export class Game {
       isDeflected,
       isWingman,
       isMainWeapon,
+      shipId: this.activeShip.id,
       age: 0,
       maxAge: isHoming ? 2.8 : 1.75,
       color: new THREE.Color(colorHex),
@@ -1711,6 +1839,7 @@ export class Game {
         Math.hypot(eb.pos.x - this.playerPos.x, eb.pos.y - this.playerPos.y) < 3.4
       ) {
         this.vfx.spawnSparks(eb.pos, 3, 0x00f0ff, 12);
+        this.projectileVisuals.spawnBulletImpact(eb.pos, 0x00f0ff, false);
         this.enemyBullets.splice(i, 1);
       }
     }
@@ -1793,8 +1922,10 @@ export class Game {
     const actMult = 1 + (this.waves.getAct() - 1) * 0.14;
     if (e.kind === 'enemy_turret') {
       e.fireTimer = Math.max(1.5, 2.5 / actMult);
+      const centerDir = this.safeDirectionToPlayer(e.pos);
+      this.projectileVisuals.spawnMuzzleFlash(e.pos, centerDir, 0xff9f43, 0.9);
       for (const offset of [-0.14, 0, 0.14]) {
-        const dir = this.safeDirectionToPlayer(e.pos);
+        const dir = centerDir.clone();
         dir.x += offset;
         dir.normalize();
         this.spawnEnemyBullet(e.pos.clone(), dir.multiplyScalar(28 * actMult), 13, 0xff9f43);
@@ -1804,15 +1935,19 @@ export class Game {
       for (const side of [-0.7, 0.7]) {
         const origin = e.pos.clone().add(new THREE.Vector3(side, 0, 1.0));
         const dir = this.safeDirectionToPlayer(origin);
+        this.projectileVisuals.spawnMuzzleFlash(origin, dir, 0xff4757, 0.85);
         this.spawnEnemyBullet(origin, dir.multiplyScalar(36 * actMult), 12, 0xff4757);
       }
     } else if (e.kind === 'enemy_rover') {
       e.fireTimer = Math.max(1.4, 2.3 / actMult);
-      const dir = this.safeDirectionToPlayer(e.pos);
-      this.spawnEnemyBullet(e.pos.clone().add(new THREE.Vector3(0, 0.8, 1)), dir.multiplyScalar(31 * actMult), 16, 0xfbbf24);
+      const muzzlePos = e.pos.clone().add(new THREE.Vector3(0, 0.8, 1));
+      const dir = this.safeDirectionToPlayer(muzzlePos);
+      this.projectileVisuals.spawnMuzzleFlash(muzzlePos, dir, 0xfbbf24, 1.0);
+      this.spawnEnemyBullet(muzzlePos, dir.multiplyScalar(31 * actMult), 16, 0xfbbf24);
     } else {
       e.fireTimer = Math.max(1.5, 2.6 / actMult);
       const dir = this.safeDirectionToPlayer(e.pos);
+      this.projectileVisuals.spawnMuzzleFlash(e.pos, dir, 0x38bdf8, 0.72);
       this.spawnEnemyBullet(e.pos.clone(), dir.multiplyScalar(26 * actMult), 10, 0x38bdf8);
     }
   }
@@ -1861,7 +1996,7 @@ export class Game {
         this.screenShake = 0.9;
         this.slowMoTimer = 0;
         this.enemyBullets.length = 0;
-        this.enemyBulletInst.count = 0;
+        this.projectileVisuals.syncEnemyProjectiles(this.enemyBullets, 0, this.globalElapsed);
         this.invulnTimer = Math.max(this.invulnTimer, 2.0);
         this.els['boss-hud'].hidden = true;
         this.addUltimateCharge(45);
@@ -1923,6 +2058,7 @@ export class Game {
 
     const originMain = boss.pos.clone().add(new THREE.Vector3(0, 0.5, 2));
     const toPlayer = this.safeDirectionToPlayer(originMain);
+    this.projectileVisuals.spawnMuzzleFlash(originMain, toPlayer, boss.config.accentHex, 1.45);
     this.spawnEnemyBullet(originMain, toPlayer.multiplyScalar(34), 16, boss.config.accentHex);
 
     // Part-driven attacks
@@ -1931,8 +2067,10 @@ export class Game {
       const pOrigin = part.worldPos.clone();
       const dir = this.safeDirectionToPlayer(pOrigin);
       if (part.weaponEffectKey === 'leftCannon' || part.weaponEffectKey === 'rightCannon') {
+        this.projectileVisuals.spawnMuzzleFlash(pOrigin, dir, 0xff9f43, 1.25);
         this.spawnEnemyBullet(pOrigin, dir.multiplyScalar(38), 15, 0xff9f43);
       } else if (part.weaponEffectKey === 'leftClaw' || part.weaponEffectKey === 'rightClaw') {
+        this.projectileVisuals.spawnMuzzleFlash(pOrigin, dir, 0x00f0ff, 1.15);
         for (const a of [-0.12, 0.12]) {
           const d = dir.clone();
           d.x += a;
@@ -1940,6 +2078,7 @@ export class Game {
           this.spawnEnemyBullet(pOrigin, d.multiplyScalar(33), 13, 0x00f0ff);
         }
       } else if (part.weaponEffectKey === 'dorsalTurret') {
+        this.projectileVisuals.spawnMuzzleFlash(pOrigin, dir, 0xff4757, 1.35);
         for (const a of [-0.22, 0, 0.22]) {
           const d = dir.clone();
           d.x += a;
@@ -1947,14 +2086,13 @@ export class Game {
           this.spawnEnemyBullet(pOrigin, d.multiplyScalar(39), 15, 0xff4757);
         }
       } else if (part.weaponEffectKey === 'bowCrane') {
+        this.projectileVisuals.spawnMuzzleFlash(pOrigin, dir, 0xffb347, 1.3);
         this.spawnEnemyBullet(pOrigin, dir.multiplyScalar(42), 18, 0xffb347);
       }
     }
   }
 
   private updatePlayerBullets(dt: number): void {
-    let instCount = 0;
-
     for (let i = this.playerBullets.length - 1; i >= 0; i--) {
       const b = this.playerBullets[i];
       b.age += dt;
@@ -2057,25 +2195,9 @@ export class Game {
           }
         }
       }
-
-      if (instCount < MAX_PLAYER_BULLETS) {
-        this.dummy.position.copy(b.pos);
-        if (this.tmpDir.copy(b.vel).lengthSq() > 1e-6) {
-          this.tmpDir.normalize();
-          this.dummy.quaternion.setFromUnitVectors(this.upZ, this.tmpDir);
-        }
-        const s = b.isHoming ? 1.35 : b.isDeflected ? 1.25 : 1.0;
-        this.dummy.scale.set(s, s, s * (b.isHoming ? 1.2 : 1.0));
-        this.dummy.updateMatrix();
-        this.playerBulletInst.setMatrixAt(instCount, this.dummy.matrix);
-        this.playerBulletInst.setColorAt(instCount, b.color);
-        instCount += 1;
-      }
     }
 
-    this.playerBulletInst.count = instCount;
-    this.playerBulletInst.instanceMatrix.needsUpdate = true;
-    if (this.playerBulletInst.instanceColor) this.playerBulletInst.instanceColor.needsUpdate = true;
+    this.projectileVisuals.syncPlayerProjectiles(this.playerBullets, dt, this.globalElapsed);
   }
 
   private triggerAeroRefractiveBounce(
@@ -2116,6 +2238,9 @@ export class Game {
     e.flashTimer = 0.09;
     this.sound.playHit(isCrit);
     this.vfx.spawnSparks(e.pos, fromBeam ? 2 : 5, isCrit ? 0xffb347 : 0x00f0ff, 12);
+    if (!fromBeam) {
+      this.projectileVisuals.spawnBulletImpact(e.pos, isCrit ? 0xffb347 : 0x00f0ff, isCrit);
+    }
 
     if (!fromBeam || Math.random() < 0.25) {
       this.spawnFloatingText(
@@ -2159,7 +2284,7 @@ export class Game {
     this.bossDetachTick = 0.15;
     this.slowMoTimer = 1.85;
     this.enemyBullets.length = 0;
-    this.enemyBulletInst.count = 0;
+    this.projectileVisuals.syncEnemyProjectiles(this.enemyBullets, 0, this.globalElapsed);
     this.invulnTimer = Math.max(this.invulnTimer, 3.0);
     this.sound.playExplosion('boss');
     this.updateBossHud();
@@ -2179,6 +2304,9 @@ export class Game {
     boss.flashTimer = 0.08;
     this.sound.playHit(isCrit);
     this.vfx.spawnSparks(hitPos, fromBeam ? 2 : 7, 0xffb347, 15);
+    if (!fromBeam) {
+      this.projectileVisuals.spawnBulletImpact(hitPos, isCrit ? 0xffb347 : 0xff9f43, isCrit);
+    }
     if (!fromBeam || Math.random() < 0.25) {
       this.spawnFloatingText(
         hitPos,
@@ -2221,6 +2349,13 @@ export class Game {
     boss.flashTimer = 0.07;
     this.sound.playHit(isCrit);
     this.vfx.spawnSparks(hitPos, fromBeam ? 2 : 5, boss.config.accentHex, 13);
+    if (!fromBeam) {
+      this.projectileVisuals.spawnBulletImpact(
+        hitPos,
+        isCrit ? 0xffb347 : boss.config.accentHex,
+        isCrit
+      );
+    }
     if (!fromBeam ? Math.random() < 0.65 : Math.random() < 0.2) {
       this.spawnFloatingText(
         hitPos,
@@ -2300,7 +2435,6 @@ export class Game {
   }
 
   private updateEnemyBullets(dt: number): void {
-    let count = 0;
     for (let i = this.enemyBullets.length - 1; i >= 0; i--) {
       const eb = this.enemyBullets[i];
       eb.age += dt;
@@ -2316,21 +2450,9 @@ export class Game {
         this.enemyBullets.splice(i, 1);
         continue;
       }
-
-      if (count < MAX_ENEMY_BULLETS) {
-        this.dummy.position.copy(eb.pos);
-        this.dummy.rotation.set(eb.age * 6, eb.age * 5, 0);
-        this.dummy.scale.setScalar(1.0);
-        this.dummy.updateMatrix();
-        this.enemyBulletInst.setMatrixAt(count, this.dummy.matrix);
-        this.enemyBulletInst.setColorAt(count, eb.color);
-        count += 1;
-      }
     }
 
-    this.enemyBulletInst.count = count;
-    this.enemyBulletInst.instanceMatrix.needsUpdate = true;
-    if (this.enemyBulletInst.instanceColor) this.enemyBulletInst.instanceColor.needsUpdate = true;
+    this.projectileVisuals.syncEnemyProjectiles(this.enemyBullets, dt, this.globalElapsed);
   }
 
   private applyPlayerDamage(dmg: number): void {
@@ -2342,6 +2464,7 @@ export class Game {
     this.sound.playShieldHit();
     this.flashDamageVignette('damage');
     this.vfx.spawnSparks(this.playerPos, 10, 0xff4757, 14);
+    this.projectileVisuals.spawnBulletImpact(this.playerPos, 0xff4757, false);
 
     if (this.playerHp <= 0) {
       this.vfx.spawnExplosion(this.playerPos, 3.4, 0xff4757, true);
@@ -2624,9 +2747,14 @@ export class Game {
           this.state = 'playing';
         }
         this.enemyBullets.length = 0;
-        this.enemyBulletInst.count = 0;
+        this.projectileVisuals.syncEnemyProjectiles(this.enemyBullets, 0, this.globalElapsed);
         const ev = this.waves.forceSpawnBoss(act);
         this.handleWaveEvent(ev);
+        this.waves.setCombatActive(true);
+        this.envSystem.setMode('combat');
+        this.envSystem.setAct(act, true);
+        this.waves.updateEnvironment(0, 1.0);
+        this.envSystem.update(0, this.globalElapsed, 36, this.camera);
         const boss = this.waves.activeBoss;
         if (boss) {
           boss.pos.set(0, 1.6, -38);

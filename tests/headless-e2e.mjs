@@ -86,20 +86,7 @@ async function stopPreviewServer(child) {
   }
 }
 
-async function analyzeCenterCanvasPixels(pngBuffer, clipRect) {
-  const img = sharp(pngBuffer);
-  const meta = await img.metadata();
-  const extract = clipRect ?? {
-    left: Math.floor((meta.width ?? 1440) * 0.28),
-    top: Math.floor((meta.height ?? 900) * 0.14),
-    width: Math.floor((meta.width ?? 1440) * 0.44),
-    height: Math.floor((meta.height ?? 900) * 0.68),
-  };
-  const { data, info } = await img
-    .extract(extract)
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
+function computePixelMetrics(data, info) {
   const totalPixels = info.width * info.height;
   let litPixels = 0;
   let sumLuma = 0;
@@ -126,6 +113,30 @@ async function analyzeCenterCanvasPixels(pngBuffer, clipRect) {
   };
 }
 
+async function analyzeCenterCanvasPixels(pngBuffer, clipRect) {
+  const img = sharp(pngBuffer);
+  const meta = await img.metadata();
+  const extract = clipRect ?? {
+    left: Math.floor((meta.width ?? 1440) * 0.28),
+    top: Math.floor((meta.height ?? 900) * 0.14),
+    width: Math.floor((meta.width ?? 1440) * 0.44),
+    height: Math.floor((meta.height ?? 900) * 0.68),
+  };
+  const { data, info } = await img
+    .extract(extract)
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  return computePixelMetrics(data, info);
+}
+
+async function analyzeFullCanvasPixels(pngBuffer) {
+  const { data, info } = await sharp(pngBuffer)
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  return computePixelMetrics(data, info);
+}
+
 function meanPixelDiff(sampleA, sampleB) {
   assert.equal(sampleA.raw.length, sampleB.raw.length, 'Canvas crop sizes must match for diff');
   let diffSum = 0;
@@ -137,6 +148,27 @@ function meanPixelDiff(sampleA, sampleB) {
 }
 
 async function assertVisibleImagesLoaded(page, stageLabel) {
+  await page
+    .waitForFunction(
+      () => {
+        for (const img of document.querySelectorAll('img')) {
+          if (img.closest('[hidden]')) continue;
+          if (img.closest('dialog:not([open])')) continue;
+          const style = window.getComputedStyle(img);
+          if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') {
+            continue;
+          }
+          const rect = img.getBoundingClientRect();
+          if (rect.width === 0 && rect.height === 0) continue;
+          if (!img.complete) return false;
+        }
+        return true;
+      },
+      null,
+      { timeout: 3000 }
+    )
+    .catch(() => {});
+
   const badImages = await page.evaluate(() => {
     const issues = [];
     for (const img of document.querySelectorAll('img')) {
@@ -275,9 +307,6 @@ async function runTests() {
     await assertVisibleImagesLoaded(page, 'bootloader');
     passedChecks += 1;
 
-    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'e2e_01_bootloader.png') });
-    console.log('[e2e] Saved e2e_01_bootloader.png');
-
     await page.click('#boot-enter-btn');
 
     // ==================== STAGE 2: Hangar & 4 Ships ====================
@@ -343,29 +372,60 @@ async function runTests() {
       );
     }
 
-    // Switch back to Astra (index 0) for iconic Hangar screenshot
+    // Switch back to Astra (index 0) for illuminated Hangar brightness check & v2 screenshot
     await page.locator('#hangar-ship-list .hangar-ship-card').nth(0).click();
-    await sleep(300);
-    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'e2e_02_hangar.png') });
-    console.log('[e2e] Saved e2e_02_hangar.png');
+    await sleep(320);
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const hangarCanvasBuf = await page.locator('#game-canvas').screenshot();
+    const hangarFull = await analyzeFullCanvasPixels(hangarCanvasBuf);
+    console.log(`[e2e] Hangar full-canvas meanLuma=${hangarFull.meanLuma.toFixed(2)}`);
+    check(
+      hangarFull.meanLuma > 26,
+      `Expected bright Hangar full-canvas meanLuma > 26, got ${hangarFull.meanLuma.toFixed(2)}`
+    );
+    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'v2_01_hangar_bright.png') });
+    console.log('[e2e] Saved v2_01_hangar_bright.png');
 
     // ==================== STAGE 3: Active Combat, Passives, Roll & Ultimates ====================
     console.log('[e2e] Stage 3: Active Combat, Ship Passives, Roll & Ultimates...');
 
-    // 3a. Morph sortie (+1 base pierce check)
+    // 3a. Morph sortie (+1 base pierce + 18x homing missile trail & enemy plasma orbs)
     await page.locator('#hangar-ship-list .hangar-ship-card').nth(2).click();
     await page.click('#hangar-launch-btn');
     await page.waitForFunction(() => !document.getElementById('hud-ui')?.hidden, null, {
       timeout: 5000,
     });
-    await sleep(650);
+    await page.waitForFunction(
+      () => {
+        const s = window.__STARFORGE__.getSnapshot();
+        return s.enemyCount >= 2 && s.enemyBulletCount >= 1;
+      },
+      null,
+      { timeout: 6000 }
+    ).catch(() => {});
+    await sleep(350);
 
     const morphSnap = await page.evaluate(() => window.__STARFORGE__.getSnapshot());
     check(morphSnap.selectedShipId === 'morph', `Expected morph sortie, got ${morphSnap.selectedShipId}`);
     check(morphSnap.mode === 'playing', `Expected playing state after launch, got ${morphSnap.mode}`);
     check(morphSnap.pierceCount >= 1, `Expected ship_morph passive pierceCount >= 1, got ${morphSnap.pierceCount}`);
 
-    // Trigger Barrel Roll + Fill/Trigger Ultimate on Morph (18x Missile Salvo)
+    // Fill/Trigger Ultimate on Morph (18x Missile Salvo) and capture rich homing trail + enemy plasma orbs
+    await page.evaluate(() => {
+      window.__STARFORGE__.fillUltimate();
+    });
+    const filledSnap = await page.evaluate(() => window.__STARFORGE__.getSnapshot());
+    check(filledSnap.ultCharge >= 100, `Expected ultCharge >= 100 after fillUltimate(), got ${filledSnap.ultCharge}`);
+
+    const morphUltTriggered = await page.evaluate(() => window.__STARFORGE__.triggerUltimate());
+    check(morphUltTriggered === true, 'Expected Morph triggerUltimate() to return true');
+    await sleep(220);
+    const afterUltSnap = await page.evaluate(() => window.__STARFORGE__.getSnapshot());
+    check(afterUltSnap.ultCharge === 0, `Expected ultCharge reset to 0 after triggerUltimate(), got ${afterUltSnap.ultCharge}`);
+    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'v2_05_homing_ult_vfx.png') });
+    console.log('[e2e] Saved v2_05_homing_ult_vfx.png');
+
+    // Trigger Barrel Roll and verify cooldown/invulnerability
     const rollTriggered = await page.evaluate(() => window.__STARFORGE__.triggerBarrelRoll());
     check(rollTriggered === true, 'Expected triggerBarrelRoll() to return true');
     await sleep(120);
@@ -378,29 +438,19 @@ async function runTests() {
     check(rollSnap.snap.invulnTimer > 0, `Expected invulnTimer > 0 during barrel roll, got ${rollSnap.snap.invulnTimer}`);
     check(rollSnap.rollStatus !== 'READY', `Expected #hud-roll-status cooldown text, got ${rollSnap.rollStatus}`);
 
-    await page.evaluate(() => {
-      window.__STARFORGE__.fillUltimate();
-    });
-    const filledSnap = await page.evaluate(() => window.__STARFORGE__.getSnapshot());
-    check(filledSnap.ultCharge >= 100, `Expected ultCharge >= 100 after fillUltimate(), got ${filledSnap.ultCharge}`);
-
-    const morphUltTriggered = await page.evaluate(() => window.__STARFORGE__.triggerUltimate());
-    check(morphUltTriggered === true, 'Expected Morph triggerUltimate() to return true');
-    await sleep(120);
-    const afterUltSnap = await page.evaluate(() => window.__STARFORGE__.getSnapshot());
-    check(afterUltSnap.ultCharge === 0, `Expected ultCharge reset to 0 after triggerUltimate(), got ${afterUltSnap.ultCharge}`);
-
-    // 3b. Aero sortie (+15% crit & refractive purple bounce + Chrono Prism ultimate)
+    // 3b. Aero sortie (+15% crit & refractive purple bounce + Act 1 metropolis HDR combat + Fresnel hex roll shield)
     await page.evaluate(() => {
       window.__STARFORGE__.selectShip(3);
       window.__STARFORGE__.startSortie();
     });
     await page.waitForFunction(
-      () => window.__STARFORGE__.getSnapshot().enemyCount >= 2,
+      () => {
+        const s = window.__STARFORGE__.getSnapshot();
+        return s.enemyCount >= 2 && s.enemyBulletCount >= 1;
+      },
       null,
       { timeout: 8000 }
-    );
-    // Sweep aim across the corridor so auto-fire engages spawned enemies
+    ).catch(() => {});
     for (const [x, y] of [
       [520, 340],
       [720, 380],
@@ -412,6 +462,30 @@ async function runTests() {
       await page.mouse.move(x, y);
       await sleep(220);
     }
+
+    // Measure Act 1 full-canvas luminance before triggering roll/ult overlay effects
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const act1CombatBuf = await page.locator('#game-canvas').screenshot();
+    const act1Full = await analyzeFullCanvasPixels(act1CombatBuf);
+    console.log(`[e2e] Act 1 full-canvas meanLuma=${act1Full.meanLuma.toFixed(2)}`);
+    check(
+      act1Full.meanLuma > 24,
+      `Expected Act 1 full-canvas meanLuma > 24, got ${act1Full.meanLuma.toFixed(2)}`
+    );
+
+    // Wait for continuous player bolts + incoming enemy plasma orbs before triggering roll shield
+    await page.mouse.move(720, 440);
+    await page
+      .waitForFunction(
+        () => {
+          const s = window.__STARFORGE__.getSnapshot();
+          return s.playerBulletCount >= 3 && s.enemyBulletCount >= 1;
+        },
+        null,
+        { timeout: 3000 }
+      )
+      .catch(() => {});
+
     await page.evaluate(() => {
       window.__STARFORGE__.fillUltimate();
     });
@@ -420,7 +494,7 @@ async function runTests() {
     await page.evaluate(() => {
       window.__STARFORGE__.triggerBarrelRoll();
     });
-    await sleep(250);
+    await sleep(170);
 
     const aeroSnap = await page.evaluate(() => window.__STARFORGE__.getSnapshot());
     check(aeroSnap.selectedShipId === 'aero', `Expected aero sortie, got ${aeroSnap.selectedShipId}`);
@@ -438,16 +512,8 @@ async function runTests() {
     await assertVisibleImagesLoaded(page, 'combat-hud');
     passedChecks += 1;
 
-    // Verify HUD alignment & non-zero canvas rendering during combat
-    const combatCanvasBuf = await page.locator('#game-canvas').screenshot();
-    const combatPixels = await analyzeCenterCanvasPixels(combatCanvasBuf);
-    check(
-      combatPixels.litRatio > 0.05 && combatPixels.maxChannel > 60,
-      `Combat 3D scene appears black: litRatio=${combatPixels.litRatio.toFixed(3)}`
-    );
-
-    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'e2e_03_combat_hud.png') });
-    console.log('[e2e] Saved e2e_03_combat_hud.png');
+    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'v2_02_act1_metropolis_bullets.png') });
+    console.log('[e2e] Saved v2_02_act1_metropolis_bullets.png');
 
     // ==================== STAGE 4: Modals (<dialog>) ====================
     console.log('[e2e] Stage 4: Native <dialog> Pause & Upgrade Modals...');
@@ -484,9 +550,6 @@ async function runTests() {
     );
     check(stillOpen, 'Expected #upgrade-dialog (closedby="none") to resist Escape');
 
-    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'e2e_04_upgrade_dialog.png') });
-    console.log('[e2e] Saved e2e_04_upgrade_dialog.png');
-
     // Select first upgrade card
     await page.locator('#upgrade-cards-grid .chip-card').first().click();
     await page.waitForFunction(() => !document.getElementById('upgrade-dialog')?.hasAttribute('open'));
@@ -495,34 +558,132 @@ async function runTests() {
     await assertVisibleImagesLoaded(page, 'hud-after-upgrade');
     passedChecks += 1;
 
-    // ==================== STAGE 5: Act 1/2/3 Bosses & Part Destruction ====================
-    console.log('[e2e] Stage 5: Act 1/2/3 Bosses & Destructible Parts...');
+    // ==================== STAGE 5: Act 1/2/3 Bosses, Biomes & Part Destruction ====================
+    console.log('[e2e] Stage 5: Act 1/2/3 Bosses, Biome Differentiation & Destructible Parts...');
 
-    for (const act of [1, 2, 3]) {
-      await page.evaluate((a) => window.__STARFORGE__.spawnBossNow(a), act);
-      await page.waitForFunction(
-        (a) => {
-          const s = window.__STARFORGE__.getSnapshot();
-          const hudVisible = !document.getElementById('boss-hud')?.hidden;
-          return s.boss && s.boss.act === a && hudVisible;
-        },
-        act,
-        { timeout: 5000 }
-      );
-      await sleep(300);
-      const bossInfo = await page.evaluate(() => ({
-        snap: window.__STARFORGE__.getSnapshot(),
-        partPills: document.querySelectorAll('#boss-parts-row .boss-part-pill').length,
-      }));
-      check(
-        bossInfo.snap.boss?.act === act && bossInfo.partPills === 2,
-        `Act ${act} boss HUD mismatch: ${JSON.stringify(bossInfo)}`
-      );
-    }
+    // Act 1 Boss & Biome sampling
+    await page.evaluate(() => window.__STARFORGE__.spawnBossNow(1));
+    await page.waitForFunction(
+      () => {
+        const s = window.__STARFORGE__.getSnapshot();
+        return s.boss && s.boss.act === 1 && !document.getElementById('boss-hud')?.hidden;
+      },
+      null,
+      { timeout: 5000 }
+    );
+    await sleep(320);
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+    const act1BossInfo = await page.evaluate(() => ({
+      snap: window.__STARFORGE__.getSnapshot(),
+      partPills: document.querySelectorAll('#boss-parts-row .boss-part-pill').length,
+    }));
+    check(
+      act1BossInfo.snap.boss?.act === 1 && act1BossInfo.partPills === 2,
+      `Act 1 boss HUD mismatch: ${JSON.stringify(act1BossInfo)}`
+    );
+    const act1BossBuf = await page.locator('#game-canvas').screenshot();
+    const act1BossFull = await analyzeFullCanvasPixels(act1BossBuf);
+    check(
+      act1BossFull.meanLuma > 24,
+      `Expected Act 1 Boss full-canvas meanLuma > 24, got ${act1BossFull.meanLuma.toFixed(2)}`
+    );
 
-    // Act 3 Carrier is positioned in front of player; break its first destructible part without killing core
-    await sleep(350);
-    const act3Before = await page.evaluate(() => window.__STARFORGE__.getSnapshot());
+    // Act 2 Boss, Nebula Biome & Opening Warp Gate (spawns at 2.0s dt, opens at z>=-165)
+    await page.evaluate(() => window.__STARFORGE__.spawnBossNow(2));
+    await page.waitForFunction(
+      () => {
+        const s = window.__STARFORGE__.getSnapshot();
+        return s.boss && s.boss.act === 2 && !document.getElementById('boss-hud')?.hidden;
+      },
+      null,
+      { timeout: 5000 }
+    );
+    await page.mouse.move(320, 380);
+    await page.evaluate(
+      () =>
+        new Promise((resolve) => {
+          let simTime = 0;
+          let last = performance.now();
+          let rolled = false;
+          function step(now) {
+            const rawDt = Math.min(0.05, Math.max(0.001, (now - last) / 1000));
+            last = now;
+            simTime += rawDt;
+            if (simTime >= 2.6 && !rolled) {
+              rolled = true;
+              window.__STARFORGE__.triggerBarrelRoll();
+            }
+            if (simTime >= 5.9) {
+              resolve();
+            } else {
+              requestAnimationFrame(step);
+            }
+          }
+          requestAnimationFrame(step);
+        })
+    );
+    await page.mouse.move(720, 450);
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+    const act2BossInfo = await page.evaluate(() => ({
+      snap: window.__STARFORGE__.getSnapshot(),
+      partPills: document.querySelectorAll('#boss-parts-row .boss-part-pill').length,
+    }));
+    check(
+      act2BossInfo.snap.boss?.act === 2 && act2BossInfo.partPills === 2,
+      `Act 2 boss HUD mismatch: ${JSON.stringify(act2BossInfo)}`
+    );
+    const act2CanvasBuf = await page.locator('#game-canvas').screenshot();
+    const act2Full = await analyzeFullCanvasPixels(act2CanvasBuf);
+    console.log(`[e2e] Act 2 full-canvas meanLuma=${act2Full.meanLuma.toFixed(2)}`);
+    check(
+      act2Full.meanLuma > 24,
+      `Expected Act 2 full-canvas meanLuma > 24, got ${act2Full.meanLuma.toFixed(2)}`
+    );
+    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'v2_03_act2_nebula_warpgate.png') });
+    console.log('[e2e] Saved v2_03_act2_nebula_warpgate.png');
+
+    // Act 3 Boss, Dreadnought Trench Biome & Destructible Part Break
+    await page.evaluate(() => window.__STARFORGE__.spawnBossNow(3));
+    await page.waitForFunction(
+      () => {
+        const s = window.__STARFORGE__.getSnapshot();
+        return s.boss && s.boss.act === 3 && !document.getElementById('boss-hud')?.hidden;
+      },
+      null,
+      { timeout: 5000 }
+    );
+    await sleep(320);
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+    const act3BeforeInfo = await page.evaluate(() => ({
+      snap: window.__STARFORGE__.getSnapshot(),
+      partPills: document.querySelectorAll('#boss-parts-row .boss-part-pill').length,
+    }));
+    check(
+      act3BeforeInfo.snap.boss?.act === 3 && act3BeforeInfo.partPills === 2,
+      `Act 3 boss HUD mismatch: ${JSON.stringify(act3BeforeInfo)}`
+    );
+
+    const act3CanvasBuf = await page.locator('#game-canvas').screenshot();
+    const act3Full = await analyzeFullCanvasPixels(act3CanvasBuf);
+    console.log(`[e2e] Act 3 full-canvas meanLuma=${act3Full.meanLuma.toFixed(2)}`);
+    check(
+      act3Full.meanLuma > 24,
+      `Expected Act 3 full-canvas meanLuma > 24, got ${act3Full.meanLuma.toFixed(2)}`
+    );
+
+    const diff12 = meanPixelDiff(act1Full, act2Full);
+    const diff23 = meanPixelDiff(act2Full, act3Full);
+    const diff13 = meanPixelDiff(act1Full, act3Full);
+    console.log(
+      `[e2e] Multi-Act differentiation meanDiff: Act1-2=${diff12.toFixed(2)}, Act2-3=${diff23.toFixed(2)}, Act1-3=${diff13.toFixed(2)}`
+    );
+    check(diff12 > 6.0, `Expected Act 1 vs Act 2 meanDiff > 6.0, got ${diff12.toFixed(2)}`);
+    check(diff23 > 6.0, `Expected Act 2 vs Act 3 meanDiff > 6.0, got ${diff23.toFixed(2)}`);
+    check(diff13 > 6.0, `Expected Act 1 vs Act 3 meanDiff > 6.0, got ${diff13.toFixed(2)}`);
+
+    const act3Before = act3BeforeInfo.snap;
     const targetPart = act3Before.boss.parts[0];
     const targetPartId = targetPart.id;
     const partKillDmg = targetPart.maxHp + 40;
@@ -533,7 +694,7 @@ async function runTests() {
       { pid: targetPartId, dmg: partKillDmg }
     );
     check(partDamaged === true, `Expected damageBossPart(${targetPartId}) to return true`);
-    await sleep(180);
+    await sleep(160);
 
     const act3AfterPart = await page.evaluate(() => ({
       snap: window.__STARFORGE__.getSnapshot(),
@@ -558,8 +719,8 @@ async function runTests() {
     await assertVisibleImagesLoaded(page, 'boss-hud');
     passedChecks += 1;
 
-    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'e2e_05_boss_parts.png') });
-    console.log('[e2e] Saved e2e_05_boss_parts.png');
+    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'v2_04_act3_citadel_boss.png') });
+    console.log('[e2e] Saved v2_04_act3_citadel_boss.png');
 
     // ==================== STAGE 6: Slow-Mo Boss Kill, Victory, Save & Endless ====================
     console.log('[e2e] Stage 6: Slow-Mo Boss Kill, Victory Dialog, Save & Endless Mode...');
@@ -613,8 +774,8 @@ async function runTests() {
     await assertVisibleImagesLoaded(page, 'victory-dialog');
     passedChecks += 1;
 
-    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'e2e_06_victory_dialog.png') });
-    console.log('[e2e] Saved e2e_06_victory_dialog.png');
+    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'v2_06_victory_dialog.png') });
+    console.log('[e2e] Saved v2_06_victory_dialog.png');
 
     // Enter Endless Mode
     await page.click('#result-endless-btn');

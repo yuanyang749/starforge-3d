@@ -94,7 +94,6 @@ export interface WaveEvent {
   bossConfig?: BossConfig;
 }
 
-const STAR_COUNT = 1600;
 const ENEMY_CAPS: Record<EnemyKind, number> = {
   enemy_drone: 8,
   enemy_turret: 5,
@@ -109,10 +108,6 @@ export class WaveDirector {
   private readonly envGroup = new THREE.Group();
   private readonly corridorProps: CorridorProp[] = [];
   private readonly boostRings: BoostRing[] = [];
-  private readonly starPoints: THREE.Points;
-  private readonly starPositions: Float32Array;
-  private readonly gridHelper: THREE.GridHelper;
-  private readonly ceilingRails: THREE.LineSegments;
   private readonly gateBeaconGeo = new THREE.TorusGeometry(6.0, 0.16, 10, 40);
   private readonly gateBeaconMat = new THREE.MeshBasicMaterial({
     color: 0x00f0ff,
@@ -121,6 +116,7 @@ export class WaveDirector {
     blending: THREE.AdditiveBlending,
   });
 
+  private combatActive = false;
   private currentAct = 1;
   private waveInAct = 1; // 1, 2, 3 (3 = boss)
   private endlessMode = false;
@@ -155,67 +151,7 @@ export class WaveDirector {
     this.envGroup.name = 'CorridorEnvironment';
     scene.add(this.envGroup);
 
-    // 1. Streaming Starfield
-    const starGeo = new THREE.BufferGeometry();
-    this.starPositions = new Float32Array(STAR_COUNT * 3);
-    const colors = new Float32Array(STAR_COUNT * 3);
-    const palette = [
-      new THREE.Color(0xe2f1ff),
-      new THREE.Color(0x00f0ff),
-      new THREE.Color(0xffb347),
-      new THREE.Color(0xc084fc),
-    ];
-    for (let i = 0; i < STAR_COUNT; i++) {
-      const angle = Math.random() * Math.PI * 2;
-      const dist = 16 + Math.random() * 88;
-      this.starPositions[i * 3] = Math.cos(angle) * dist;
-      this.starPositions[i * 3 + 1] = Math.sin(angle) * dist * 0.72 + 2;
-      this.starPositions[i * 3 + 2] = -Math.random() * 260 + 25;
-      const c = palette[i % palette.length];
-      colors[i * 3] = c.r;
-      colors[i * 3 + 1] = c.g;
-      colors[i * 3 + 2] = c.b;
-    }
-    starGeo.setAttribute('position', new THREE.BufferAttribute(this.starPositions, 3));
-    starGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    const starMat = new THREE.PointsMaterial({
-      size: 0.52,
-      vertexColors: true,
-      transparent: true,
-      opacity: 0.9,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-    });
-    this.starPoints = new THREE.Points(starGeo, starMat);
-    this.envGroup.add(this.starPoints);
-
-    // 2. Neon perspective floor grid
-    this.gridHelper = new THREE.GridHelper(320, 40, 0x00f0ff, 0x164e63);
-    this.gridHelper.position.set(0, -11.5, -110);
-    const gm = this.gridHelper.material;
-    if (!Array.isArray(gm)) {
-      gm.transparent = true;
-      gm.opacity = 0.38;
-    }
-    this.envGroup.add(this.gridHelper);
-
-    // 3. Upper corridor speed guide lines
-    const railPts: number[] = [];
-    for (const x of [-15, 15]) {
-      railPts.push(x, 9.5, 20, x, 9.5, -240);
-      railPts.push(x * 1.2, -10.5, 20, x * 1.2, -10.5, -240);
-    }
-    const railGeo = new THREE.BufferGeometry();
-    railGeo.setAttribute('position', new THREE.Float32BufferAttribute(railPts, 3));
-    const railMat = new THREE.LineBasicMaterial({
-      color: 0x00f0ff,
-      transparent: true,
-      opacity: 0.25,
-    });
-    this.ceilingRails = new THREE.LineSegments(railGeo, railMat);
-    this.envGroup.add(this.ceilingRails);
-
-    // 4. Pooled holographic boost rings (3 rings)
+    // Pooled holographic boost rings (3 rings)
     const ringGeo = new THREE.TorusGeometry(2.85, 0.14, 12, 32);
     const innerGeo = new THREE.TorusGeometry(2.35, 0.05, 8, 28);
     for (let i = 0; i < 3; i++) {
@@ -247,13 +183,27 @@ export class WaveDirector {
 
   initCorridorProps(): void {
     this.clearCorridorProps();
-    // Spawn 10 flanking city blocks (-220 to +20)
+    // Spawn 10 flanking city blocks (-220 to +20) seated along Act 1 terrace decks (y = -10.2)
+    const scaleHeights = [0.92, 1.28, 1.05, 1.42, 0.86];
+    const scaleDepths = [1.0, 1.12, 0.94, 1.16, 1.04];
+    const yawOffsets = [0, Math.PI, Math.PI * 0.5, -Math.PI * 0.5, Math.PI];
+
     for (let i = 0; i < 5; i++) {
       const z = -i * 48 - 10;
       for (const side of [-1, 1]) {
         const inst = this.loader.acquire('prop_city_tile', false);
-        inst.root.position.set(side * 25.5, -9.5, z);
-        inst.root.rotation.y = side > 0 ? Math.PI * 0.5 : -Math.PI * 0.5;
+        const slotIdx = (i + (side > 0 ? 2 : 0)) % scaleHeights.length;
+        const heightScale = scaleHeights[slotIdx];
+        const depthScale = scaleDepths[slotIdx];
+        const yBase = -9.6 + (heightScale - 1.0) * 3.1;
+        const xOffset = side * (25.5 + (slotIdx % 2) * 1.4);
+        inst.root.position.set(xOffset, yBase, z);
+        inst.root.scale.set(depthScale, heightScale, depthScale);
+        inst.root.rotation.set(
+          0,
+          (side > 0 ? Math.PI * 0.5 : -Math.PI * 0.5) + yawOffsets[(i + (side > 0 ? 1 : 0)) % yawOffsets.length],
+          0
+        );
         this.envGroup.add(inst.root);
         this.corridorProps.push({
           instance: inst,
@@ -262,6 +212,21 @@ export class WaveDirector {
           beaconRing: null,
           sideSign: side,
         });
+      }
+    }
+    this.syncCityTileVisibility();
+  }
+
+  setCombatActive(active: boolean): void {
+    this.combatActive = active;
+    this.syncCityTileVisibility();
+  }
+
+  private syncCityTileVisibility(): void {
+    const showTiles = this.combatActive && this.currentAct === 1;
+    for (const p of this.corridorProps) {
+      if (p.kind === 'tile') {
+        p.instance.root.visible = showTiles;
       }
     }
   }
@@ -285,6 +250,7 @@ export class WaveDirector {
   }
 
   clearCombatEntities(): void {
+    this.combatActive = false;
     for (const e of this.activeEnemies) {
       this.loader.release(e.instance);
     }
@@ -302,6 +268,7 @@ export class WaveDirector {
     }
 
     this.clearTransientCorridorGates();
+    this.syncCityTileVisibility();
   }
 
   getBoostRings(): BoostRing[] {
@@ -328,6 +295,7 @@ export class WaveDirector {
     this.clearCombatEntities();
     if (this.corridorProps.length === 0) this.initCorridorProps();
 
+    this.combatActive = true;
     this.currentAct = 1;
     this.waveInAct = 1;
     this.endlessMode = false;
@@ -343,12 +311,13 @@ export class WaveDirector {
     this.clearCombatEntities();
     if (this.corridorProps.length === 0) this.initCorridorProps();
 
+    this.combatActive = true;
     this.endlessMode = true;
     this.endlessWave = 1;
     this.currentAct = 2;
     this.waveInAct = 1;
     this.bossScaleFactor = 1.35;
-    this.gateSpawnCooldown = 8.0;
+    this.gateSpawnCooldown = 4.0;
     this.boostRingTimer = 5.5;
     this.applyActTheme(2, false);
     return this.beginWave(2, 1);
@@ -357,8 +326,12 @@ export class WaveDirector {
   forceSpawnBoss(act: 1 | 2 | 3): WaveEvent {
     this.clearCombatEntities();
     if (this.corridorProps.length === 0) this.initCorridorProps();
+    this.combatActive = true;
     this.currentAct = act;
     this.waveInAct = 3;
+    if (act >= 2) {
+      this.gateSpawnCooldown = 2.0;
+    }
     this.applyActTheme(act, false);
     return this.beginBossWave(act);
   }
@@ -405,11 +378,16 @@ export class WaveDirector {
     if (this.currentAct < 3) {
       this.currentAct += 1;
       this.waveInAct = 1;
+      if (this.currentAct === 2) {
+        this.gateSpawnCooldown = Math.min(this.gateSpawnCooldown, 3.5);
+      }
       this.applyActTheme(this.currentAct, false);
       return this.beginWave(this.currentAct, 1);
     }
 
     this.phaseState = 'idle';
+    this.combatActive = false;
+    this.syncCityTileVisibility();
     return {
       type: 'campaign_victory',
       act: 3,
@@ -533,16 +511,16 @@ export class WaveDirector {
       this.scene.background = this.currentBgColor;
       if (this.scene.fog instanceof THREE.FogExp2) {
         this.scene.fog.color.copy(this.currentFogColor);
+        this.scene.fog.density = 0.0022;
       }
     }
-    const rMat = this.ceilingRails.material as THREE.LineBasicMaterial;
-    rMat.color.setHex(theme.accentColor);
+    this.syncCityTileVisibility();
   }
 
   updateEnvironment(dt: number, speedMultiplier: number): void {
     const scrollSpeed = 36 * speedMultiplier;
 
-    // Smoothly transition atmosphere per Act
+    // Smoothly transition atmosphere per Act with crisp low-density cosmic haze
     this.currentFogColor.lerp(this.targetFogColor, dt * 1.6);
     this.currentBgColor.lerp(this.targetBgColor, dt * 1.6);
     if (this.scene.background instanceof THREE.Color) {
@@ -550,25 +528,24 @@ export class WaveDirector {
     }
     if (this.scene.fog instanceof THREE.FogExp2) {
       this.scene.fog.color.copy(this.currentFogColor);
+      this.scene.fog.density = 0.0022;
     }
 
-    // Stream stars
-    const posArr = this.starPositions;
-    for (let i = 0; i < STAR_COUNT; i++) {
-      const idx = i * 3 + 2;
-      posArr[idx] += scrollSpeed * 1.45 * dt;
-      if (posArr[idx] > 28) {
-        posArr[idx] -= 285;
-      }
-    }
-    (this.starPoints.geometry.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+    const showCityTiles = this.combatActive && this.currentAct === 1;
 
-    // Scroll grid illusion cleanly
-    this.gridHelper.position.z = ((this.gridHelper.position.z + scrollSpeed * dt + 110) % 16) - 110;
-
-    // Move corridor props & handle prop_gate opening animation in Act 2/3
+    // Move Act 1 skyline tiles (hidden in Hangar/Act 2/Act 3) and handle Act 2/3 Warp Gateways
     for (let i = this.corridorProps.length - 1; i >= 0; i--) {
       const p = this.corridorProps[i];
+      if (p.kind === 'tile') {
+        p.instance.root.visible = showCityTiles;
+        if (!showCityTiles) continue;
+        p.instance.root.position.z += scrollSpeed * dt;
+        if (p.instance.root.position.z > 32) {
+          p.instance.root.position.z -= 240;
+        }
+        continue;
+      }
+
       p.instance.root.position.z += scrollSpeed * dt;
       if (p.rig) {
         p.rig.update({ dt, elapsed: performance.now() * 0.001, worldPos: p.instance.root.position });
@@ -578,18 +555,14 @@ export class WaveDirector {
       }
 
       if (p.instance.root.position.z > 32) {
-        if (p.kind === 'tile') {
-          p.instance.root.position.z -= 240;
-        } else {
-          if (p.beaconRing) p.beaconRing.removeFromParent();
-          this.loader.release(p.instance);
-          this.corridorProps.splice(i, 1);
-        }
+        if (p.beaconRing) p.beaconRing.removeFromParent();
+        this.loader.release(p.instance);
+        this.corridorProps.splice(i, 1);
       }
     }
 
     // Periodic Warp Gateway (prop_gate) in Act 2 and Act 3
-    if (this.currentAct >= 2 && this.phaseState !== 'idle') {
+    if (this.combatActive && this.currentAct >= 2 && this.phaseState !== 'idle') {
       this.gateSpawnCooldown -= dt;
       if (this.gateSpawnCooldown <= 0) {
         this.gateSpawnCooldown = 16.5;

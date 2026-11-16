@@ -99,6 +99,17 @@ const UI_PRELOAD_URLS = [
   './ui/icons/icon_wingman.png',
 ];
 
+const ENV_TEXTURE_SPECS: ReadonlyArray<{
+  key: 'hangar' | 'act1' | 'act2' | 'act3';
+  url: string;
+  fallbackHex: number;
+}> = [
+  { key: 'hangar', url: './env/sky_hangar_dock.webp', fallbackHex: 0x164e63 },
+  { key: 'act1', url: './env/sky_act1_metropolis.webp', fallbackHex: 0x0d2847 },
+  { key: 'act2', url: './env/sky_act2_nebula.webp', fallbackHex: 0x2e1f6b },
+  { key: 'act3', url: './env/sky_act3_citadel.webp', fallbackHex: 0x5c1922 },
+];
+
 const MAX_POOL_PER_KEY = 24;
 
 interface NodeRestState {
@@ -332,6 +343,90 @@ function tintEnemyFoldwing(root: THREE.Object3D): void {
   });
 }
 
+function enhancePropCityTile(root: THREE.Object3D): void {
+  const seen = new Set<THREE.Material>();
+  const skyLiftColor = new THREE.Color(0x90b8d8);
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.material) return;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const mat of mats) {
+      if (seen.has(mat)) continue;
+      seen.add(mat);
+      if (!(mat instanceof THREE.MeshStandardMaterial)) continue;
+
+      const hasOwnEmissive = mat.emissive.r + mat.emissive.g + mat.emissive.b > 0.01;
+      if (hasOwnEmissive || mat.name.includes('Light')) {
+        mat.emissiveIntensity = Math.max(mat.emissiveIntensity * 1.18, 3.2);
+        mat.envMapIntensity = Math.max(mat.envMapIntensity, 1.45);
+      } else {
+        const liftFactor = mat.name === 'M_HullDark' ? 0.24 : 0.14;
+        mat.color.lerp(skyLiftColor, liftFactor);
+        mat.envMapIntensity = Math.max(mat.envMapIntensity, 1.75);
+        mat.metalness = Math.min(mat.metalness, 0.72);
+        mat.roughness = Math.min(mat.roughness, 0.78);
+        // Subtle sky-bounce floor keeps structural undersides readable without hitting bloom threshold.
+        mat.emissive.setHex(0x102842);
+        mat.emissiveIntensity = 0.26;
+      }
+      mat.needsUpdate = true;
+    }
+  });
+}
+
+function configureEnvTexture(tex: THREE.Texture): THREE.Texture {
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.magFilter = THREE.LinearFilter;
+  tex.minFilter = THREE.LinearFilter;
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.generateMipmaps = false;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function createFallbackEnvTexture(hex: number): THREE.DataTexture {
+  const c = new THREE.Color(hex).convertLinearToSRGB();
+  const data = new Uint8Array([
+    Math.round(THREE.MathUtils.clamp(c.r, 0, 1) * 255),
+    Math.round(THREE.MathUtils.clamp(c.g, 0, 1) * 255),
+    Math.round(THREE.MathUtils.clamp(c.b, 0, 1) * 255),
+    255,
+  ]);
+  const tex = new THREE.DataTexture(data, 1, 1, THREE.RGBAFormat);
+  return configureEnvTexture(tex) as THREE.DataTexture;
+}
+
+function loadEnvTexture(url: string, fallbackHex: number): Promise<THREE.Texture> {
+  if (typeof Image === 'undefined') {
+    return Promise.resolve(createFallbackEnvTexture(fallbackHex));
+  }
+  return new Promise<THREE.Texture>((resolve) => {
+    const img = new Image();
+    let settled = false;
+    const finishFallback = () => {
+      if (settled) return;
+      settled = true;
+      resolve(createFallbackEnvTexture(fallbackHex));
+    };
+    img.onload = () => {
+      if (settled) return;
+      settled = true;
+      if (!img.naturalWidth || !img.naturalHeight) {
+        resolve(createFallbackEnvTexture(fallbackHex));
+        return;
+      }
+      resolve(configureEnvTexture(new THREE.Texture(img)));
+    };
+    img.onerror = finishFallback;
+    try {
+      img.src = url;
+    } catch {
+      finishFallback();
+    }
+  });
+}
+
 function cloneMaterialsOnRoot(root: THREE.Object3D): {
   materials: THREE.MeshStandardMaterial[];
   baseEmissives: THREE.Color[];
@@ -405,22 +500,39 @@ export class AssetLoader {
   private prototypes = new Map<ModelKey, LoadedModelPrototype>();
   private pools = new Map<ModelKey, PooledModelInstance[]>();
   private snapshots = new WeakMap<PooledModelInstance, InstanceSnapshot>();
+  private envTextures = new Map<string, THREE.Texture>();
 
   async preloadAll(onProgress: (info: ModelLoadProgress) => void): Promise<void> {
     const keys = Object.keys(MODEL_ASSETS) as ModelKey[];
-    const total = keys.length + 2; // +1 UI preload, +1 pool & shader warmup
+    const total = keys.length + 2; // +1 UI & env preload, +1 pool & shader warmup
 
-    // Preload UI images softly in parallel
+    for (const tex of this.envTextures.values()) {
+      tex.dispose();
+    }
+    this.envTextures.clear();
+
+    // Preload UI images and panoramic sky/horizon textures softly in parallel
     const uiPromise = Promise.all(
       UI_PRELOAD_URLS.map(
         (url) =>
           new Promise<void>((resolve) => {
+            if (typeof Image === 'undefined') {
+              resolve();
+              return;
+            }
             const img = new Image();
             img.onload = () => resolve();
             img.onerror = () => resolve();
             img.src = url;
           })
       )
+    );
+
+    const envPromise = Promise.all(
+      ENV_TEXTURE_SPECS.map(async (spec) => {
+        const tex = await loadEnvTexture(spec.url, spec.fallbackHex);
+        this.envTextures.set(spec.key, tex);
+      })
     );
 
     let done = 0;
@@ -436,6 +548,8 @@ export class AssetLoader {
       }
       if (key === 'enemy_foldwing') {
         tintEnemyFoldwing(rawScene);
+      } else if (key === 'prop_city_tile') {
+        enhancePropCityTile(rawScene);
       }
 
       // Prevent skeletal-animated meshes from culling prematurely when bones leave bind-pose bounds
@@ -513,13 +627,13 @@ export class AssetLoader {
       });
     }
 
-    await uiPromise;
+    await Promise.all([uiPromise, envPromise]);
     done += 1;
     onProgress({
       loaded: done,
       total,
       percent: Math.round((done / total) * 100),
-      message: '[OK] HUD 透明视觉框、芯片卡框与 21 枚图集图标预载完成',
+      message: '[OK] HUD 视觉框、21 枚图集图标与 4 套全景星域贴图预载完成',
     });
   }
 
@@ -721,6 +835,10 @@ export class AssetLoader {
     const proto = this.prototypes.get(key);
     if (!proto) throw new Error(`Model prototype missing: ${key}`);
     return proto;
+  }
+
+  getEnvTextures(): ReadonlyMap<string, THREE.Texture> {
+    return this.envTextures;
   }
 
   acquire(key: ModelKey, cloneMaterials = true): PooledModelInstance {
