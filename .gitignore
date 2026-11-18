@@ -1,6 +1,7 @@
 node_modules/
 dist/
 .raw_models/
+.raw_audio/
 test-results/
 .DS_Store
 *.local

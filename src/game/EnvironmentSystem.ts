@@ -156,12 +156,9 @@ const SKY_FRAG = `
   }
 
   vec3 hash33(vec3 p) {
-    p = vec3(
-      dot(p, vec3(127.1, 311.7, 74.7)),
-      dot(p, vec3(269.5, 183.3, 246.1)),
-      dot(p, vec3(113.5, 271.9, 124.6))
-    );
-    return fract(sin(p) * 43758.5453123);
+    p = fract(p * vec3(0.1031, 0.1030, 0.0973));
+    p += dot(p, p.yxx + 33.19);
+    return fract((p.xxy + p.yzz) * p.zyx);
   }
 
   float noise3(vec3 x) {
@@ -185,8 +182,8 @@ const SKY_FRAG = `
 
   float fbm3(vec3 p) {
     float v = 0.0;
-    float a = 0.5;
-    for (int i = 0; i < 4; i++) {
+    float a = 0.52;
+    for (int i = 0; i < 3; i++) {
       v += a * noise3(p);
       p = p * 2.04 + vec3(13.7, -7.3, 9.1);
       a *= 0.5;
@@ -230,20 +227,24 @@ const SKY_FRAG = `
     skyCol += uSunColor * pow(max(1e-4, sunDot), 7.0) * 0.26;
     skyCol += uSunColor * pow(max(1e-4, sunDot), 72.0) * 0.65;
 
-    // Seamless 3D FBM aurora & cosmic nebula wisps
-    vec3 wispCoord = dir * vec3(2.3, 4.4, 2.3) + vec3(uTime * 0.015, -uTime * 0.008, uScroll * 0.00018);
-    float n1 = fbm3(wispCoord);
-    float n2 = fbm3(wispCoord * 1.85 + vec3(4.2, uTime * 0.02, -3.1));
+    // Seamless 3D FBM aurora & cosmic nebula wisps (skip below horizon / above zenith)
     float bandMask = smoothstep(-0.12, 0.25, y) * (1.0 - smoothstep(0.45, 0.95, y));
-    float ribbon = smoothstep(0.42, 0.78, n1 * 0.65 + n2 * 0.35) * bandMask;
-    vec3 auroraCol = mix(uAuroraA, uAuroraB, smoothstep(0.32, 0.70, n2));
-    skyCol += auroraCol * ribbon * uAuroraIntensity * 0.52;
+    if (bandMask > 0.005 && uAuroraIntensity > 0.01) {
+      vec3 wispCoord = dir * vec3(2.3, 4.4, 2.3) + vec3(uTime * 0.015, -uTime * 0.008, uScroll * 0.00018);
+      float n1 = fbm3(wispCoord);
+      float n2 = fbm3(wispCoord * 1.85 + vec3(4.2, uTime * 0.02, -3.1));
+      float ribbon = smoothstep(0.42, 0.78, n1 * 0.65 + n2 * 0.35) * bandMask;
+      vec3 auroraCol = mix(uAuroraA, uAuroraB, smoothstep(0.32, 0.70, n2));
+      skyCol += auroraCol * ribbon * uAuroraIntensity * 0.52;
+    }
 
-    // Soft anti-aliased twinkling circular stars
+    // Soft anti-aliased twinkling circular stars (skip lower hemisphere & strong horizon haze)
     float starFade = smoothstep(-0.22, 0.24, y) * (1.0 - horizonGlow * 0.45);
-    vec3 stars = starLayer(dir, 58.0, 0.76, 0.085) * 1.15
-               + starLayer(dir, 112.0, 0.72, 0.075) * 0.85;
-    skyCol += stars * starFade * uStarIntensity;
+    if (starFade > 0.005 && uStarIntensity > 0.01) {
+      vec3 stars = starLayer(dir, 58.0, 0.76, 0.085) * 1.15
+                 + starLayer(dir, 112.0, 0.72, 0.075) * 0.85;
+      skyCol += stars * starFade * uStarIntensity;
+    }
 
     gl_FragColor = vec4(skyCol, 1.0);
   }
@@ -357,8 +358,8 @@ const CLOUD_SEA_FRAG = `
 
   float fbm2(vec2 p) {
     float v = 0.0;
-    float a = 0.5;
-    for (int i = 0; i < 4; i++) {
+    float a = 0.52;
+    for (int i = 0; i < 3; i++) {
       v += a * noise2(p);
       p = p * 2.03 + vec2(17.1, 31.7);
       a *= 0.5;
@@ -366,10 +367,21 @@ const CLOUD_SEA_FRAG = `
     return v;
   }
 
+  float fbm2Detail(vec2 p) {
+    float v = 0.55 * noise2(p);
+    p = p * 2.05 + vec2(23.4, -19.2);
+    return v + 0.35 * noise2(p);
+  }
+
   void main() {
+    float distX = smoothstep(205.0, 95.0, abs(vWorldXZ.x));
+    float distZ = smoothstep(-275.0, -145.0, vWorldXZ.y) * smoothstep(42.0, 12.0, vWorldXZ.y);
+    float alpha = clamp(distX * distZ, 0.0, 1.0);
+    if (!(alpha >= 0.01)) discard;
+
     vec2 p = vec2(vWorldXZ.x * 0.022, (vWorldXZ.y - uScrollZ * 0.52) * 0.022);
     float base = fbm2(p + vec2(uTime * 0.025, 0.0));
-    float detail = fbm2(p * 2.35 - vec2(uTime * 0.04, uTime * 0.015));
+    float detail = fbm2Detail(p * 2.35 - vec2(uTime * 0.04, uTime * 0.015));
     float cloud = smoothstep(0.28, 0.82, base * 0.68 + detail * 0.32);
 
     vec3 deepTrough = vec3(0.09, 0.25, 0.44);
@@ -378,10 +390,6 @@ const CLOUD_SEA_FRAG = `
     vec3 col = mix(deepTrough, midCloud, smoothstep(0.0, 0.58, cloud));
     col = mix(col, sunlitCrest, smoothstep(0.55, 0.98, cloud));
 
-    float distX = smoothstep(205.0, 95.0, abs(vWorldXZ.x));
-    float distZ = smoothstep(-275.0, -145.0, vWorldXZ.y) * smoothstep(42.0, 12.0, vWorldXZ.y);
-    float alpha = clamp(distX * distZ, 0.0, 1.0);
-    if (!(alpha >= 0.01)) discard;
     gl_FragColor = vec4(col, alpha);
   }
 `;

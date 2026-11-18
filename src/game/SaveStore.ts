@@ -1,3 +1,5 @@
+export type GraphicsPreset = 'auto' | '720p' | '1080p' | '1440p' | 'native';
+
 export interface ShipRecord {
   bestScore: number;
   bestClearTimeSec: number | null;
@@ -11,9 +13,25 @@ export interface SaveData {
   totalRuns: number;
   muted: boolean;
   endlessUnlocked: boolean;
+  graphicsPreset: GraphicsPreset;
 }
 
 const STORAGE_KEY = 'starforge_armada_save_v1';
+
+function sanitizeGraphicsPreset(raw: unknown): GraphicsPreset {
+  if (
+    raw === 'auto' ||
+    raw === '720p' ||
+    raw === '1080p' ||
+    raw === '1440p' ||
+    raw === 'native'
+  ) {
+    return raw;
+  }
+  if (raw === 'perf') return '720p';
+  if (raw === 'ultra') return '1440p';
+  return 'auto';
+}
 
 function emptyRecord(): ShipRecord {
   return {
@@ -31,6 +49,7 @@ function defaultSave(): SaveData {
     totalRuns: 0,
     muted: false,
     endlessUnlocked: false,
+    graphicsPreset: 'auto',
   };
 }
 
@@ -87,6 +106,7 @@ export class SaveStore {
         totalRuns: nonNegInt(p.totalRuns),
         muted: Boolean(p.muted),
         endlessUnlocked: Boolean(p.endlessUnlocked) || hasLegacyClear,
+        graphicsPreset: sanitizeGraphicsPreset(p.graphicsPreset),
       };
     } catch {
       return defaultSave();
@@ -119,6 +139,15 @@ export class SaveStore {
 
   setMuted(muted: boolean): void {
     this.data.muted = muted;
+    this.persist();
+  }
+
+  getGraphicsPreset(): GraphicsPreset {
+    return this.data.graphicsPreset;
+  }
+
+  setGraphicsPreset(preset: GraphicsPreset): void {
+    this.data.graphicsPreset = sanitizeGraphicsPreset(preset);
     this.persist();
   }
 

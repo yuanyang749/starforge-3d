@@ -26,8 +26,7 @@ export interface OrientationOffset {
 export interface ModelAssetSpec {
   key: ModelKey;
   url: string;
-  aiModel: string;
-  prompt: string;
+  bootLog: string;
   targetSize: number;
   orientation: OrientationOffset;
   stripNodes?: string[];
@@ -41,6 +40,13 @@ export interface ShipConfig {
   nameZh: string;
   codeName: string;
   roleTag: string;
+  loreDesc: string;
+  specTelemetry: {
+    wingspan: string;
+    propulsion: string;
+    output: string;
+    armorClass: string;
+  };
   accentColor: string;
   accentHex: number;
   engineColor: number;
@@ -79,8 +85,8 @@ export interface BossConfig {
   nameZh: string;
   codeName: string;
   subtitle: string;
-  aiModel: string;
-  prompt: string;
+  threatTag: string;
+  tacticalIntel: string;
   maxHp: number;
   accentColor: string;
   accentHex: number;
@@ -91,61 +97,49 @@ export const MODEL_ASSETS: Record<ModelKey, ModelAssetSpec> = {
   ship_astra: {
     key: 'ship_astra',
     url: './models/ship_astra.glb',
-    aiModel: 'GPT-6 Astra 3D',
-    prompt:
-      'Build this complete solarpunk VTOL shuttle as a premium low-poly game prop, six meters long. Ivory hull, orange panels, smoked teal cockpit, four downward-facing ducted turbine pods, landing skids and a rooftop garden. Preserve the reference silhouette. Use clean named mesh parts and 8-12 shared PBR materials. Separate cockpit canopy, four rotors and landing skids as named objects for later animation. Put the origin at bottom center; nose faces forward. Solid bevelled geometry, readable panel detailing, cyan emissive thruster rings, layered broad green leaves. No ground plane, text or backdrop. Budget 30000 triangles.',
+    bootLog: '[SYNC] X-01 日曜四旋翼穿梭机 · 四联涵道矢量推进阵列校准就绪',
     targetSize: 2.8,
     orientation: { yaw: Math.PI },
   },
   ship_opus: {
     key: 'ship_opus',
     url: './models/ship_opus.glb',
-    aiModel: 'Claude Opus 5.5 3D',
-    prompt:
-      'Metal toy spacecraft, game ready, all parts can be animated and joints are physically plausible',
+    bootLog: '[SYNC] C-55 铁砧倾转旋翼突击舰 · 倾转短舱与重型偏转护盾充能完毕',
     targetSize: 2.8,
     orientation: { yaw: Math.PI },
   },
   ship_morph: {
     key: 'ship_morph',
     url: './models/ship_morph.glb',
-    aiModel: 'GPT-6 Astra · 3D-to-3D',
-    prompt:
-      'Give the spacecraft retractable landing gear and folding outer wing assemblies, including their attached fans. Add the hinges, struts and gear-bay doors needed for a plausible mechanism. Animate an eight-second transition from parked with wings folded and gear extended to flight-ready with wings spread, gear retracted and bay doors closed, then back to parked. Preserve the hull’s visual identity and maintain clearance throughout the sequence.',
+    bootLog: '[SYNC] A-103 苍穹可变翼截击舰 · 掠翼折叠机构与内置弹舱自检通过',
     targetSize: 3.1,
     orientation: { yaw: Math.PI },
   },
   ship_aero: {
     key: 'ship_aero',
     url: './models/ship_aero.glb',
-    aiModel: 'GPT-6 Astra · 3D-to-3D',
-    prompt:
-      'Separate the ailerons and elevator into operable surfaces with clean hinge gaps. Animate symmetric elevator movement and opposing aileron movement through 15 degrees. Preserve the airframe silhouette at neutral and existing textures.',
+    bootLog: '[SYNC] G-08 疾风气动重型战机 · 全动气动舵面与棱镜火控锁定完成',
     targetSize: 3.0,
     orientation: { yaw: Math.PI },
   },
   boss_act1_mech: {
     key: 'boss_act1_mech',
     url: './models/boss_act1_mech.glb',
-    aiModel: 'Claude Opus 5.5 3D',
-    prompt: 'battle mech',
+    bootLog: '[INTEL] 第 1 战区高危目标特征已载入：铁幕四足重炮机甲',
     targetSize: 9.5,
     orientation: { yaw: 0 },
   },
   boss_act2_crab: {
     key: 'boss_act2_crab',
     url: './models/boss_act2_crab.glb',
-    aiModel: 'Claude Opus 5.5 3D',
-    prompt: 'crab shape robot mech with 3 pairs of legs and 2 claws',
+    bootLog: '[INTEL] 第 2 战区高危目标特征已载入：深渊巨钳螃蟹机甲',
     targetSize: 10.5,
     orientation: { yaw: 0 },
   },
   boss_act3_carrier: {
     key: 'boss_act3_carrier',
     url: './models/boss_act3_carrier.glb',
-    aiModel: 'Claude Opus 5.5 3D',
-    prompt:
-      'a spine-truss sci-fi carrier model with exposed hangar cradle and fighter craft',
+    bootLog: '[INTEL] 第 3 战区旗舰级目标特征已载入：龙骨桁架星际母舰',
     targetSize: 14.5,
     orientation: { yaw: 0 },
     stripNodes: ['Stand_DisplayBase', 'Stand_Pylons'],
@@ -153,27 +147,21 @@ export const MODEL_ASSETS: Record<ModelKey, ModelAssetSpec> = {
   enemy_drone: {
     key: 'enemy_drone',
     url: './models/enemy_drone.glb',
-    aiModel: 'GPT-6 Astra 3D',
-    prompt:
-      'a compact all-terrain scout drone, matte gray and orange chassis, rugged tires',
+    bootLog: '[RADAR] 敌方前哨侦察无人机群频段特征已归档',
     targetSize: 2.3,
     orientation: { yaw: 0 },
   },
   enemy_turret: {
     key: 'enemy_turret',
     url: './models/enemy_turret.glb',
-    aiModel: 'GPT-6 Astra · 3D-to-3D',
-    prompt:
-      'Animate the turret upper assembly swivelling 45 degrees left, then 45 degrees right, and returning to its original orientation over four seconds. Keep the round base stationary and preserve the existing appearance. Make the joint and newly exposed surfaces visually coherent throughout the movement.',
+    bootLog: '[RADAR] 敌方重装防空炮塔火控特征已归档',
     targetSize: 3.0,
     orientation: { yaw: 0 },
   },
   enemy_rover: {
     key: 'enemy_rover',
     url: './models/enemy_rover.glb',
-    aiModel: 'GPT-6 Astra · 3D-to-3D',
-    prompt:
-      'Add a folding robotic arm with a two-finger gripper mounted on the rover deck. Animate it deploying, picking up a small newly added sample container from the ground beside the rover, and placing it on the deck. Maintain coherent joints and clearances while preserving the existing rover.',
+    bootLog: '[RADAR] 敌方机械臂突击平台信号已归档',
     targetSize: 3.2,
     orientation: { yaw: 0 },
     stripNodes: [
@@ -186,35 +174,28 @@ export const MODEL_ASSETS: Record<ModelKey, ModelAssetSpec> = {
   enemy_foldwing: {
     key: 'enemy_foldwing',
     url: './models/enemy_foldwing.glb',
-    aiModel: 'GPT-6 Astra · 3D-to-3D',
-    prompt:
-      'Make both wings fold upward for storage, retaining fixed inner roots and adding plausible hinge hardware and finished exposed joint surfaces. Animate the symmetric movement from flight configuration to 80 degrees folded. Preserve the fuselage, landing gear and texture appearance.',
+    bootLog: '[RADAR] 敌方折翼高速截击机编队特征已归档',
     targetSize: 3.6,
     orientation: { yaw: 0 },
   },
   ally_biplane: {
     key: 'ally_biplane',
     url: './models/ally_biplane.glb',
-    aiModel: 'GPT-6 Astra · 3D-to-3D',
-    prompt:
-      'Create a short looping animation in which the propeller spins while the aircraft stays stationary. Isolate the propeller if needed and pivot it around its hub. Preserve the wings, body, wheels, materials and overall geometry.',
+    bootLog: '[LINK] 无人护航僚机协同数据链握手成功',
     targetSize: 1.55,
     orientation: { yaw: Math.PI },
   },
   prop_city_tile: {
     key: 'prop_city_tile',
     url: './models/prop_city_tile.glb',
-    aiModel: 'Claude Opus 5.5 3D',
-    prompt: 'a modular sci-fi city block terrain kit tile',
+    bootLog: '[NAV] 第 1 战区 · 轨道城峡谷三维航道测绘完成',
     targetSize: 18,
     orientation: { yaw: 0 },
   },
   prop_gate: {
     key: 'prop_gate',
     url: './models/prop_gate.glb',
-    aiModel: 'GPT-6 Astra · 3D-to-3D',
-    prompt:
-      'Animate a four-second vault-opening sequence: turn the handwheel, retract the locking bolts, then swing the door open by 70 degrees around its hinge. Hold it open for the final second. Keep the frame stationary and preserve the industrial materials. The rear of the door and newly exposed opening must remain coherent.',
+    bootLog: '[NAV] 远距星际跃迁门廊相位信标同步完成',
     targetSize: 34,
     orientation: { yaw: 0 },
   },
@@ -225,10 +206,18 @@ export const SHIPS: ShipConfig[] = [
     id: 'astra',
     modelKey: 'ship_astra',
     badgeIcon: './ui/icons/badge_astra.png',
-    factionTag: 'GPT-6 ASTRA 3D',
+    factionTag: '赫利俄斯航宇',
     nameZh: '日曜四旋翼穿梭机',
-    codeName: 'SOLARIS VTOL // X-01',
+    codeName: 'X-01',
     roleTag: '均衡激光 · 离子光柱',
+    loreDesc:
+      '赫利俄斯轨道船坞主力多用途突击穿梭机。四座涵道矢量风扇赋予其极佳的空域机动响应，搭载高能聚变电容，可在危急时刻倾泻贯穿战场的轨道离子光柱。',
+    specTelemetry: {
+      wingspan: '14.2 m',
+      propulsion: '四联矢量涵道风扇',
+      output: '4,800 MW',
+      armorClass: '中型复合装甲',
+    },
     accentColor: '#ffb347',
     accentHex: 0xffb347,
     engineColor: 0xff8c2b,
@@ -249,15 +238,23 @@ export const SHIPS: ShipConfig[] = [
     id: 'opus',
     modelKey: 'ship_opus',
     badgeIcon: './ui/icons/badge_opus.png',
-    factionTag: 'CLAUDE OPUS 5.5 3D',
+    factionTag: '伏尔甘重工',
     nameZh: '铁砧倾转旋翼突击舰',
-    codeName: 'ANVIL GUNSHIP // C-55',
-    roleTag: '重盾三联炮 · 弹幕转化',
+    codeName: 'C-55',
+    roleTag: '重盾三联炮 · 弹幕逆转',
+    loreDesc:
+      '伏尔甘重工专为强袭突破打造的倾转旋翼炮艇。加厚复合装甲与双冗余偏转护盾令其无惧密集防空火力，电磁脉冲核心更可逆转敌军弹幕反噬敌阵。',
+    specTelemetry: {
+      wingspan: '16.8 m',
+      propulsion: '双倾转重型电浆短舱',
+      output: '6,200 MW',
+      armorClass: '重型反应装甲',
+    },
     accentColor: '#00f0ff',
     accentHex: 0x00f0ff,
     engineColor: 0x22d3ee,
     weaponName: '三向扇形电浆炮',
-    weaponDesc: '一次倾泻三发高冲击电浆弹幕，自带 8 段原生机械变形与高容量护盾。',
+    weaponDesc: '一次倾泻三发高冲击电浆弹幕，倾转旋翼短舱兼顾重甲防御与广域火力压制。',
     ultimateName: '电磁护盾新星',
     ultimateDesc: '瞬间回复 30 点护盾，并将全场所有敌方弹幕转化为追踪敌机的友方反击导弹！',
     stats: { firepower: 4, speed: 3, shield: 5, agility: 3 },
@@ -273,15 +270,23 @@ export const SHIPS: ShipConfig[] = [
     id: 'morph',
     modelKey: 'ship_morph',
     badgeIcon: './ui/icons/badge_morph.png',
-    factionTag: 'GPT-6 ASTRA · 3D-RIG',
-    nameZh: '苍穹百轨变形截击舰',
-    codeName: 'VALKYRIE MORPH-WING // A-103',
-    roleTag: '百轨折翼 · 极速穿甲',
+    factionTag: '瓦尔基里特装',
+    nameZh: '苍穹可变翼截击舰',
+    codeName: 'A-103',
+    roleTag: '可变掠翼 · 极速穿甲',
+    loreDesc:
+      '秘密研发的高机动空优截击舰，采用全收放折叠外翼与内置武器舱构型。双联磁轨炮具备原生穿甲贯穿能力，火控全开时可瞬间齐射蜂群追踪导弹清场。',
+    specTelemetry: {
+      wingspan: '15.6 m',
+      propulsion: '可变掠翼加力涡扇',
+      output: '5,650 MW',
+      armorClass: '高机动隐身壳体',
+    },
     accentColor: '#ff4757',
     accentHex: 0xff4757,
     engineColor: 0xff3b5c,
     weaponName: '极速穿甲磁轨双炮',
-    weaponDesc: '103 段液压起落架与折叠外翼联动作动，具备最高移速与最短翻滚冷却。',
+    weaponDesc: '可变外翼与高速电磁导轨协同运作，自带穿甲贯穿效能并拥有最短翻滚冷却。',
     ultimateName: '幻影齐射风暴',
     ultimateDesc: '火控全开瞬间齐射 18 枚高爆追踪导弹，自动锁定清空屏幕敌群与 Boss 部位。',
     stats: { firepower: 5, speed: 5, shield: 2, agility: 5 },
@@ -297,15 +302,23 @@ export const SHIPS: ShipConfig[] = [
     id: 'aero',
     modelKey: 'ship_aero',
     badgeIcon: './ui/icons/badge_aero.png',
-    factionTag: 'GPT-6 ASTRA · AERO-RIG',
+    factionTag: '暴风气动院',
     nameZh: '疾风气动重型战机',
-    codeName: 'TEMPEST AERO-STRIKER // G-08',
+    codeName: 'G-08',
     roleTag: '气动舵面 · 时空缓速',
+    loreDesc:
+      '搭载实验级时空棱镜核心的高敏锐重型战机。精密气动控制面配合高暴击折射主炮，可在敌群间引发连锁光束弹射，并能展开时空缓速力场主宰战局。',
+    specTelemetry: {
+      wingspan: '13.9 m',
+      propulsion: '全动舵面棱镜引擎',
+      output: '5,300 MW',
+      armorClass: '棱镜偏转镀层',
+    },
     accentColor: '#c084fc',
     accentHex: 0xc084fc,
     engineColor: 0xf97316,
     weaponName: '高暴击折射激光机炮',
-    weaponDesc: '实装可动副翼与升降舵气动操控面，命中后折射弹射邻近敌人且高暴击。',
+    weaponDesc: '全动副翼与升降舵提供凌厉转向，高暴击棱镜激光命中后可自动折射弹射邻近敌机。',
     ultimateName: '棱镜时空缓速场',
     ultimateDesc: '展开持续 4 秒的时空力场，全体敌机与敌弹减速 70%，期间主武器必定暴击。',
     stats: { firepower: 4, speed: 4, shield: 3, agility: 4 },
@@ -325,10 +338,10 @@ export const BOSSES: Record<BossId, BossConfig> = {
     act: 1,
     modelKey: 'boss_act1_mech',
     nameZh: '铁幕四足重炮机甲',
-    codeName: 'UNIT-OPUS // QUADRUPED SIEGE',
-    subtitle: '第 1 幕关底 · 四足三段关节重装要塞',
-    aiModel: MODEL_ASSETS.boss_act1_mech.aiModel,
-    prompt: MODEL_ASSETS.boss_act1_mech.prompt,
+    codeName: 'IRONCLAD MK-IV',
+    subtitle: '第 1 幕关底 · 轨道城重装防卫要塞',
+    threatTag: '威胁 IV 级 · 重装要塞',
+    tacticalIntel: '战术弱点：优先摧毁左右肩部重炮，瓦解交叉火力封锁',
     maxHp: 950,
     accentColor: '#ff9f43',
     accentHex: 0xff9f43,
@@ -356,10 +369,10 @@ export const BOSSES: Record<BossId, BossConfig> = {
     act: 2,
     modelKey: 'boss_act2_crab',
     nameZh: '深渊巨钳螃蟹机甲',
-    codeName: 'UNIT-OPUS // HEXAPOD CRAB MECH',
-    subtitle: '第 2 幕关底 · 碎星门廊电磁风暴核心',
-    aiModel: MODEL_ASSETS.boss_act2_crab.aiModel,
-    prompt: MODEL_ASSETS.boss_act2_crab.prompt,
+    codeName: 'ABYSSAL MK-V',
+    subtitle: '第 2 幕关底 · 碎星门廊电磁风暴守卫',
+    threatTag: '威胁 V 级 · 裂隙机兵',
+    tacticalIntel: '战术弱点：集中火力击碎双侧电弧巨钳，阻断高能等离子齐射',
     maxHp: 1550,
     accentColor: '#00f0ff',
     accentHex: 0x00f0ff,
@@ -387,10 +400,10 @@ export const BOSSES: Record<BossId, BossConfig> = {
     act: 3,
     modelKey: 'boss_act3_carrier',
     nameZh: '龙骨桁架星际母舰',
-    codeName: 'FLAGSHIP-OPUS // SPINE-TRUSS CARRIER',
-    subtitle: '第 3 幕终极决战 · AI 舰队总枢纽',
-    aiModel: MODEL_ASSETS.boss_act3_carrier.aiModel,
-    prompt: MODEL_ASSETS.boss_act3_carrier.prompt,
+    codeName: 'OVERLORD FLAGSHIP',
+    subtitle: '第 3 幕终极决战 · 深空封锁舰队旗舰',
+    threatTag: '终极威胁 · 封锁旗舰',
+    tacticalIntel: '战术弱点：优先击破背脊防空主炮与舰首投射臂，瘫痪舰载机投送',
     maxHp: 2450,
     accentColor: '#ff4757',
     accentHex: 0xff4757,

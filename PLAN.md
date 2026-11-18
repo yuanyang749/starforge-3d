@@ -1,27 +1,28 @@
-# 《星穹铸舰：千模战役》(STARFORGE: AI ARMADA) 开发计划书
+# 《星穹战翼：破晓远征》(STARFORGE: ECLIPSE VANGUARD) 开发计划书
 
 ## 1. 项目概览与核心体验
 
-基于 Hugging Face 开源 3D 资产数据集 `scenario-labs/3d-collection`（CC BY 4.0，[项目主页](https://huggingface.co/datasets/scenario-labs/3d-collection)）构建的一款浏览器即开即玩 **Three.js 3D 星际战机肉鸽射击游戏**。
+基于开源 3D 资产数据集 `scenario-labs/3d-collection`（CC BY 4.0，[项目主页](https://huggingface.co/datasets/scenario-labs/3d-collection)）作为底层工程素材库构建的一款浏览器即开即玩 **Three.js 3D 星际战机肉鸽射击游戏**（游戏内全面采用原创破晓远征军工世界观呈现，无任何出戏元术语）。
 
-为保证最高战斗表现与动作真实感，本方案对全量 1,342 份开源 GLB 进行了底层节点与骨骼普查：**彻底剔除一切无骨骼、不可分件的单网格静态雕塑（`nodes=1` 全部清零）**，仅精选原生带有 **`SkinnedMesh` 蒙皮骨骼、多轨关键帧动画或清晰父子级机械关节**的开源模型入库。
+为保证最高战斗表现与动作真实感，本方案在工程选型阶段对全量 1,342 份开源 GLB 进行了底层节点与骨骼普查：**彻底剔除一切无骨骼、不可分件的单网格静态雕塑（`nodes=1` 全部清零）**，仅精选原生带有 **`SkinnedMesh` 蒙皮骨骼、多轨关键帧动画或清晰父子级机械关节**的资产入库。
 
 ### 核心设计三支柱
 1. **追尾高速走廊射击手感（类《星际火狐》）**
    - 镜头紧随战机后方沿深空走廊高速推进，支持 **鼠标跟随** 与 **WASD / 方向键** 双模无缝控制，搭配二阶弹簧阻尼侧倾（Roll / Pitch）物理惯性与双层预测准星。
    - 内置 **滚筒翻滚（Barrel Roll，右键 / Shift）**：提供 `0.46s` 无敌帧并可直接弹反敌方弹幕；**阵营超频大招（空格 / Q）** 带来高光清屏时刻。
-2. **AI 造船厂机库 + 原始 Prompt 溯源铭牌**
-   - 开局 3D 旋转展台机库提供 **GPT-6 Astra 3D**、**Claude Opus 5.5 3D** 以及两款 **GPT-6 Astra 3D-to-3D 骨骼与多轨变形** 四大可动战机切换预览（支持鼠标拖拽观察旋翼、起落架、折翼与舵面的实时运作）。
-   - 机库侧边栏与全 3 幕关底重型 Boss 登场告警条会实时展示该 3D 资产的 **AI 生成模型徽章** 与 **原始英文 Prompt**，兼顾可玩性与开源 AI 动画拓扑对比话题度。
+2. **轨道整备机库 + 军工阵营战术档案**
+   - 开局 **AEGIS 轨道指挥部 07 号星港机库** 提供 **赫利俄斯航宇 (`X-01`)**、**伏尔甘重工 (`C-55`)**、**瓦尔基里特装 (`A-103`)** 与 **暴风气动院 (`G-08`)** 四大阵营战机切换预览（支持鼠标拖拽全方位检视旋翼、起落架、折翼与舵面的实时运作）。
+   - 机库侧边栏展示战机所属军工铭牌与 **机体战术档案（TACTICAL ARCHIVE）**；全 3 幕关底重型 Boss 告警条实时展示 **威胁评级（`THREAT LV.4 / LV.5 / OMEGA`）** 与 **战术情报（破坏部位指引）**。
 3. **紧凑 3 幕战役 + 波次三选一肉鸽芯片 + 无尽模式**
    - 单局约 **4~5 分钟**，横跨「轨道城峡谷 → 碎星跃迁门廊 → 龙骨母舰空域」3 个风格迥异的 3D 走廊关卡与 3 尊多关节可解体巨型 Boss。
-   - 每波间隙通过原生 `<dialog>` 弹出 **三选一战术强化芯片**（含召唤具备真实螺旋桨骨骼动画的双翼护航僚机）；通关第 3 幕母舰后可选择直接结算或跃迁进入 **无尽深空模式** 冲分。
+   - 每波间隙通过原生 `<dialog>` 弹出 **三选一战术强化芯片**（含召唤双翼护航僚机）；通关第 3 幕母舰肃清破晓航道后可选择直接结算或跃迁进入 **无尽深空模式** 冲分。
 
 > [!NOTE]
-> **当前工程进度（v2.0 场景次世代氛围重构 & 弹道粒子精修）**：在 v1.3 引擎/玩法/UI 深度审计与无头 E2E 体系基础上，v2.0 彻底重构了空域照明、三幕 3D 生态、HDR 后处理与弹道粒子表现，并通过 8 阶段 `105` 项自动化断言（含全画布亮度与跨幕像素分化量化校验）：
-> - **全景天穹、IBL 反射与三幕立体生态（`public/env/` + [EnvironmentSystem.ts](./src/game/EnvironmentSystem.ts)）**：新增 4 张 `1920×1080` WebP 全景远景贴图（`sky_hangar_dock.webp`、`sky_act1_metropolis.webp`、`sky_act2_nebula.webp`、`sky_act3_citadel.webp`），由 [AssetLoader.ts](./src/engine/AssetLoader.ts) `preloadAll()` 并行预加载（`SRGBColorSpace` + 安全 1x1 降级）并通过 `getEnvTextures()` 注入；内置 `PMREMGenerator` + `RoomEnvironment` PBR IBL（`environmentIntensity = 1.2`）、跟随相机的 GLSL 极光星空天穹球、边缘羽化 155° 弧形远景环幕、240 束高斯星尘高速流、3D 轨道机库甲板与龙门探照灯，以及差异化的三幕 3D 生态（Act 1 云海光轨高速 + 装甲面板接缝高架台面 + 56 座天际线塔群 + `prop_city_tile` 专属城市区块；Act 2 48 座旋转晶石小行星带 + 跃迁等离子河 + 85 通道骨骼跃迁星门；Act 3 熔核战舰甲板 + 32 座多层阶梯装甲隔舱扶壁 + 8 道扫射探照光柱）。
-> - **HDR 泛光后处理与弹道/护盾着色器（[ProjectileVisuals.ts](./src/game/ProjectileVisuals.ts) + [VfxSystem.ts](./src/game/VfxSystem.ts) + [Game.ts](./src/game/Game.ts)）**：主渲染管线接入 `EffectComposer`（`HalfFloatType` MSAA `WebGLRenderTarget` + `RenderPass` + `UnrealBloomPass(res, 0.35, 0.30, 0.90)` + `OutputPass`），在消除白色战机壳体泛白过曝的同时保留 `>2.0` HDR 光束与爆炸眩光；调亮 [manifest.ts](./src/assets/manifest.ts) `ACT_THEMES` 并降低场景指数雾密度至 `0.0022`；全面替换旧版方块弹丸与光球，新增 5 种舰艇专属 HDR 交叉光束弹丸（280 槽）、3D 掠翼追踪导弹弹头与 640 段高饱和橙金→品红→深紫 18 轨分明尾焰环缓冲、高对比度敌方双戒环等离子弹幕（320 槽）、48 槽枪口星芒焰、64 槽命中微爆（暴击双倍 8 芒金爆）、双马赫环加力喷口 + 360 槽翼尖拉烟，以及中心通透（`0.12–0.24`）边缘锐利的菲涅尔六边形晶格翻滚护盾；升级 [VfxSystem.ts](./src/game/VfxSystem.ts) 440 槽流线型 HDR 火花针、折射紫光光晕与闪电链；所有 GLSL `pow(...)` 与 `normalize(...)` 均内置防 `NaN` 钳位，确保 `HalfFloatType` 泛光管线零黑屏溢出。
-> - **玩法与无头 E2E 回归（[WaveDirector.ts](./src/game/WaveDirector.ts) + [tests/headless-e2e.mjs](./tests/headless-e2e.mjs)）**：[WaveDirector.ts](./src/game/WaveDirector.ts) 按幕精确控制 `prop_city_tile` 仅在 Act 1 战斗显示；`npm run test:e2e` 现包含 105 项断言，覆盖 1440×900 与 1280×720 布局、全画布亮度均值（机库 `> 26`，Act 1/2/3 `> 24`）及三幕间像素均值差异（`meanDiff > 6.0`），并自动采集 6 张实机验收截图。
+> **当前工程进度（v5.0 街机弹幕级立体声音频 & v4.3 硬件识别与 4K 性能优化）**：在 v4.3 全界面实时 FPS、4K Auto-DRS 与硬件参数识别五档分辨率的基础上，v5.0 全面重构音频系统为街机弹幕级混合母带管线与分场景动态配乐架构，现已通过 8 阶段 `247` 项自动化断言：
+> - **混合音频获取与 ElevenLabs SFX v3 生产管线（[fetch-and-generate-audio.mjs](./scripts/fetch-and-generate-audio.mjs) + `public/audio/`）**：优先拉取 OpenGameArt CC0 5 首分场景 BGM（`bgm_hangar`、`bgm_act1/2/3`、`bgm_boss`）与 Kenney CC0 18 组高频射击/命中/弹反/小爆炸/UI 音效；缺失的 13 组核心签名战斗音效（中型/Boss 级核爆、部位击碎电弧、Boss 三连红警 Klaxon 警报、四战机专属大招、翻滚音爆、护盾受击、模块装配锁入及凯旋/失联 Fanfare）经 `.env` 调用 ElevenLabs `eleven_text_to_sound_v3` 合成（共消耗 `264 / 10,000` 额度），并统一由 FFmpeg 转码裁剪至 `44.1kHz 128kbps` MP3。
+> - **Web Audio 母带引擎与全流程声学联动（[SoundEngine.ts](./src/engine/SoundEngine.ts) + [Game.ts](./src/game/Game.ts)）**：采用 `DynamicsCompressorNode` 总线防爆音压限、跨轨 BGM 平滑交叉淡入淡出（`setBgmTrack`）、暂停/升级弹窗 `680Hz` 低通闷音（`setMuffled`）、大招/警报/Boss 殉爆自动侧链闪避（`duckBgm`）、双采样交替微变调、`1.0x..8.0x` 连击升调与 `StereoPannerNode` 左右声道定位，并保留离线振荡器合成兜底。
+> - **v4.2 / v4.3 4K 与硬件自选底座（[index.html](./index.html) + [style.css](./src/style.css) + [SaveStore.ts](./src/game/SaveStore.ts)）**：完整保留 Top-Layer `#fps-hud[popover="manual"]`、WebGL GPU/CPU/内存/4K 屏识别及 `智能适配 / 720P / 1080P / 2K / 原生4K` 五档切换、DPR `0.25..2` 像素预算、Auto-DRS、Half-Res Bloom 与零逐帧模糊优化。
+> - **全链路 247 断言 E2E（[tests/headless-e2e.mjs](./tests/headless-e2e.mjs)）**：全面验证 `31/31` SFX 与 `5/5` BGM 解码无报错、机库/Act1/Boss/结算 Stinger/无尽模式曲目自动切换、弹窗闷音开合同步以及 `3840×2160` 4K 五档分辨率精准切换，`247` 项断言 100% 通过。
 
 ---
 
@@ -43,7 +44,7 @@ flowchart TD
     Game --> Env["EnvironmentSystem.ts (IBL / 2K 环幕 / 3 幕立体生态)"]
     Game --> ProjVFX["ProjectileVisuals.ts (HDR 弹丸 / 马赫环 / 菲涅尔盾)"]
     Game --> VFX["VfxSystem.ts (5 层程序化爆炸 / 全 Boss 部件解体)"]
-    Game --> Audio["SoundEngine.ts (Web Audio 合成音效 & 电音循环)"]
+    Game --> Audio["SoundEngine.ts (31 SFX / 5 BGM 母带压缩 & 空间声像)"]
 ```
 
 ### 源码与资源目录规划
@@ -56,32 +57,35 @@ starforge-3d/
 ├── index.html                          # 主题启动加载舱（相对路径背景图与显式尺寸）、战术座舱 HUD、原生 <dialog> 弹窗
 ├── package.json                        # Vite + TypeScript + Three.js + gltf-transform + playwright-core (test:e2e)
 ├── scripts/
-│   └── fetch-and-optimize-models.mjs   # Hugging Face 14 资产下载（保护骨骼/关键帧，仅转换 WebP 贴图）
+│   ├── fetch-and-optimize-models.mjs   # Hugging Face 14 资产下载（保护骨骼/关键帧，仅转换 WebP 贴图）
+│   └── fetch-and-generate-audio.mjs    # CC0 音频拉取 + ElevenLabs SFX v3 生成 + FFmpeg 44.1kHz 母带处理（npm run fetch-audio）
 ├── tests/
-│   └── headless-e2e.mjs                # 基于 playwright-core + vite preview 的 8 阶段（105 断言）无头 Chrome WebGL E2E 回归套件
+│   └── headless-e2e.mjs                # 基于 playwright-core + vite preview 的 8 阶段（247 断言，含全链路音频、硬件识别五档分辨率与 FPS）无头 Chrome WebGL E2E 回归套件
 ├── public/
+│   ├── audio/                          # v5.0 母带级街机音效与动态配乐（5 首 CC0 BGM + 18 组 CC0 + 13 组 ElevenLabs SFX v3）
 │   ├── draco/                          # 本地化 Draco 解码器（零外部 CDN 依赖）
 │   ├── env/                            # 4 张 1920×1080 WebP 机库/三幕全景远景贴图
 │   ├── models/                         # 14 个全精度可动/带骨骼本地 .glb 资产（85.81 MB）
-│   └── ui/                             # Codex 战术重工 UI 背景原画、透明边框（5 件）与裁切图标集
-│       └── icons/                      # 两批透明图集一次生成 + 自动裁切的 21 枚 256×256 透明小图标与徽章勋章
+│   └── ui/                             # UI 背景原画、定制外框与裁切图标集
+│       ├── frames/                     # v4.1 定制 7 套透明倒角重工 UI 外框 WebP（panel/modal/slot_cyan/slot_amber/launch_amber/hud_status/hud_boss）
+│       └── icons/                      # 21 枚 256×256 透明小图标与徽章勋章
 └── src/
     ├── main.ts                         # 入口引导启动
     ├── style.css                       # 战术遥测风样式、1280×720/1440×900 响应式布局、dialog:modal 滚动遏制与焦点规范
     ├── assets/
-    │   └── manifest.ts                 # 14 个模型 URL、AI 来源、原始 Prompt、ACT_THEMES 高通透配色与 Boss 可破坏部位
+    │   └── manifest.ts                 # 14 个模型 URL、bootLog 同步日志、4 大阵营档案 loreDesc、Boss 威胁评级/战术情报、ACT_THEMES 与破部位配置
     ├── engine/
     │   ├── AssetLoader.ts              # SkeletonUtils 克隆、静态子网格无损合批、全景贴图预载、对象池预热与 compileAsync
     │   ├── AnimationRig.ts             # 3 级纯正骨骼与机械关节驱动（SkinnedMesh / 百轨锁帧 / FK）
-    │   └── SoundEngine.ts              # 零外部音频依赖的 Web Audio 合成音效与背景律动
+    │   └── SoundEngine.ts              # 31 组 SFX / 5 首动态 BGM 交叉淡入淡出、母带压限、侧链闪避、低通闷音与左右声像引擎（含合成兜底）
     └── game/
-        ├── SaveStore.ts                # localStorage 单舰战绩、通关耗时与静音偏好持久化存档
+        ├── SaveStore.ts                # localStorage 单舰战绩、通关耗时、静音与 graphicsPreset（auto/720p/1080p/1440p/native）持久化存档
         ├── Upgrades.ts                 # 12 种战术肉鸽芯片池与数值叠加计算
         ├── EnvironmentSystem.ts        # RoomEnvironment IBL、GLSL 天穹、2K 弧形环幕、机库栈桥与 3 幕差异化 3D 生态
         ├── ProjectileVisuals.ts        # HDR 弹道光束、追踪导弹烟迹、敌军戒环弹幕、枪口焰、马赫环与六边形护盾
         ├── VfxSystem.ts                # 5 层程序化爆炸、HDR 火花针、Boss 实时/终结真实子部件解体、闪电链
         ├── WaveDirector.ts             # 3 幕波次脚本、按幕城市块显隐控制、全息加速环、无尽模式与可破部位 Boss 生成
-        └── Game.ts                     # EffectComposer + UnrealBloomPass 主循环、机库/空战物理、Boss 部位判定与 HUD/弹窗交互
+        └── Game.ts                     # 硬件参数探测、5 档精确分辨率缩放 + Auto-DRS、EffectComposer + Half-Res UnrealBloomPass、全界面 FPS/硬件面板与 HUD/弹窗交互
 ```
 
 ---
@@ -113,38 +117,38 @@ starforge-3d/
 
 ## 4. 玩法内容设计明细
 
-### A. 四大 AI 造船厂可动战机
+### A. 四大军工阵营可动战机
 
-| 战机名称 | 所属 AI 阵营 | 主武器弹道特性 | 超频大招（空格 / Q） | 机械动画与数值定位 |
+| 战机名称 | 所属军工阵营 | 主武器弹道特性 | 超频大招（空格 / Q） | 机构动画与数值定位 |
 | :--- | :--- | :--- | :--- | :--- |
-| **日曜四旋翼穿梭机** (`X-01`) | GPT-6 Astra 3D | 高频双联脉冲激光，弹道极稳 | **轨道离子过载光束**：释放持续 `2.5s` 贯穿全屏的金色巨型光柱，焚毁路径敌弹并高频灼烧敌机 | 4 台涵道旋翼依航速实时变频旋转，侧倾联动滑撬/座舱姿态；均衡全能首选（100 HP） |
-| **铁砧倾转旋翼突击舰** (`C-55`) | Claude Opus 5.5 3D | 三向扇形重型电浆炮，覆盖面大 | **电磁护盾新星**：瞬间回复 `30` 点护盾，并将全场所有敌弹转化为追踪敌机的友方反击导弹 | 原生 8 段旋翼倾转短舱与舱门动画随转向实时联动；最高护盾坦度（135 HP） |
-| **苍穹百轨变形截击舰** (`A-103`) | GPT-6 Astra · 3D-RIG | 极速穿甲磁轨双炮，可贯穿首名目标 | **幻影齐射风暴**：瞬间齐射 `18` 枚高爆追踪导弹，全向清场并重创 Boss 部位 | 触发 103 轨折翼展开与起落架舱门收放变形动画；极高机动与最短翻滚冷却（90 HP） |
-| **疾风气动重型战机** (`G-08`) | GPT-6 Astra · AERO-RIG | 高暴击折射激光机炮（命中弹射邻近敌人） | **棱镜时空缓速场**：全场敌机与敌弹减速 `70%` 持续 `4s`，期间全武器必定暴击 | 4 段独立铰链副翼 `Aileron` 与升降舵 `Elevator` 随键鼠转向反向偏转 + 螺旋桨疾转（100 HP） |
+| **日曜四旋翼穿梭机** (`X-01`) | 赫利俄斯航宇 (`SOLARIS AEROSPACE`) | 高频双联脉冲激光，弹道极稳 | **轨道离子过载光束**：释放持续 `2.5s` 贯穿全屏的金色巨型光柱，焚毁路径敌弹并高频灼烧敌机 | 4 台涵道旋翼依航速实时变频旋转，侧倾联动滑撬/座舱姿态；均衡全能首选（100 HP） |
+| **铁砧倾转旋翼突击舰** (`C-55`) | 伏尔甘重工 (`VULCAN HEAVY`) | 三向扇形重型电浆炮，覆盖面大 | **电磁护盾新星**：瞬间回复 `30` 点护盾，并将全场所有敌弹逆转为追踪敌机的友方反击导弹 | 倾转旋翼短舱与舱门随转向实时联动；最高护盾坦度（135 HP） |
+| **苍穹可变翼截击舰** (`A-103`) | 瓦尔基里特装 (`VALKYRIE SKUNKWORKS`) | 极速穿甲磁轨双炮，自带 `+1` 穿透 | **幻影齐射风暴**：瞬间齐射 `18` 枚高爆追踪导弹，全向清场并重创 Boss 部位 | 折叠外翼展开与起落架舱门收放变形联动；极高机动与最短翻滚冷却（90 HP） |
+| **疾风气动重型战机** (`G-08`) | 暴风气动院 (`TEMPEST DYNAMICS`) | 高暴击折射激光机炮（`+15%` 暴击，命中弹射邻近敌人） | **棱镜时空缓速场**：全场敌机与敌弹减速 `70%` 持续 `4s`，期间全武器必定暴击 | 全动铰链副翼 `Aileron` 与升降舵 `Elevator` 随键鼠转向反向偏转 + 螺旋桨疾转（100 HP） |
 
 ### B. 三幕战役与多关节 Boss 机制
 
 1. **第 1 幕 · 轨道城峡谷（ACT I: Orbital Metropolis）**
-   - **走廊场景**：深蓝夜空下，两侧高速掠过成排模块化的 `prop_city_tile.glb` 科幻城市大楼、天桥与霓虹光柱。
-   - **敌群节奏**：`enemy_drone.glb`（展开雷达天线并旋转光学云台索敌）编队 + `enemy_turret.glb`（75 通道骨骼蒙皮防空塔带柔性电缆实时扭转扫射），波间空投一次三选一芯片。
-   - **关底 Boss**：`boss_act1_mech.glb`（**铁幕四足重炮机甲** · Claude Opus 5.5 3D）— 四条三段铰接机械腿交替踏步横移，`Turret->Turret_Gun` 实时锁定玩家位置倾泻扇形重炮与双轨红线狙击光束，`Cannon_L/R` 交替发射后坐力回弹。
+   - **走廊场景**：日照云海与双环行星天穹下，装甲面板高架台面承载 `prop_city_tile.glb` 科幻城市大楼与天桥，两侧高速流光塔群与光轨交织。
+   - **敌群节奏**：前哨侦察无人机编队 + 骨骼联动防空炮塔协同扫射，波间空投一次三选一芯片。
+   - **关底 Boss**：**铁幕四足重炮机甲**（`威胁 IV 级 · 重装要塞`）— 四条三段铰接机械腿交替踏步横移，`Turret->Turret_Gun` 实时锁定玩家位置倾泻扇形重炮，左右肩炮 `Cannon_L/R` 可优先摧毁以瓦解交叉火力封锁。
 2. **第 2 幕 · 碎星跃迁门廊（ACT II: Fractured Warp Gateway）**
-   - **走廊场景**：紫雾深空，玩家驾机高速穿过矗立的 `prop_gate.glb`（**67 节点骨骼蒙皮重型装甲门**）— 当星门进入 `z >= -165m` 触发区间时，以 `1.65x` 速率完整播放手轮转动 → 12 枚锁舌活塞回缩 → 70° 大门液压开启动画，供战机疾驰穿越。
-   - **敌群节奏**：`enemy_rover.glb`（俯冲平台携带五轴机械臂展开锁定投弹）与 `enemy_foldwing.glb`（巡航叠翼形态接近中距后触发 `WingFold` 80° 展开双翼齐射）混编强袭。
-   - **关底 Boss**：`boss_act2_crab.glb`（**深渊巨钳螃蟹机甲** · Claude Opus 5.5 3D）— 六足正弦交替步态横移、蓄力举起 `Claw_L/R` 驱动子钳 `Claw_*_Pincer` 咔嚓开合，发射螺旋弹幕阵列与可弹反等离子球。
+   - **走廊场景**：离子晶簇星云与跃迁等离子河之间矗立 `prop_gate.glb` 重型装甲星门，进入 `z >= -165m` 区间时以 `1.65x` 速率完整播放手轮转动 → 锁舌活塞回缩 → 70° 大门液压开启动画。
+   - **敌群节奏**：机械臂突击平台与 80° 折翼高速截击机混编强袭。
+   - **关底 Boss**：**深渊巨钳螃蟹机甲**（`威胁 V 级 · 裂隙机兵`）— 六足正弦交替步态横移，双侧电弧巨钳 `Claw_L/R` 蓄力夹击，集中火力击碎巨钳可阻断高能等离子齐射。
 3. **第 3 幕 · 龙骨母舰空域（ACT III: Crimson Dreadnought Citadel）**
-   - **走廊场景**：深红警示恒星光晕与高频电流脉冲星尘，重装 `enemy_foldwing`、`enemy_rover` 与 `enemy_turret` 前哨阵地联合伏击。
-   - **终极 Boss**：`boss_act3_carrier.glb`（**龙骨桁架星际母舰** · Claude Opus 5.5 3D）— 自动剔除展示底座后悬浮压阵；`DorsalTurret` 背部主炮台实时追踪玩家，`BowCraneArms` 二阶段张开，甲板上 12 架真实舰载机（`Fighter_Port1..6` / `Stbd1..6`）逐架脱离母舰升空化作无人机编队俯冲攻击。击败后弹出凯旋结算面板，可选择跃迁进入 **无尽深空模式** 或返回机库换舰重开。
+   - **走廊场景**：恒星熔炉炽红天穹下穿梭于巨型战舰熔核甲板与多层阶梯装甲隔舱战壕之间，重装防空火力联合伏击。
+   - **终极 Boss**：**龙骨桁架星际母舰**（`终极威胁 · 封锁旗舰`）— 悬浮压阵并由 `DorsalTurret` 追踪火力压制、`BowCraneArms` 配合甲板舰载机编队俯冲投送；优先击破背脊防空主炮与舰首投射臂可瘫痪其投送与防空网。击败后弹出凯旋结算面板，可选择跃迁进入 **无尽深空模式** 或返回机库换舰重开。
 
 ### C. 战地三选一肉鸽芯片池（12 种）
 
-1. **骨骼旋翼护航僚机**（召唤带 `skins=1` 原生螺旋桨骨骼动画的 `ally_biplane.glb` 3D 僚机编队伴飞点射）
+1. **双翼护航僚机**（召唤无人双翼僚机编队伴飞护航，与主炮同步协同点射前方敌群）
 2. **智能追踪导弹舱**（每隔数次主炮射击自动齐射追踪导弹，优先锁定高威胁敌机与 Boss 部位）
 3. **分叉散射棱镜**（主武器额外增加 `+2` 条侧向扩散弹道）
 4. **穿甲电磁轨道**（主武器贯穿次数 `+1` 且初速提升 `22%`）
 5. **偏转能量矩阵**（延长翻滚无敌帧并反弹敌弹追踪回击）
 6. **特斯拉电弧链**（命中敌人概率触发跳跃 3~5 个目标的高压连锁闪电）
-7. **聚变超载核心**（暴击率 `+18%`、暴击伤害额外 `+35%`）
+7. **聚变超载核心**（暴击率 `+18%`、暴击伤害额外 `+35%`，高能爆裂直击瞬间瓦解敌阵）
 8. **纳米自愈护盾**（最大护盾上限 `+30` 并立刻恢复，脱战后每秒再生 `3.5` 点护盾）
 9. **急速冷却芯片**（射速提速 `+20%`，终极充能效率 `+25%`）
 10. **矢量过载喷口**（移速 `+16%`，战场维修/能量掉落球磁吸半径大幅扩增）
@@ -153,17 +157,18 @@ starforge-3d/
 
 ---
 
-## 5. 主题启动加载舱设计 (Starforge Bootloader)
+## 5. 轨道启动终端设计 (Starforge Bootloader)
 
-针对 **`85.81 MB` 全精度骨骼与多轨动画资产包** 的浏览器预加载，打造极具仪式感且零等待焦虑的 **「星穹铸舰 · 轨道启动终端」**：
+针对高精度全可动舰队资产与 2K 全景天幕包的浏览器预加载，打造极具仪式感且零等待焦虑的 **「星穹战翼 · 轨道打击终端」**：
 
-1. **视觉与氛围**：以 Codex 生成的 `./ui/bootloader_bg.png`（通过相对路径 `<img class="boot-bg" fetchpriority="high">` 渲染以适配 Vite `base: './'` 子路径部署）为全屏深空船坞装甲闸门基底，顶部叠加 `./ui/logo_emblem.png`（`STARFORGE` 透明徽标），实时显示当前加载百分比（等宽字体 `JetBrains Mono`）与分段式工业能量进度条；机库与战斗阶段分别复用 `./ui/hud_visor_frame.png` 座舱外框、`./ui/hud_reticle_compass.png` 预测准星罗盘与 `./ui/card_chip_frame.png` 芯片卡框。
-2. **AI 资产注入实时日志流**：在加载过程中依次动态滚动每一条带骨骼/动画指标的遥测日志，例如：
-   - `[03/14] RIGGING GPT-6 ASTRA // ship_morph.glb (103 anim tracks) ... OK`
-   - `[09/14] BINDING SKINNED MESH // enemy_turret.glb (75ch cable+swivel) ... OK`
-   - `[14/14] LOCKING VAULT SKELETON // prop_gate.glb (12 dog-locks, 85ch) ... OK`
-3. **WebGL 着色器静默预热**：在 14 个模型全部进内存并完成 `Box3` 包裹测量后（进度 96%→100%），后台自动调用 `renderer.compileAsync(scene, camera)` 预编译所有 PBR 蒙皮、机械关节与爆炸噪声着色器，彻底消灭首帧卡顿。
-4. **舱门滑开仪式感转场**：进度达到 `100%` 时，按钮点亮为脉冲态 **「初始化神经接驳 · ENTER HANGAR」**；玩家点击后同步激活 `AudioContext` 音效引擎，随后上下两扇厚重星舰装甲舱门向两侧滑开，平滑切入 3D 造船厂机库。
+1. **视觉与氛围**：以 `./ui/bootloader_bg.png`（通过相对路径 `<img class="boot-bg" fetchpriority="high">` 渲染以适配 Vite `base: './'` 子路径部署）为全屏星港装甲闸门基底，顶部叠加 `./ui/logo_emblem.png`（`STARFORGE: ECLIPSE VANGUARD` 透明徽标），实时显示同步百分比（等宽字体 `JetBrains Mono`）与工业能量进度条；机库与战斗阶段分别复用 `./ui/hud_visor_frame.png` 座舱外框、`./ui/hud_reticle_compass.png` 预测准星罗盘与 `./ui/card_chip_frame.png` 芯片卡框。
+2. **世界观遥测同步日志流**：加载过程依次滚动 14 条沉浸式战备同步日志（`[SYNC]` / `[INTEL]` / `[RADAR]` / `[LINK]` / `[NAV]`），例如：
+   - `[SYNC] X-01 日曜四旋翼穿梭机 · 四联涵道矢量推进阵列校准就绪`
+   - `[INTEL] 第 3 战区旗舰级目标特征已载入：龙骨桁架星际母舰`
+   - `[OK] 战术座舱全息视界、星际天幕与火控罗盘同步完成`
+   - `[READY] 聚变反应堆点火就绪 · 全舰队武装与跃迁引擎待命`
+3. **WebGL 着色器静默预热**：在 14 个模型、4 张全景贴图与 21 枚 UI 图标进内存并完成归一化后（进度 96%→100%），后台自动调用 `renderer.compileAsync(scene, camera)` 预编译全部 PBR 蒙皮、天穹生态、HDR 弹道与爆炸着色器，彻底消灭首帧卡顿。
+4. **舱门滑开仪式感转场**：进度达到 `100%` 时，按钮点亮为脉冲态 **「进入星港机库 · ENTER HANGAR」**；玩家点击后同步激活 `AudioContext` 音效引擎，上下两扇星港装甲舱门向两侧滑开，平滑切入 3D 轨道整备机库。
 
 ---
 
@@ -207,7 +212,7 @@ starforge-3d/
 | 阶段 | 核心交付内容 | 验收标准 |
 | :--- | :--- | :--- |
 | **Phase 1：启动加载舱与骨骼无损管线** | 编写 `AssetLoader.ts`（`SkeletonUtils.clone`、底座节点剥离、包裹器 `Box3` 归一化与 `compileAsync` 预热），实现「星穹铸舰启动终端」与装甲舱门开合转场 | 14 个高精度可动模型 100% 加载成功，实时骨骼/轨道日志滚动流畅，点击进入无首帧卡顿 |
-| **Phase 2：3 级纯正动画系统与 3D 机库** | 实现 `AnimationRig.ts`（L1 `SkinnedMesh` 蒙皮、L2 `AnimationMixer` 百轨机械变形、L3 FK 父子机械腿与炮塔联动），搭好可拖拽的 4 战机机库与 Prompt 铭牌 | 四架战机在展台展示各自真实旋翼/折翼/起落架/舵面动作，切换秒开、朝向正确、金属通透 |
+| **Phase 2：3 级纯正动画系统与 3D 机库** | 实现 `AnimationRig.ts`（L1 `SkinnedMesh` 蒙皮、L2 `AnimationMixer` 百轨机械变形、L3 FK 父子机械腿与炮塔联动），搭好可拖拽的 4 战机轨道机库与阵营战术档案 | 四架战机在展台展示各自真实旋翼/折翼/起落架/舵面动作，切换秒开、朝向正确、金属通透 |
 | **Phase 3：高速走廊飞行与 5 层爆炸特效** | 实现追尾推进相机、键鼠双模移动侧倾（实时联动副翼与短舱）、双层预测准星、自动/手动开火、滚筒翻滚无敌弹反、4 阵营大招与 5 层程序化爆炸 | 可流畅穿梭射击、弹反敌弹、释放大招，击毁爆破具备闪光/冲击波/黑烟/碎片层次 |
-| **Phase 4：三幕战役、全 Boss 解体与肉鸽芯片** | 接入 3 幕走廊（城市块 / 85 通道骨骼跃迁星门）、4 类可动敌军、3 尊 Boss 步态炮塔 AI 与 1.8s 慢动作子部件崩飞解体、原生 `<dialog>` 12 种芯片与无尽模式 | 完整走通 3 幕可动 Boss 战、部件崩飞解体演出、芯片三选一（含骨骼螺旋桨僚机）与无尽模式 |
-| **Phase 5：音效打磨与自动化无头 E2E 验收** | 接入 `SoundEngine.ts` 合成音效与电音循环；完成 v1.3 管线/玩法/UI 响应式审计与 v2.0 天穹生态/HDR 后处理/弹道着色器升级；编写 `tests/headless-e2e.mjs`（`playwright-core` + `vite preview` 实测 `dist/`）检验 `1440×900`/`1280×720` 与全画布亮度/跨幕差异 | 构建零报错、HTTP 404/Console 零错误、加载页/机库 4 舰/战斗被动与大招/三选一弹窗/Boss 破部位/凯旋无尽模式、机库与三幕亮度分化与 6 张 v2.0 实机截图验收全部通过 |
+| **Phase 4：三幕战役、全 Boss 解体与肉鸽芯片** | 接入 3 幕走廊（城市块 / 85 通道骨骼跃迁星门）、4 类可动敌军、3 尊 Boss 步态炮塔 AI 与 1.8s 慢动作子部件崩飞解体、原生 `<dialog>` 12 种芯片与无尽模式 | 完整走通 3 幕可动 Boss 战、部件崩飞解体演出、芯片三选一（含双翼护航僚机）与无尽模式 |
+| **Phase 5：音频重铸、v2.0~v5.0 改造与 E2E 验收** | 完成 v1.3 审计、v2.0 天穹生态/HDR 泛光/弹道升级、v3.0 沉浸世界观、v4.0/v4.1 机库与 HUD 重铸、v4.2/v4.3 全界面 FPS 与硬件识别五档分辨率，以及 v5.0 `SoundEngine.ts` + `fetch-and-generate-audio.mjs` 31 SFX / 5 BGM 街机弹幕立体声重铸；`tests/headless-e2e.mjs`（247 断言）覆盖 `1440×900`/`1280×720`/`3840×2160` 4K、五档分辨率切换、全链路音频解锁与切曲、全界面 FPS 胶囊、零 `"//"` 与沉浸纯净度校验 | 构建零报错、HTTP 404/Console 零错误、全链路 247 断言通过、无任何出戏元术语或 `"//"` 泄露与 7 张实机截图验收全部通过 |

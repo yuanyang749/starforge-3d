@@ -12,7 +12,6 @@ export interface ModelLoadProgress {
   total: number;
   percent: number;
   key?: ModelKey;
-  aiModel?: string;
   triangles?: number;
   drawCallsBefore?: number;
   drawCallsAfter?: number;
@@ -73,8 +72,6 @@ const DYNAMIC_NODE_KEYWORDS = [
 const UI_PRELOAD_URLS = [
   './ui/bootloader_bg.png',
   './ui/logo_emblem.png',
-  './ui/hud_visor_frame.png',
-  './ui/hud_reticle_compass.png',
   './ui/card_chip_frame.png',
   './ui/icons/badge_boss_alert.png',
   './ui/icons/badge_astra.png',
@@ -97,6 +94,13 @@ const UI_PRELOAD_URLS = [
   './ui/icons/icon_thruster.png',
   './ui/icons/icon_ultimate.png',
   './ui/icons/icon_wingman.png',
+  './ui/frames/panel_frame_tall.webp',
+  './ui/frames/modal_frame_sci_fi.webp',
+  './ui/frames/card_slot_cyan.webp',
+  './ui/frames/card_slot_amber.webp',
+  './ui/frames/launch_btn_amber.webp',
+  './ui/frames/hud_status_frame.webp',
+  './ui/frames/hud_boss_frame.webp',
 ];
 
 const ENV_TEXTURE_SPECS: ReadonlyArray<{
@@ -619,11 +623,10 @@ export class AssetLoader {
         total,
         percent: Math.round((done / total) * 100),
         key,
-        aiModel: spec.aiModel,
         triangles: afterStats.triangles,
         drawCallsBefore: beforeStats.drawCalls,
         drawCallsAfter: afterStats.drawCalls,
-        message: `[OK] ${key}.glb (${spec.aiModel}) · ${afterStats.triangles.toLocaleString()} tris · ${beforeStats.drawCalls}→${afterStats.drawCalls} DC`,
+        message: spec.bootLog,
       });
     }
 
@@ -633,7 +636,7 @@ export class AssetLoader {
       loaded: done,
       total,
       percent: Math.round((done / total) * 100),
-      message: '[OK] HUD 视觉框、21 枚图集图标与 4 套全景星域贴图预载完成',
+      message: '[OK] 战术座舱全息视界、星际天幕与火控罗盘同步完成',
     });
   }
 
@@ -827,7 +830,7 @@ export class AssetLoader {
       loaded: total,
       total,
       percent: 100,
-      message: '[READY] 骨骼对象池预热 & compileAsync 着色器编译完成，等待发射指令',
+      message: '[READY] 聚变反应堆点火就绪 · 全舰队武装与跃迁引擎待命',
     });
   }
 

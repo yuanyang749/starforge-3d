@@ -36,18 +36,18 @@ export interface UpgradeState {
 export const UPGRADE_CARDS: UpgradeCard[] = [
   {
     id: 'wingman',
-    nameZh: '骨骼旋翼僚机',
-    codeName: 'SUMMON // BIPLANE RIG',
+    nameZh: '双翼护航僚机',
+    codeName: 'MOD-01 · 编队协同',
     categoryZh: '编队召唤',
     icon: './ui/icons/icon_wingman.png',
     accent: 'cyan',
-    descZh: '召唤一架带真实骨骼螺旋桨的双翼僚机伴飞护航，与主炮同步协同点射前方敌群（最多 2 架）。',
+    descZh: '召唤一架无人双翼僚机编队伴飞护航，与主炮同步协同点射前方敌群（最多 2 架）。',
     maxStacks: 2,
   },
   {
     id: 'missile',
     nameZh: '智能追踪导弹舱',
-    codeName: 'ORDNANCE // HOMING SALVO',
+    codeName: 'MOD-02 · 蜂群挂架',
     categoryZh: '重火挂架',
     icon: './ui/icons/icon_missile.png',
     accent: 'amber',
@@ -57,7 +57,7 @@ export const UPGRADE_CARDS: UpgradeCard[] = [
   {
     id: 'prism',
     nameZh: '分叉散射棱镜',
-    codeName: 'OPTICS // SPLIT PRISM',
+    codeName: 'MOD-03 · 分束棱镜',
     categoryZh: '火力增幅',
     icon: './ui/icons/icon_prism.png',
     accent: 'cyan',
@@ -67,7 +67,7 @@ export const UPGRADE_CARDS: UpgradeCard[] = [
   {
     id: 'pierce',
     nameZh: '穿甲电磁轨道',
-    codeName: 'KINETIC // RAIL PIERCE',
+    codeName: 'MOD-04 · 电磁穿甲',
     categoryZh: '穿甲动能',
     icon: './ui/icons/icon_pierce.png',
     accent: 'amber',
@@ -77,7 +77,7 @@ export const UPGRADE_CARDS: UpgradeCard[] = [
   {
     id: 'deflect',
     nameZh: '偏转能量矩阵',
-    codeName: 'AEGIS // MIRROR DEFLECT',
+    codeName: 'MOD-05 · 偏转力场',
     categoryZh: '防反矩阵',
     icon: './ui/icons/icon_deflect.png',
     accent: 'cyan',
@@ -87,7 +87,7 @@ export const UPGRADE_CARDS: UpgradeCard[] = [
   {
     id: 'tesla',
     nameZh: '特斯拉电弧链',
-    codeName: 'ARC // CHAIN LIGHTNING',
+    codeName: 'MOD-06 · 高压电弧',
     categoryZh: '连锁电弧',
     icon: './ui/icons/icon_tesla.png',
     accent: 'violet',
@@ -97,17 +97,17 @@ export const UPGRADE_CARDS: UpgradeCard[] = [
   {
     id: 'crit',
     nameZh: '聚变超载核心',
-    codeName: 'REACTOR // CRIT OVERLOAD',
+    codeName: 'MOD-07 · 暴击超频',
     categoryZh: '暴击过载',
     icon: './ui/icons/icon_crit.png',
     accent: 'amber',
-    descZh: '火控计算模块超频：暴击率 +18%，暴击伤害倍率额外提升 +35%，高光跳字爆发清屏。',
+    descZh: '火控计算模块超频：暴击率 +18%，暴击伤害倍率额外提升 +35%，高能爆裂直击瞬间瓦解敌阵。',
     maxStacks: 4,
   },
   {
     id: 'shield',
     nameZh: '纳米自愈护盾',
-    codeName: 'DEFENSE // NANO SHIELD',
+    codeName: 'MOD-08 · 纳米护盾',
     categoryZh: '生存续航',
     icon: './ui/icons/icon_shield.png',
     accent: 'cyan',
@@ -117,7 +117,7 @@ export const UPGRADE_CARDS: UpgradeCard[] = [
   {
     id: 'overcharge',
     nameZh: '急速冷却芯片',
-    codeName: 'COOLING // RAPID FIRE',
+    codeName: 'MOD-09 · 极速冷却',
     categoryZh: '射速超频',
     icon: './ui/icons/icon_overcharge.png',
     accent: 'amber',
@@ -127,7 +127,7 @@ export const UPGRADE_CARDS: UpgradeCard[] = [
   {
     id: 'thruster',
     nameZh: '矢量过载喷口',
-    codeName: 'PROPULSION // VECTOR',
+    codeName: 'MOD-10 · 矢量推进',
     categoryZh: '机动强化',
     icon: './ui/icons/icon_thruster.png',
     accent: 'cyan',
@@ -137,7 +137,7 @@ export const UPGRADE_CARDS: UpgradeCard[] = [
   {
     id: 'barrel_roll',
     nameZh: '机动翻滚旋风',
-    codeName: 'MANEUVER // ROLL VOLLEY',
+    codeName: 'MOD-11 · 旋风机动',
     categoryZh: '战术规避',
     icon: './ui/icons/icon_barrel_roll.png',
     accent: 'violet',
@@ -147,7 +147,7 @@ export const UPGRADE_CARDS: UpgradeCard[] = [
   {
     id: 'ultimate',
     nameZh: '超频核能共鸣器',
-    codeName: 'CORE // OVERDRIVE SYNC',
+    codeName: 'MOD-12 · 共鸣充能',
     categoryZh: '终极充能',
     icon: './ui/icons/icon_ultimate.png',
     accent: 'violet',

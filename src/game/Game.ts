@@ -5,7 +5,6 @@ import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import {
   ACT_THEMES,
-  MODEL_ASSETS,
   SHIPS,
   type BossConfig,
   type ShipConfig,
@@ -13,10 +12,15 @@ import {
 } from '../assets/manifest';
 import { AssetLoader, type PooledModelInstance } from '../engine/AssetLoader';
 import { AnimationRig } from '../engine/AnimationRig';
-import { SoundEngine, type WeaponVoice } from '../engine/SoundEngine';
+import {
+  SoundEngine,
+  type AudioTelemetrySnapshot,
+  type BgmTrackId,
+  type WeaponVoice,
+} from '../engine/SoundEngine';
 import { EnvironmentSystem } from './EnvironmentSystem';
 import { ProjectileVisuals } from './ProjectileVisuals';
-import { SaveStore } from './SaveStore';
+import { SaveStore, type GraphicsPreset } from './SaveStore';
 import {
   UPGRADE_CARDS,
   applyUpgradeCard,
@@ -55,6 +59,26 @@ export interface StarforgeBossSnapshot {
   parts: StarforgeBossPartSnapshot[];
 }
 
+export type HardwareTier = 'low' | 'mid' | 'high';
+
+export interface HardwareProfile {
+  gpuName: string;
+  cpuCores: number;
+  deviceMemoryGb: number | null;
+  screenCssW: number;
+  screenCssH: number;
+  screenPhysicalW: number;
+  screenPhysicalH: number;
+  nativeDpr: number;
+  isHighDpi4k: boolean;
+  maxTextureSize: number;
+  tier: HardwareTier;
+  tierLabelZh: string;
+  recommendedPreset: Exclude<GraphicsPreset, 'auto'>;
+  recommendedLabelZh: string;
+  autoPixelBudget: number;
+}
+
 export interface StarforgeSnapshot {
   mode: GameState;
   phase: GameState;
@@ -83,6 +107,14 @@ export interface StarforgeSnapshot {
   critChance: number;
   aeroBounceCount: number;
   boss: StarforgeBossSnapshot | null;
+  fps: number;
+  frameMs: number;
+  graphicsPreset: GraphicsPreset;
+  renderPixelRatio: number;
+  internalWidth: number;
+  internalHeight: number;
+  hardware: HardwareProfile;
+  audio: AudioTelemetrySnapshot;
   dialogs: {
     upgradeOpen: boolean;
     pauseOpen: boolean;
@@ -101,6 +133,7 @@ export interface StarforgeQaApi {
   fillUltimate(): void;
   triggerUltimate(): boolean;
   triggerBarrelRoll(): boolean;
+  setGraphicsPreset(preset: GraphicsPreset): void;
 }
 
 declare global {
@@ -160,6 +193,35 @@ interface FloatingText {
 const MAX_PLAYER_BULLETS = 240;
 const MAX_ENEMY_BULLETS = 280;
 const MAX_PICKUPS = 32;
+const GRAPHICS_PRESET_ORDER: readonly GraphicsPreset[] = ['auto', '720p', '1080p', '1440p', 'native'];
+const FORBIDDEN_GPU_META_RE =
+  /GPT|Claude|Opus|Scenario-Labs|CC BY|PROMPT|提示词|千模|\.glb|\btris\b|AI ARMADA|AI 舰队|真实骨骼|跳字/gi;
+
+function sanitizeGpuName(raw: string): string {
+  const noSlashes = raw.replace(/\/{2,}/g, '/').replace(FORBIDDEN_GPU_META_RE, '').trim();
+  const lower = noSlashes.toLowerCase();
+  if (lower.includes('swiftshader')) return 'SwiftShader 软件光栅';
+  if (lower.includes('llvmpipe')) return 'llvmpipe 软件光栅';
+
+  let name = noSlashes;
+  const metalMatch = name.match(/ANGLE Metal Renderer:\s*([^,)]+)/i);
+  if (metalMatch?.[1]) {
+    name = metalMatch[1];
+  } else {
+    const angleMatch = name.match(/^ANGLE\s*\([^,]+,\s*(.+)\)$/i);
+    if (angleMatch?.[1]) {
+      name = angleMatch[1];
+    }
+    name = name
+      .replace(/\(0x[0-9a-f]+\)/gi, '')
+      .replace(/\b(Direct3D\d*|D3D\d*|OpenGL|Vulkan|vs_\d+_\d+|ps_\d+_\d+|Unspecified Version)\b.*/gi, '')
+      .replace(/,.*$/, '');
+  }
+
+  const normalized = name.replace(/\s+/g, ' ').trim();
+  if (!normalized) return 'WebGL 图形核心';
+  return normalized.length > 30 ? `${normalized.slice(0, 29)}…` : normalized;
+}
 
 export class Game {
   private readonly canvas: HTMLCanvasElement;
@@ -252,24 +314,66 @@ export class Game {
   private lastRafTime = 0;
   private globalElapsed = 0;
   private bossDetachTick = 0;
+  private spotlightRects = new WeakMap<HTMLElement, DOMRect>();
+  private spotlightResizeObserver: ResizeObserver | null = null;
+  private lastHoveredInteractive: Element | null = null;
+  private graphicsPreset: GraphicsPreset = 'auto';
+  private hardwareProfile!: HardwareProfile;
+  private gfxMenuOpen = false;
+  private drsScale = 1.0;
+  private useBloom = true;
+  private renderPixelRatio = 1;
+  private internalWidth = 1280;
+  private internalHeight = 720;
+  private emaFrameMs = 16.67;
+  private currentFps = 60;
+  private prevWallTime = 0;
+  private fpsUiTimer = 0;
+  private drsHighTimer = 0;
+  private drsRecoverTimer = 0;
+  private lastFpsShown = -1;
+  private lastMsShown = '';
+  private lastDotClass = '';
+  private lastModeKey = '';
+  private lastBufSummary = '';
+  private rawGpuRenderer = '';
+  private readonly lastHudCache = {
+    hpText: '',
+    hpPct: '',
+    hpLow: null as boolean | null,
+    comboVal: '',
+    comboHot: null as boolean | null,
+    comboBar: '',
+    actLabel: '',
+    score: '',
+    rollPct: '',
+    rollStatus: '',
+    rollReady: null as boolean | null,
+    ultPctText: '',
+    ultBar: '',
+    ultReady: null as boolean | null,
+  };
   private readonly tmpVec3 = new THREE.Vector3();
   private readonly tmpDir = new THREE.Vector3();
   private readonly tmpQuat = new THREE.Quaternion();
+  private readonly tmpCamTarget = new THREE.Vector3();
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
     this.sound = new SoundEngine(this.save.isMuted());
+    this.graphicsPreset = this.save.getGraphicsPreset();
+    document.body.dataset.screen = this.state;
 
     this.renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: true,
+      antialias: false,
       powerPreference: 'high-performance',
+      stencil: false,
     });
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-    this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.25;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.hardwareProfile = this.detectHardwareProfile();
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(ACT_THEMES[0].bgColor);
@@ -388,6 +492,20 @@ export class Game {
     // Query required DOM elements & native dialogs
     this.els = this.cacheDomElements([
       'damage-vignette',
+      'fps-hud',
+      'fps-hud-btn',
+      'fps-hud-dot',
+      'fps-hud-val',
+      'fps-hud-ms',
+      'fps-hud-mode',
+      'gfx-popover-panel',
+      'gfx-hw-tier',
+      'gfx-hw-gpu',
+      'gfx-hw-sys',
+      'gfx-hw-buf',
+      'gfx-auto-rec-tag',
+      'gfx-auto-desc',
+      'gfx-opt-list',
       'boot-screen',
       'boot-progress-fill',
       'boot-progress-pct',
@@ -398,23 +516,28 @@ export class Game {
       'hangar-mute-btn',
       'hangar-ship-list',
       'hangar-ship-badge',
-      'hangar-ai-tag',
+      'hangar-corps-tag',
       'hangar-ship-name',
       'hangar-ship-code',
       'hangar-ship-record',
       'hangar-stats',
+      'hangar-blueprint-svg',
+      'hangar-spec-grid',
       'hangar-weapon-name',
       'hangar-weapon-desc',
       'hangar-ult-name',
       'hangar-ult-desc',
-      'hangar-prompt',
+      'hangar-lore',
       'hangar-launch-btn',
       'hud-ui',
+      'hud-cluster-tl',
       'hud-reticle',
       'floating-numbers',
       'hud-ship-badge',
       'hud-ship-name',
+      'hud-ship-code',
       'hud-hp-text',
+      'hud-hp-ghost',
       'hud-hp-fill',
       'hud-combo-box',
       'hud-combo-val',
@@ -428,11 +551,12 @@ export class Game {
       'hud-banner',
       'boss-hud',
       'boss-hud-name',
-      'boss-hud-ai-badge',
+      'boss-hud-threat-badge',
       'boss-hud-hp-text',
+      'boss-hud-hp-ghost',
       'boss-hud-hp-fill',
       'boss-parts-row',
-      'boss-hud-prompt',
+      'boss-hud-intel',
       'hud-roll-card',
       'hud-roll-status',
       'hud-roll-fill',
@@ -454,8 +578,142 @@ export class Game {
       result: this.requireEl<HTMLDialogElement>('result-dialog'),
     };
 
+    this.syncHardwarePanelStaticInfo();
+    this.bindResolutionMediaQuery();
     this.bindEvents();
     this.registerQaHook();
+  }
+
+  private detectHardwareProfile(): HardwareProfile {
+    const gl = this.renderer.getContext();
+    let rawGpu = '';
+    try {
+      const debugExt = gl.getExtension('WEBGL_debug_renderer_info');
+      rawGpu = debugExt
+        ? String(gl.getParameter(debugExt.UNMASKED_RENDERER_WEBGL) || '')
+        : String(gl.getParameter(gl.RENDERER) || '');
+    } catch {
+      rawGpu = '';
+    }
+    this.rawGpuRenderer = rawGpu;
+
+    const gpuName = sanitizeGpuName(rawGpu);
+    const rawLower = rawGpu.toLowerCase();
+    const cpuCores = Math.max(1, Math.round(navigator.hardwareConcurrency || 4));
+    const navMem = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+    const deviceMemoryGb =
+      typeof navMem === 'number' && Number.isFinite(navMem) && navMem > 0 ? navMem : null;
+    const maxTextureSize = this.renderer.capabilities.maxTextureSize || 4096;
+
+    const isLowGpu =
+      /(swiftshader|llvmpipe|software|basic render)/i.test(rawLower) ||
+      /(hd graphics|uhd graphics\s*[0-6]|mali-g[35]|adreno\s*\(tm\)\s*[345])/i.test(rawLower) ||
+      maxTextureSize < 8192 ||
+      (cpuCores <= 4 && deviceMemoryGb !== null && deviceMemoryGb <= 4);
+
+    const isHighGpu =
+      !isLowGpu &&
+      /(rtx\s*(30[789]0|40[789]0|50[789]0)|radeon\s*rx\s*(6[89]\d0|7[89]\d0|9070)|apple\s*m[1-9]\d?\s*(max|ultra))/i.test(
+        rawLower
+      ) &&
+      cpuCores >= 8 &&
+      (deviceMemoryGb === null || deviceMemoryGb >= 8);
+
+    const tier: HardwareTier = isLowGpu ? 'low' : isHighGpu ? 'high' : 'mid';
+    const tierLabelZh =
+      tier === 'low' ? '核显节能档' : tier === 'high' ? '旗舰独显档' : '主流均衡档';
+    const recommendedPreset: Exclude<GraphicsPreset, 'auto'> =
+      tier === 'low' ? '720p' : tier === 'high' ? '1440p' : '1080p';
+    const recommendedLabelZh =
+      tier === 'low' ? '720P 极速' : tier === 'high' ? '2K 超清' : '1080P 均衡';
+    const autoPixelBudget =
+      tier === 'low' ? 1_100_000 : tier === 'high' ? 3_686_400 : 2_073_600;
+
+    const screenCssW = Math.max(1, Math.round(window.screen?.width || window.innerWidth));
+    const screenCssH = Math.max(1, Math.round(window.screen?.height || window.innerHeight));
+    const nativeDpr =
+      Number.isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0
+        ? window.devicePixelRatio
+        : 1;
+    const screenPhysicalW = Math.max(window.innerWidth, Math.round(screenCssW * nativeDpr));
+    const screenPhysicalH = Math.max(window.innerHeight, Math.round(screenCssH * nativeDpr));
+    const isHighDpi4k =
+      Math.max(screenPhysicalW, screenPhysicalH) >= 3200 ||
+      Math.max(window.innerWidth, window.innerHeight) * Math.min(nativeDpr, 2) >= 3200;
+
+    return {
+      gpuName,
+      cpuCores,
+      deviceMemoryGb,
+      screenCssW,
+      screenCssH,
+      screenPhysicalW,
+      screenPhysicalH,
+      nativeDpr: +nativeDpr.toFixed(2),
+      isHighDpi4k,
+      maxTextureSize,
+      tier,
+      tierLabelZh,
+      recommendedPreset,
+      recommendedLabelZh,
+      autoPixelBudget,
+    };
+  }
+
+  private refreshHardwareScreenMetrics(): void {
+    const screenCssW = Math.max(1, Math.round(window.screen?.width || window.innerWidth));
+    const screenCssH = Math.max(1, Math.round(window.screen?.height || window.innerHeight));
+    const nativeDpr =
+      Number.isFinite(window.devicePixelRatio) && window.devicePixelRatio > 0
+        ? window.devicePixelRatio
+        : 1;
+    const screenPhysicalW = Math.max(window.innerWidth, Math.round(screenCssW * nativeDpr));
+    const screenPhysicalH = Math.max(window.innerHeight, Math.round(screenCssH * nativeDpr));
+    const isHighDpi4k =
+      Math.max(screenPhysicalW, screenPhysicalH) >= 3200 ||
+      Math.max(window.innerWidth, window.innerHeight) * Math.min(nativeDpr, 2) >= 3200;
+    this.hardwareProfile.screenCssW = screenCssW;
+    this.hardwareProfile.screenCssH = screenCssH;
+    this.hardwareProfile.nativeDpr = +nativeDpr.toFixed(2);
+    this.hardwareProfile.screenPhysicalW = screenPhysicalW;
+    this.hardwareProfile.screenPhysicalH = screenPhysicalH;
+    this.hardwareProfile.isHighDpi4k = isHighDpi4k;
+    if (!this.rawGpuRenderer && this.hardwareProfile.gpuName === 'WebGL 图形核心') {
+      this.hardwareProfile = this.detectHardwareProfile();
+    }
+  }
+
+  private bindResolutionMediaQuery(): void {
+    if (typeof window.matchMedia !== 'function') return;
+    const dpr = window.devicePixelRatio || 1;
+    const mq = window.matchMedia(`(resolution: ${dpr}dppx)`);
+    mq.addEventListener(
+      'change',
+      () => {
+        this.refreshHardwareScreenMetrics();
+        this.syncHardwarePanelStaticInfo();
+        this.applyGraphicsSettings();
+        this.bindResolutionMediaQuery();
+      },
+      { once: true }
+    );
+  }
+
+  private syncHardwarePanelStaticInfo(): void {
+    if (!this.els) return;
+    const hp = this.hardwareProfile;
+    const tierEl = this.els['gfx-hw-tier'];
+    tierEl.textContent = hp.tierLabelZh;
+    tierEl.className = `gfx-tier-badge is-${hp.tier}`;
+
+    this.els['gfx-hw-gpu'].textContent = hp.gpuName;
+    const memPart = hp.deviceMemoryGb ? ` · ${hp.deviceMemoryGb}GB` : '';
+    const fourKTag = hp.isHighDpi4k ? ' (4K)' : '';
+    this.els['gfx-hw-sys'].textContent =
+      `${hp.cpuCores} 核${memPart} · 屏 ${hp.screenPhysicalW}×${hp.screenPhysicalH}${fourKTag}`;
+    this.els['gfx-auto-rec-tag'].textContent = `推荐·${hp.recommendedLabelZh}`;
+    this.els['gfx-auto-desc'].textContent =
+      `基于「${hp.tierLabelZh}」上限 ${(hp.autoPixelBudget / 1_000_000).toFixed(2)}M 像素 + 动态 DRS`;
   }
 
   private requireEl<T extends HTMLElement>(id: string): T {
@@ -472,44 +730,130 @@ export class Game {
     return map;
   }
 
+  private computeRenderResolution(w: number, h: number): {
+    dpr: number;
+    internalW: number;
+    internalH: number;
+    bloomW: number;
+    bloomH: number;
+    useBloom: boolean;
+    msaaSamples: number;
+  } {
+    const preset = this.graphicsPreset;
+    const tier = this.hardwareProfile.tier;
+    let budget: number;
+    let bloomCapW = 960;
+    let bloomCapH = 540;
+    let useBloom = true;
+
+    if (preset === '720p') {
+      budget = 921_600;
+      useBloom = false;
+      bloomCapW = 640;
+      bloomCapH = 360;
+    } else if (preset === '1080p') {
+      budget = 2_073_600;
+      bloomCapW = 960;
+      bloomCapH = 540;
+    } else if (preset === '1440p') {
+      budget = 3_686_400;
+      bloomCapW = 1280;
+      bloomCapH = 720;
+    } else if (preset === 'native') {
+      budget = 8_294_400;
+      bloomCapW = 1440;
+      bloomCapH = 810;
+    } else {
+      budget = this.hardwareProfile.autoPixelBudget * this.drsScale * this.drsScale;
+      if (tier === 'high') {
+        bloomCapW = 1280;
+        bloomCapH = 720;
+      } else if (tier === 'low') {
+        bloomCapW = 640;
+        bloomCapH = 360;
+      }
+    }
+
+    const maxDprForBudget = Math.sqrt(budget / Math.max(1, w * h));
+    const nativeDpr = window.devicePixelRatio || 1;
+    const dpr = THREE.MathUtils.clamp(Math.min(nativeDpr, 2, maxDprForBudget), 0.25, 2);
+    const internalW = Math.max(1, Math.round(w * dpr));
+    const internalH = Math.max(1, Math.round(h * dpr));
+    const bloomW = Math.min(bloomCapW, Math.max(1, Math.round(internalW * 0.5)));
+    const bloomH = Math.min(bloomCapH, Math.max(1, Math.round(internalH * 0.5)));
+    const msaaSamples =
+      preset === '720p' || internalW * internalH > 2_000_000 || !this.renderer.capabilities.isWebGL2
+        ? 0
+        : Math.min(2, this.renderer.capabilities.maxSamples || 0);
+    return { dpr, internalW, internalH, bloomW, bloomH, useBloom, msaaSamples };
+  }
+
+  private applyGraphicsSettings(): void {
+    const w = Math.max(1, window.innerWidth);
+    const h = Math.max(1, window.innerHeight);
+    const res = this.computeRenderResolution(w, h);
+    this.renderPixelRatio = res.dpr;
+    this.internalWidth = res.internalW;
+    this.internalHeight = res.internalH;
+    this.useBloom = res.useBloom;
+
+    this.camera.aspect = w / h;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setPixelRatio(res.dpr);
+    this.renderer.setSize(w, h);
+
+    if (this.composer) {
+      if (this.composer.renderTarget1.samples !== res.msaaSamples) {
+        const nextRt = new THREE.WebGLRenderTarget(res.internalW, res.internalH, {
+          type: THREE.HalfFloatType,
+          samples: res.msaaSamples,
+        });
+        this.composer.reset(nextRt);
+      }
+      this.composer.setPixelRatio(res.dpr);
+      this.composer.setSize(w, h);
+    }
+    if (this.bloomPass) {
+      this.bloomPass.enabled = res.useBloom;
+      this.bloomPass.resolution.set(res.bloomW, res.bloomH);
+      this.bloomPass.setSize(res.bloomW, res.bloomH);
+    }
+
+    this.updateFpsHudDom(true);
+  }
+
   private initPostProcessing(): void {
     try {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
       const w = Math.max(1, window.innerWidth);
       const h = Math.max(1, window.innerHeight);
-      const maxSamples = this.renderer.capabilities.isWebGL2
-        ? Math.min(4, this.renderer.capabilities.maxSamples || 0)
-        : 0;
+      const res = this.computeRenderResolution(w, h);
 
       const buildComposer = (samples: number): {
         composer: EffectComposer;
         bloomPass: UnrealBloomPass;
       } => {
-        const renderTarget = new THREE.WebGLRenderTarget(
-          Math.max(1, Math.round(w * dpr)),
-          Math.max(1, Math.round(h * dpr)),
-          {
-            type: THREE.HalfFloatType,
-            samples,
-          }
-        );
+        const renderTarget = new THREE.WebGLRenderTarget(res.internalW, res.internalH, {
+          type: THREE.HalfFloatType,
+          samples,
+        });
         const composer = new EffectComposer(this.renderer, renderTarget);
-        composer.setPixelRatio(dpr);
+        composer.setPixelRatio(res.dpr);
         composer.setSize(w, h);
         composer.addPass(new RenderPass(this.scene, this.camera));
         const bloomPass = new UnrealBloomPass(
-          new THREE.Vector2(Math.round(w * dpr), Math.round(h * dpr)),
+          new THREE.Vector2(res.bloomW, res.bloomH),
           0.35,
           0.30,
           0.90
         );
+        bloomPass.enabled = res.useBloom;
         composer.addPass(bloomPass);
         composer.addPass(new OutputPass());
         return { composer, bloomPass };
       };
 
       try {
-        const built = buildComposer(maxSamples);
+        const built = buildComposer(res.msaaSamples);
         this.composer = built.composer;
         this.bloomPass = built.bloomPass;
       } catch {
@@ -521,23 +865,151 @@ export class Game {
       this.composer = null;
       this.bloomPass = null;
     }
+
+    this.applyGraphicsSettings();
+  }
+
+  private setScreenState(next: GameState): void {
+    this.state = next;
+    document.body.dataset.screen = next;
+  }
+
+  private promoteFpsHudToTopLayer(): void {
+    const el = this.els['fps-hud'] as HTMLElement & {
+      showPopover?: () => void;
+      hidePopover?: () => void;
+    };
+    try {
+      if (el.matches(':popover-open')) {
+        el.hidePopover?.();
+      }
+      el.showPopover?.();
+    } catch {
+      // Fallback keeps fixed z-index positioning intact on non-Popover engines
+    }
+  }
+
+  private setGfxMenuOpen(open: boolean): void {
+    this.gfxMenuOpen = open;
+    if (!this.els) return;
+    const panel = this.els['gfx-popover-panel'];
+    const btn = this.els['fps-hud-btn'];
+    panel.hidden = !open;
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    if (open) {
+      this.refreshHardwareScreenMetrics();
+      this.syncHardwarePanelStaticInfo();
+      this.updateFpsHudDom(true);
+      this.clearInputState();
+    }
+  }
+
+  private cycleGraphicsPreset(): void {
+    const idx = GRAPHICS_PRESET_ORDER.indexOf(this.graphicsPreset);
+    const next = GRAPHICS_PRESET_ORDER[(idx + 1) % GRAPHICS_PRESET_ORDER.length];
+    this.setGraphicsPreset(next);
+  }
+
+  private setGraphicsPreset(preset: GraphicsPreset): void {
+    this.graphicsPreset = preset;
+    this.save.setGraphicsPreset(preset);
+    this.drsScale = 1.0;
+    this.drsHighTimer = 0;
+    this.drsRecoverTimer = 0;
+    this.applyGraphicsSettings();
+  }
+
+  private updateFpsHudDom(force: boolean): void {
+    if (!this.els) return;
+    const fps = this.currentFps;
+    if (force || fps !== this.lastFpsShown) {
+      this.lastFpsShown = fps;
+      this.els['fps-hud-val'].textContent = String(fps);
+    }
+
+    const msStr = `${this.emaFrameMs.toFixed(1)}ms`;
+    if (force || msStr !== this.lastMsShown) {
+      this.lastMsShown = msStr;
+      this.els['fps-hud-ms'].textContent = msStr;
+    }
+
+    const dotClass = fps >= 52 ? 'is-good' : fps >= 36 ? 'is-warn' : 'is-low';
+    if (force || dotClass !== this.lastDotClass) {
+      this.lastDotClass = dotClass;
+      this.els['fps-hud-dot'].className = `fps-hud-dot ${dotClass}`;
+    }
+
+    const modeKey = `${this.graphicsPreset}:${this.internalWidth}x${this.internalHeight}`;
+    if (force || modeKey !== this.lastModeKey) {
+      this.lastModeKey = modeKey;
+      const modeEl = this.els['fps-hud-mode'];
+      if (this.graphicsPreset === '720p') {
+        modeEl.textContent = '720P [G]';
+        modeEl.className = 'fps-hud-mode is-720p';
+      } else if (this.graphicsPreset === '1080p') {
+        modeEl.textContent = '1080P [G]';
+        modeEl.className = 'fps-hud-mode is-1080p';
+      } else if (this.graphicsPreset === '1440p') {
+        modeEl.textContent = '2K [G]';
+        modeEl.className = 'fps-hud-mode is-1440p';
+      } else if (this.graphicsPreset === 'native') {
+        modeEl.textContent = '4K原生 [G]';
+        modeEl.className = 'fps-hud-mode is-native';
+      } else {
+        modeEl.textContent = `自动·${this.internalHeight}P [G]`;
+        modeEl.className = 'fps-hud-mode';
+      }
+
+      this.els['gfx-opt-list']
+        .querySelectorAll<HTMLButtonElement>('.gfx-opt-btn')
+        .forEach((optBtn) => {
+          optBtn.setAttribute(
+            'aria-pressed',
+            optBtn.dataset.gfxPreset === this.graphicsPreset ? 'true' : 'false'
+          );
+        });
+    }
+
+    const bufSummary = `${this.internalWidth} × ${this.internalHeight} · ${(
+      (this.internalWidth * this.internalHeight) /
+      1_000_000
+    ).toFixed(2)}M 像素 · ${this.useBloom ? '泛光开' : '泛光关'}`;
+    if (force || bufSummary !== this.lastBufSummary) {
+      this.lastBufSummary = bufSummary;
+      this.els['gfx-hw-buf'].textContent = bufSummary;
+    }
   }
 
   async init(): Promise<void> {
+    this.promoteFpsHudToTopLayer();
+    this.updateFpsHudDom(true);
     this.startRenderLoop();
     this.updateMuteButtons();
 
-    await this.loader.preloadAll((info) => {
-      this.loadProgress = info.percent;
-      this.els['boot-progress-fill'].style.width = `${info.percent}%`;
-      this.els['boot-progress-pct'].textContent = `${info.percent}%`;
+    const appendBootLog = (message: string, isReady = false): void => {
       const row = document.createElement('div');
-      row.className = 'boot-log-line';
-      row.textContent = info.message;
+      row.className = isReady ? 'boot-log-line is-ready' : 'boot-log-line';
+      row.textContent = message;
       const logEl = this.els['boot-log'];
       logEl.appendChild(row);
       logEl.scrollTop = logEl.scrollHeight;
+    };
+
+    this.sound.setBgmTrack('boot', 0.35);
+    this.sound.unlock();
+    const audioPreload = this.sound.preloadAllAudio((msg) => {
+      appendBootLog(msg);
     });
+
+    await Promise.all([
+      this.loader.preloadAll((info) => {
+        this.loadProgress = info.percent;
+        this.els['boot-progress-fill'].style.width = `${info.percent}%`;
+        this.els['boot-progress-pct'].textContent = `${info.percent}%`;
+        appendBootLog(info.message);
+      }),
+      audioPreload,
+    ]);
 
     this.envSystem.initEnvironment(this.loader.getEnvTextures());
     this.envSystem.setMode('boot');
@@ -571,19 +1043,24 @@ export class Game {
 
     const enterBtn = this.els['boot-enter-btn'] as HTMLButtonElement;
     enterBtn.disabled = false;
-    enterBtn.textContent = '开启机库闸门 · ENTER HANGAR';
+    const enterLabel = enterBtn.querySelector('.btn-label-text') ?? enterBtn;
+    enterLabel.textContent = '进入星港机库 · ENTER HANGAR';
   }
 
   private openHangarFromBoot(): void {
     if (this.state !== 'boot') return;
     this.sound.unlock();
-    this.sound.playUiClick();
+    this.sound.playBootDoorOpen();
     this.els['boot-screen'].classList.add('is-open');
     this.els['boot-screen'].style.pointerEvents = 'none';
     window.setTimeout(() => {
       this.els['boot-screen'].hidden = true;
     }, 650);
     this.enterHangar();
+  }
+
+  private worldXToPan(x: number): number {
+    return THREE.MathUtils.clamp(x / 11, -0.85, 0.85);
   }
 
   private clearInputState(): void {
@@ -593,35 +1070,67 @@ export class Game {
   }
 
   private closeAllDialogs(): void {
+    if (this.gfxMenuOpen) this.setGfxMenuOpen(false);
     if (this.dialogs.upgrade.open) this.dialogs.upgrade.close();
     if (this.dialogs.pause.open) this.dialogs.pause.close();
     if (this.dialogs.result.open) this.dialogs.result.close();
   }
 
   private bindEvents(): void {
+    const unlockEvents = ['pointerdown', 'keydown', 'touchstart', 'click'] as const;
+    const handleFirstAudioGesture = (): void => {
+      if (!this.sound.getTelemetry().unlocked) {
+        this.sound.unlock();
+      }
+      if (this.sound.getTelemetry().unlocked) {
+        for (const evName of unlockEvents) {
+          window.removeEventListener(evName, handleFirstAudioGesture, true);
+        }
+      }
+    };
+    for (const evName of unlockEvents) {
+      window.addEventListener(evName, handleFirstAudioGesture, {
+        capture: true,
+        passive: true,
+      });
+    }
+
     window.addEventListener('resize', () => {
-      const dpr = Math.min(window.devicePixelRatio || 1, 2);
-      const w = Math.max(1, window.innerWidth);
-      const h = Math.max(1, window.innerHeight);
-      this.camera.aspect = w / h;
-      this.camera.updateProjectionMatrix();
-      this.renderer.setPixelRatio(dpr);
-      this.renderer.setSize(w, h);
-      if (this.composer) {
-        this.composer.setPixelRatio(dpr);
-        this.composer.setSize(w, h);
-      }
-      if (this.bloomPass) {
-        const resW = Math.round(w * dpr);
-        const resH = Math.round(h * dpr);
-        this.bloomPass.resolution.set(resW, resH);
-        this.bloomPass.setSize(resW, resH);
-      }
+      this.refreshHardwareScreenMetrics();
+      this.syncHardwarePanelStaticInfo();
+      this.applyGraphicsSettings();
     });
 
     window.addEventListener('blur', () => {
       this.clearInputState();
     });
+
+    this.els['fps-hud-btn'].addEventListener('click', () => {
+      this.sound.unlock();
+      this.sound.playUiClick();
+      this.setGfxMenuOpen(!this.gfxMenuOpen);
+    });
+
+    this.els['gfx-opt-list'].addEventListener('click', (e) => {
+      const btn = (e.target as Element | null)?.closest<HTMLButtonElement>('.gfx-opt-btn');
+      if (!btn) return;
+      const preset = btn.dataset.gfxPreset as GraphicsPreset | undefined;
+      if (!preset || !GRAPHICS_PRESET_ORDER.includes(preset)) return;
+      this.sound.unlock();
+      this.sound.playUiClick();
+      this.setGraphicsPreset(preset);
+    });
+
+    document.addEventListener(
+      'pointerdown',
+      (e) => {
+        if (!this.gfxMenuOpen) return;
+        const target = e.target as Node | null;
+        if (target && this.els['fps-hud'].contains(target)) return;
+        this.setGfxMenuOpen(false);
+      },
+      { passive: true }
+    );
 
     this.els['boot-enter-btn'].addEventListener('click', () => {
       this.openHangarFromBoot();
@@ -675,6 +1184,8 @@ export class Game {
       );
     });
 
+    this.setupInteractiveSpotlightAndHover();
+
     window.addEventListener('pointerup', () => {
       this.isDraggingHangar = false;
       this.pointerDown = false;
@@ -689,6 +1200,19 @@ export class Game {
 
       if (code === 'KeyM') {
         this.toggleMute();
+        return;
+      }
+
+      if (code === 'Escape' && this.gfxMenuOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.setGfxMenuOpen(false);
+        this.els['fps-hud-btn'].focus();
+        return;
+      }
+
+      if (code === 'KeyG' && !e.repeat) {
+        this.cycleGraphicsPreset();
         return;
       }
 
@@ -744,7 +1268,8 @@ export class Game {
         this.startSortie();
       } else {
         // '' (Esc) or 'resume' -> resume combat
-        this.state = 'playing';
+        this.sound.setMuffled(false);
+        this.setScreenState('playing');
       }
     });
 
@@ -770,16 +1295,128 @@ export class Game {
     this.updateMuteButtons();
   }
 
+  private setupInteractiveSpotlightAndHover(): void {
+    if (typeof ResizeObserver !== 'undefined') {
+      this.spotlightResizeObserver = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          const el = entry.target as HTMLElement;
+          this.spotlightRects.set(el, el.getBoundingClientRect());
+        }
+      });
+    }
+
+    window.addEventListener('resize', () => {
+      this.spotlightRects = new WeakMap();
+    });
+
+    window.addEventListener('pagehide', () => {
+      this.spotlightResizeObserver?.disconnect();
+      this.spotlightResizeObserver = null;
+    });
+
+    document.addEventListener(
+      'pointerover',
+      (e) => {
+        const target = e.target as Element | null;
+        const btn = target?.closest('button:not(:disabled)') ?? null;
+        if (!btn) {
+          this.lastHoveredInteractive = null;
+          return;
+        }
+        if (btn !== this.lastHoveredInteractive) {
+          this.lastHoveredInteractive = btn;
+          this.sound.playUiHover();
+        }
+      },
+      { passive: true }
+    );
+
+    document.addEventListener(
+      'pointerout',
+      (e) => {
+        const related = e.relatedTarget as Element | null;
+        if (!related?.closest('button')) {
+          this.lastHoveredInteractive = null;
+        }
+      },
+      { passive: true }
+    );
+
+    this.registerSpotlightElements(document);
+  }
+
+  private registerSpotlightElements(root: ParentNode = document): void {
+    const candidates: HTMLElement[] = [];
+    if (root instanceof HTMLElement && root.hasAttribute('data-spotlight')) {
+      candidates.push(root);
+    }
+    root.querySelectorAll<HTMLElement>('[data-spotlight]').forEach((el) => {
+      candidates.push(el);
+    });
+
+    for (const el of candidates) {
+      if (el.dataset.spotlightWired === '1') continue;
+      el.dataset.spotlightWired = '1';
+      this.spotlightRects.set(el, el.getBoundingClientRect());
+      this.spotlightResizeObserver?.observe(el);
+
+      const updateCoords = (clientX: number, clientY: number) => {
+        let rect = this.spotlightRects.get(el);
+        if (!rect || rect.width === 0 || rect.height === 0) {
+          rect = el.getBoundingClientRect();
+          this.spotlightRects.set(el, rect);
+        }
+        const x = clientX - rect.left;
+        const y = clientY - rect.top;
+        el.style.setProperty('--mouse-x', `${x.toFixed(1)}px`);
+        el.style.setProperty('--mouse-y', `${y.toFixed(1)}px`);
+      };
+
+      el.addEventListener(
+        'pointerenter',
+        (e) => {
+          this.spotlightRects.set(el, el.getBoundingClientRect());
+          updateCoords(e.clientX, e.clientY);
+        },
+        { passive: true }
+      );
+
+      el.addEventListener(
+        'pointermove',
+        (e) => {
+          updateCoords(e.clientX, e.clientY);
+        },
+        { passive: true }
+      );
+    }
+  }
+
   private updateMuteButtons(): void {
     const label = this.sound.isMuted() ? '音效: 关 [M]' : '音效: 开 [M]';
-    this.els['hangar-mute-btn'].textContent = label;
-    this.els['hud-mute-btn'].textContent = label;
+    const hangarSpan = this.els['hangar-mute-btn'].querySelector('span:last-child');
+    if (hangarSpan) {
+      hangarSpan.textContent = label;
+    } else {
+      this.els['hangar-mute-btn'].textContent = label;
+    }
+    const hudLabel =
+      this.els['hud-mute-btn'].querySelector('.btn-hud-label') ??
+      this.els['hud-mute-btn'].querySelector('span:last-child');
+    if (hudLabel) {
+      hudLabel.textContent = label;
+    } else {
+      this.els['hud-mute-btn'].textContent = label;
+    }
   }
 
   private updateAutoFireButton(): void {
-    this.els['hud-autofire-btn'].textContent = this.autoFire
-      ? '开火: 自动 [F]'
-      : '开火: 手动 [F]';
+    const label = this.autoFire ? '开火: 自动 [F]' : '开火: 手动 [F]';
+    const textEl = this.els['hud-autofire-btn'].querySelector('.btn-hud-label');
+    if (textEl) {
+      textEl.textContent = label;
+    } else {
+      this.els['hud-autofire-btn'].textContent = label;
+    }
     this.els['hud-autofire-btn'].classList.toggle('is-active', this.autoFire);
   }
 
@@ -789,7 +1426,9 @@ export class Game {
     this.closeAllDialogs();
     this.clearInputState();
     this.cleanupCombatObjects();
-    this.state = 'hangar';
+    this.setScreenState('hangar');
+    this.sound.setMuffled(false);
+    this.sound.setBgmTrack('hangar');
     this.waves.setCombatActive(false);
     this.envSystem.setMode('hangar');
     this.els['hangar-ui'].hidden = false;
@@ -799,7 +1438,7 @@ export class Game {
     this.beamGroup.visible = false;
 
     const saveData = this.save.getAll();
-    this.els['hangar-career-stats'].textContent = `总击坠 ${saveData.totalKills} // 出击 ${saveData.totalRuns} 次`;
+    this.els['hangar-career-stats'].textContent = `总击坠 ${saveData.totalKills} · 出击 ${saveData.totalRuns} 次`;
 
     this.renderHangarShipList();
     this.selectHangarShip(this.selectedShipIndex);
@@ -813,23 +1452,34 @@ export class Game {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = `hangar-ship-card${idx === this.selectedShipIndex ? ' is-selected' : ''}`;
+      btn.dataset.spotlight = '';
       btn.style.setProperty('--ship-accent', ship.accentColor);
       btn.innerHTML = `
+        <img class="slot-frame-bg slot-frame-base" src="./ui/frames/card_slot_cyan.webp" alt="" aria-hidden="true" />
+        <img class="slot-frame-bg slot-frame-active" src="./ui/frames/card_slot_amber.webp" alt="" aria-hidden="true" />
+        <span class="ui-spotlight" aria-hidden="true"></span>
+        <span class="ui-corners" aria-hidden="true"></span>
         <img src="${ship.badgeIcon}" class="ship-card-badge" alt="" />
         <div class="ship-card-meta">
-          <div class="ship-card-code">${ship.factionTag}</div>
+          <div class="ship-card-header">
+            <span class="ship-card-corps">${ship.factionTag}</span>
+            <span class="ship-card-badge-code">${ship.codeName}</span>
+          </div>
           <div class="ship-card-name">${ship.nameZh}</div>
-          <div class="ship-card-role">${ship.roleTag}</div>
-          <div class="ship-card-best">${rec.bestScore > 0 ? `最高 ${rec.bestScore.toLocaleString()}` : '待命首航'}</div>
+          <div class="ship-card-sub">
+            <span class="ship-card-role">${ship.roleTag}</span>
+            <span class="ship-card-best">${rec.bestScore > 0 ? `最高 ${rec.bestScore.toLocaleString()}` : '待命首航'}</span>
+          </div>
         </div>
       `;
       btn.addEventListener('click', () => {
         this.sound.unlock();
-        this.sound.playUiClick();
+        this.sound.playShipSelect();
         this.selectHangarShip(idx);
       });
       list.appendChild(btn);
     });
+    this.registerSpotlightElements(list);
   }
 
   private selectHangarShip(index: number): void {
@@ -857,24 +1507,23 @@ export class Game {
     const cards = this.els['hangar-ship-list'].querySelectorAll('.hangar-ship-card');
     cards.forEach((c, i) => c.classList.toggle('is-selected', i === index));
 
-    const modelSpec = MODEL_ASSETS[ship.modelKey];
     const rec = this.save.getShipRecord(ship.id);
     (this.els['hangar-ship-badge'] as HTMLImageElement).src = ship.badgeIcon;
-    this.els['hangar-ai-tag'].textContent = `${modelSpec.aiModel} · CC BY 4.0`;
+    this.els['hangar-corps-tag'].textContent = ship.factionTag;
     this.els['hangar-ship-name'].textContent = ship.nameZh;
     this.els['hangar-ship-code'].textContent = ship.codeName;
     this.els['hangar-weapon-name'].textContent = ship.weaponName;
     this.els['hangar-weapon-desc'].textContent = ship.weaponDesc;
     this.els['hangar-ult-name'].textContent = ship.ultimateName;
     this.els['hangar-ult-desc'].textContent = ship.ultimateDesc;
-    this.els['hangar-prompt'].textContent = modelSpec.prompt;
+    this.els['hangar-lore'].textContent = ship.loreDesc;
 
     const clearText =
       rec.bestClearTimeSec !== null ? `${rec.bestClearTimeSec.toFixed(1)}s` : '--';
     this.els['hangar-ship-record'].innerHTML = `
-      <span>最佳战绩: <strong>${rec.bestScore.toLocaleString()}</strong></span>
-      <span>最快通关: <strong>${clearText}</strong></span>
-      <span>无尽波次: <strong>W${rec.bestEndlessWave}</strong></span>
+      <div class="record-cell"><span>最佳战绩</span><strong>${rec.bestScore.toLocaleString()}</strong></div>
+      <div class="record-cell"><span>最快通关</span><strong>${clearText}</strong></div>
+      <div class="record-cell"><span>无尽波次</span><strong>W${rec.bestEndlessWave}</strong></div>
     `;
 
     const statLabels: [string, number][] = [
@@ -884,17 +1533,125 @@ export class Game {
       ['矢量机动', ship.stats.agility],
     ];
     this.els['hangar-stats'].innerHTML = statLabels
-      .map(
-        ([lbl, val]) => `
+      .map(([lbl, val]) => {
+        const pct = Math.min(100, Math.max(0, Math.round((val / 5) * 100)));
+        const filled = Math.round((pct / 100) * 12);
+        const pips = Array.from({ length: 12 }, (_, idx) => {
+          const seg = idx + 1;
+          const activeClass = seg <= filled ? ` is-filled${seg >= 9 ? ' is-hot' : ''}` : '';
+          return `<span class="stat-pip${activeClass}"></span>`;
+        }).join('');
+        return `
       <div class="stat-row">
         <span class="stat-label">${lbl}</span>
-        <div class="stat-pips">${[1, 2, 3, 4, 5]
-          .map((n) => `<span class="stat-pip${n <= val ? ' is-filled' : ''}"></span>`)
-          .join('')}</div>
+        <div class="stat-pips">${pips}</div>
+        <span class="stat-val">${pct}</span>
       </div>
-    `
-      )
+    `;
+      })
       .join('');
+
+    this.els['hangar-blueprint-svg'].innerHTML = this.renderShipBlueprintSvg(ship.id);
+    this.els['hangar-spec-grid'].innerHTML = `
+      <div class="bp-spec-cell"><span>翼展</span><strong>${ship.specTelemetry.wingspan}</strong></div>
+      <div class="bp-spec-cell"><span>推进</span><strong>${ship.specTelemetry.propulsion}</strong></div>
+      <div class="bp-spec-cell"><span>出力</span><strong>${ship.specTelemetry.output}</strong></div>
+      <div class="bp-spec-cell"><span>装甲</span><strong>${ship.specTelemetry.armorClass}</strong></div>
+    `;
+  }
+
+  private renderShipBlueprintSvg(shipId: ShipId): string {
+    const grid = `
+      <g stroke="rgba(0,240,255,0.22)" stroke-width="0.8" fill="none">
+        <line x1="12" y1="60" x2="268" y2="60" stroke-dasharray="4 3" />
+        <line x1="140" y1="8" x2="140" y2="112" stroke-dasharray="3 3" />
+        <circle cx="140" cy="60" r="46" stroke-dasharray="2 4" />
+      </g>`;
+
+    if (shipId === 'astra') {
+      return `<svg viewBox="0 0 280 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        ${grid}
+        <g stroke="#00f0ff" stroke-width="1.5" fill="rgba(0,240,255,0.09)">
+          <path d="M62 52 L115 48 L186 45 L226 60 L186 75 L115 72 L62 68 Z" />
+          <path d="M98 48 L92 26 L112 26 L124 48 M98 72 L92 94 L112 94 L124 72" />
+          <path d="M168 46 L176 30 L194 30 L188 47 M168 74 L176 90 L194 90 L188 73" />
+          <ellipse cx="172" cy="60" rx="22" ry="7" fill="rgba(0,240,255,0.22)" />
+          <circle cx="102" cy="24" r="14" />
+          <circle cx="102" cy="96" r="14" />
+          <circle cx="185" cy="28" r="13" />
+          <circle cx="185" cy="92" r="13" />
+        </g>
+        <g stroke="#ffb347" stroke-width="1.4" fill="none">
+          <line x1="226" y1="53" x2="246" y2="53" />
+          <line x1="226" y1="67" x2="246" y2="67" />
+          <circle cx="102" cy="24" r="5" />
+          <circle cx="102" cy="96" r="5" />
+          <circle cx="185" cy="28" r="4.5" />
+          <circle cx="185" cy="92" r="4.5" />
+        </g>
+      </svg>`;
+    }
+
+    if (shipId === 'opus') {
+      return `<svg viewBox="0 0 280 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        ${grid}
+        <g stroke="#00f0ff" stroke-width="1.6" fill="rgba(0,240,255,0.1)">
+          <path d="M46 46 L94 40 L204 42 L230 53 L230 67 L204 78 L94 80 L46 74 Z" />
+          <path d="M108 40 L120 22 L152 22 L158 41 M108 80 L120 98 L152 98 L158 79" />
+          <rect x="164" y="51" width="38" height="18" rx="4" fill="rgba(0,240,255,0.22)" />
+          <circle cx="136" cy="22" r="17" />
+          <circle cx="136" cy="98" r="17" />
+          <line x1="68" y1="42" x2="68" y2="78" />
+          <line x1="94" y1="40" x2="94" y2="80" />
+        </g>
+        <g stroke="#ffb347" stroke-width="1.5" fill="none">
+          <line x1="230" y1="54" x2="252" y2="54" />
+          <line x1="230" y1="60" x2="256" y2="60" />
+          <line x1="230" y1="66" x2="252" y2="66" />
+          <circle cx="136" cy="22" r="7" />
+          <circle cx="136" cy="98" r="7" />
+        </g>
+      </svg>`;
+    }
+
+    if (shipId === 'morph') {
+      return `<svg viewBox="0 0 280 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+        ${grid}
+        <g stroke="#00f0ff" stroke-width="1.5" fill="rgba(0,240,255,0.1)">
+          <path d="M52 54 L118 47 L218 53 L252 60 L218 67 L118 73 L52 66 Z" />
+          <path d="M150 49 L92 14 L64 18 L108 49" />
+          <path d="M150 71 L92 106 L64 102 L108 71" />
+          <path d="M204 52 L176 34 L164 36 L184 51" />
+          <path d="M204 68 L176 86 L164 84 L184 69" />
+          <ellipse cx="192" cy="60" rx="20" ry="5" fill="rgba(0,240,255,0.24)" />
+        </g>
+        <g stroke="#ffb347" stroke-width="1.4" fill="none">
+          <circle cx="118" cy="44" r="5" />
+          <circle cx="118" cy="76" r="5" />
+          <path d="M40 53 L52 53 M40 67 L52 67" stroke-width="2" />
+          <line x1="252" y1="60" x2="266" y2="60" />
+        </g>
+      </svg>`;
+    }
+
+    return `<svg viewBox="0 0 280 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      ${grid}
+      <g stroke="#00f0ff" stroke-width="1.5" fill="rgba(0,240,255,0.09)">
+        <path d="M52 55 L112 49 L210 52 L246 60 L210 68 L112 71 L52 65 Z" />
+        <ellipse cx="142" cy="60" rx="44" ry="44" fill="none" />
+        <ellipse cx="142" cy="60" rx="35" ry="35" stroke-dasharray="6 4" fill="none" />
+        <path d="M196 52 L178 28 L168 30 L182 52" />
+        <path d="M196 68 L178 92 L168 90 L182 68" />
+        <ellipse cx="186" cy="60" rx="18" ry="6" fill="rgba(0,240,255,0.24)" />
+      </g>
+      <g stroke="#ffb347" stroke-width="1.4" fill="none">
+        <circle cx="142" cy="60" r="10" />
+        <circle cx="142" cy="16" r="3" fill="#ffb347" />
+        <circle cx="142" cy="104" r="3" fill="#ffb347" />
+        <line x1="42" y1="56" x2="52" y2="56" />
+        <line x1="42" y1="64" x2="52" y2="64" />
+      </g>
+    </svg>`;
   }
 
   // ==================== SORTIE & COMBAT ====================
@@ -909,7 +1666,7 @@ export class Game {
       this.hangarShipRig = null;
     }
 
-    this.state = 'playing';
+    this.setScreenState('playing');
     this.hangarPedestal.visible = false;
     this.waves.setCombatActive(true);
     this.envSystem.setMode('combat');
@@ -954,10 +1711,14 @@ export class Game {
 
     (this.els['hud-ship-badge'] as HTMLImageElement).src = ship.badgeIcon;
     this.els['hud-ship-name'].textContent = ship.nameZh;
+    this.els['hud-ship-code'].textContent = ship.codeName;
+    this.els['hud-hp-ghost'].style.width = '100%';
     this.updateAutoFireButton();
     this.renderChipStrip();
 
-    this.sound.startBgm();
+    this.sound.setMuffled(false);
+    this.sound.playLaunchSortie();
+    this.sound.setBgmTrack('act1');
     const startEv = this.waves.startCampaign();
     this.handleWaveEvent(startEv);
     this.envSystem.setAct(1, true);
@@ -967,7 +1728,9 @@ export class Game {
   private enterEndlessMode(): void {
     this.closeAllDialogs();
     this.clearInputState();
-    this.state = 'playing';
+    this.setScreenState('playing');
+    this.sound.setMuffled(false);
+    this.sound.playLaunchSortie();
     this.waves.setCombatActive(true);
     this.envSystem.setMode('combat');
     this.els['hud-ui'].hidden = false;
@@ -975,6 +1738,7 @@ export class Game {
     this.playerHp = Math.min(this.playerMaxHp, this.playerHp + Math.round(this.playerMaxHp * 0.45));
     const ev = this.waves.startEndlessMode();
     this.handleWaveEvent(ev);
+    this.sound.setBgmTrack('act3');
     this.envSystem.setAct(this.waves.getAct(), true);
     this.updateHud();
   }
@@ -1030,7 +1794,7 @@ export class Game {
     this.invulnTimer = Math.max(this.invulnTimer, this.rollTimer);
     this.rollDir = this.playerVel.x >= 0 ? 1 : -1;
     this.boostFovTimer = Math.max(this.boostFovTimer, 0.45);
-    this.sound.playRoll(false);
+    this.sound.playRoll(false, this.worldXToPan(this.playerPos.x));
 
     if (this.upgrades.rollBurstShots > 0) {
       const count = this.upgrades.rollBurstShots;
@@ -1061,15 +1825,15 @@ export class Game {
     if (this.state !== 'playing') return;
     if (this.ultimateCharge < this.activeShip.ultimateCost) return;
 
+    const id: ShipId = this.activeShip.id;
     this.ultimateCharge = 0;
-    this.sound.playUltimate();
+    this.sound.playUltimate(id as WeaponVoice);
     this.boostFovTimer = Math.max(this.boostFovTimer, 2.2);
     this.screenShake = Math.max(this.screenShake, 0.55);
 
-    const id: ShipId = this.activeShip.id;
     if (id === 'astra') {
       this.ultimateActiveTimer = 2.5;
-      this.showBanner('轨道离子过载光束 // ION OVERDRIVE');
+      this.showBanner('轨道离子过载光束 · ION OVERDRIVE');
     } else if (id === 'opus') {
       this.playerHp = Math.min(this.playerMaxHp, this.playerHp + 30);
       this.invulnTimer = Math.max(this.invulnTimer, 1.5);
@@ -1118,10 +1882,10 @@ export class Game {
           this.projectileVisuals.spawnMuzzleFlash(launchPos, vel, 0xff4757, 0.9);
         }
       }
-      this.showBanner('幻影齐射风暴 // 18X MISSILE SALVO');
+      this.showBanner('幻影齐射风暴 · 18X MISSILE SALVO');
     } else {
       this.ultimateActiveTimer = 4.0;
-      this.showBanner('棱镜时空缓速场 // CHRONO PRISM');
+      this.showBanner('棱镜时空缓速场 · CHRONO PRISM');
     }
   }
 
@@ -1129,17 +1893,22 @@ export class Game {
     if (this.state !== 'playing') return;
     this.closeAllDialogs();
     this.clearInputState();
-    this.state = 'paused';
+    this.setScreenState('paused');
+    this.sound.setMuffled(true);
+    this.sound.playHudDeploy();
     this.dialogs.pause.returnValue = '';
     if (!this.dialogs.pause.open) {
       this.dialogs.pause.showModal();
     }
+    this.promoteFpsHudToTopLayer();
   }
 
   private openUpgradeDialog(): void {
     this.closeAllDialogs();
     this.clearInputState();
-    this.state = 'upgrade';
+    this.setScreenState('upgrade');
+    this.sound.setMuffled(true);
+    this.sound.playHudDeploy();
     this.currentUpgradeChoices = pickUpgradeChoices(this.upgrades, 3);
     const grid = this.els['upgrade-cards-grid'];
     grid.innerHTML = '';
@@ -1149,10 +1918,13 @@ export class Game {
       const btn = document.createElement('button');
       btn.type = 'button';
       btn.className = `chip-card is-${card.accent}`;
+      btn.dataset.spotlight = '';
       if (idx === 0) btn.autofocus = true;
       btn.innerHTML = `
         <img src="./ui/card_chip_frame.png" class="chip-card-bg" alt="" />
         <img src="${card.icon}" class="chip-socket-icon" alt="" />
+        <span class="ui-spotlight" aria-hidden="true"></span>
+        <span class="ui-corners" aria-hidden="true"></span>
         <div class="chip-card-inner">
           <div class="chip-top-row">
             <span class="chip-code">${card.codeName}</span>
@@ -1167,11 +1939,13 @@ export class Game {
       btn.addEventListener('click', () => this.selectUpgradeCard(card.id));
       grid.appendChild(btn);
     });
+    this.registerSpotlightElements(grid);
 
     this.dialogs.upgrade.returnValue = '';
     if (!this.dialogs.upgrade.open) {
       this.dialogs.upgrade.showModal();
     }
+    this.promoteFpsHudToTopLayer();
   }
 
   private selectUpgradeCard(cardId: string): void {
@@ -1188,12 +1962,13 @@ export class Game {
       this.spawnWingmanUnit();
     }
 
+    this.sound.setMuffled(false);
     this.sound.playUpgrade();
     this.renderChipStrip();
     if (this.dialogs.upgrade.open) {
       this.dialogs.upgrade.close(cardId);
     }
-    this.state = 'playing';
+    this.setScreenState('playing');
 
     const ev = this.waves.resumeAfterUpgrade();
     if (ev) this.handleWaveEvent(ev);
@@ -1218,8 +1993,9 @@ export class Game {
   private showResultDialog(victory: boolean): void {
     this.closeAllDialogs();
     this.clearInputState();
-    this.state = 'result';
-    this.sound.stopBgm();
+    this.setScreenState('result');
+    this.sound.setMuffled(false);
+    this.sound.playResultStinger(victory);
     this.projectileVisuals.updateRollShield(
       false,
       this.playerPos,
@@ -1258,7 +2034,7 @@ export class Game {
       ? '战役凯旋 · CAMPAIGN CLEARED'
       : '机体战损 · SIGNAL LOST';
     this.els['result-subtitle'].textContent = victory
-      ? `${this.activeShip.nameZh} 成功摧毁龙骨母舰，千模空域已肃清`
+      ? `${this.activeShip.nameZh} 成功摧毁龙骨母舰，破晓航道已全面肃清`
       : `在第 ${this.waves.getAct()} 幕空域遭遇重创，请整备战机再战`;
 
     const newRecordTag = recordInfo.isNewBestScore ? ' <span class="badge-new">NEW BEST!</span>' : '';
@@ -1280,21 +2056,26 @@ export class Game {
     if (!this.dialogs.result.open) {
       this.dialogs.result.showModal();
     }
+    this.promoteFpsHudToTopLayer();
   }
 
   private handleWaveEvent(ev: ReturnType<WaveDirector['startCampaign']>): void {
     if (ev.type === 'act_banner') {
       this.envSystem.setAct(ev.act, false);
+      const track: BgmTrackId = ev.act === 1 ? 'act1' : ev.act === 2 ? 'act2' : 'act3';
+      this.sound.setBgmTrack(track);
       const theme = ACT_THEMES[Math.min(ACT_THEMES.length - 1, Math.max(0, ev.act - 1))];
       this.showBanner(`${theme.titleZh} · WAVE ${ev.waveInAct}`);
     } else if (ev.type === 'endless_wave') {
       this.envSystem.setAct(ev.act, false);
-      this.showBanner(`无尽深空 // ENDLESS WAVE ${ev.endlessWave}`);
+      this.sound.setBgmTrack('act3');
+      this.showBanner(`无尽深空 · ENDLESS WAVE ${ev.endlessWave}`);
     } else if (ev.type === 'upgrade_prompt') {
       this.openUpgradeDialog();
     } else if (ev.type === 'boss_intro' && ev.bossConfig) {
       this.envSystem.setAct(ev.act, false);
       this.sound.playBossWarning();
+      this.sound.setBgmTrack('boss', 0.9);
       this.showBossHud(ev.bossConfig);
       this.showBanner(`⚠ 警报: ${ev.bossConfig.nameZh} 降临!`);
     } else if (ev.type === 'campaign_victory') {
@@ -1305,8 +2086,9 @@ export class Game {
   private showBossHud(cfg: BossConfig): void {
     this.els['boss-hud'].hidden = false;
     this.els['boss-hud-name'].textContent = cfg.nameZh;
-    this.els['boss-hud-ai-badge'].textContent = cfg.aiModel;
-    this.els['boss-hud-prompt'].textContent = `PROMPT // "${cfg.prompt}"`;
+    this.els['boss-hud-threat-badge'].textContent = cfg.threatTag;
+    this.els['boss-hud-intel'].textContent = cfg.tacticalIntel;
+    this.els['boss-hud-hp-ghost'].style.width = '100%';
     this.updateBossHud();
   }
 
@@ -1318,6 +2100,7 @@ export class Game {
     }
     const pct = Math.max(0, (boss.hp / boss.maxHp) * 100);
     this.els['boss-hud-hp-fill'].style.width = `${pct}%`;
+    this.els['boss-hud-hp-ghost'].style.width = `${pct}%`;
     this.els['boss-hud-hp-text'].textContent = `${Math.max(0, Math.ceil(boss.hp))} / ${boss.maxHp}`;
     this.els['boss-parts-row'].innerHTML = boss.parts
       .map((p) => {
@@ -1325,13 +2108,14 @@ export class Game {
           return `<span class="boss-part-pill is-broken">${p.labelZh}: 已击毁</span>`;
         }
         const pp = Math.round((p.hp / p.maxHp) * 100);
-        return `<span class="boss-part-pill">${p.labelZh} ${pp}%</span>`;
+        return `<span class="boss-part-pill" style="--part-pct:${pp}%">${p.labelZh} <em>${pp}%</em></span>`;
       })
       .join('');
   }
 
   private showBanner(text: string): void {
     this.els['hud-banner'].textContent = text;
+    this.els['hud-banner'].classList.toggle('is-alert', text.includes('警报'));
     this.els['hud-banner'].classList.add('is-visible');
     this.bannerTimer = 2.7;
   }
@@ -1374,14 +2158,60 @@ export class Game {
 
   private startRenderLoop(): void {
     this.lastRafTime = performance.now();
+    this.prevWallTime = this.lastRafTime;
     const tick = (now: number) => {
       requestAnimationFrame(tick);
+      if (document.hidden) {
+        this.lastRafTime = now;
+        this.prevWallTime = now;
+        return;
+      }
+
+      const wallMs = now - this.prevWallTime;
+      this.prevWallTime = now;
+      if (wallMs > 0 && wallMs < 500) {
+        this.emaFrameMs = this.emaFrameMs * 0.88 + wallMs * 0.12;
+        this.currentFps = Math.max(1, Math.round(1000 / Math.max(1, this.emaFrameMs)));
+        const wallSec = wallMs / 1000;
+        this.fpsUiTimer += wallSec;
+
+        if (this.graphicsPreset === 'auto' && this.loadProgress >= 100) {
+          if (this.emaFrameMs > 19.5) {
+            this.drsHighTimer += wallSec;
+            this.drsRecoverTimer = 0;
+            if (this.drsHighTimer >= 0.75 && this.drsScale > 0.65) {
+              this.drsHighTimer = 0;
+              this.drsScale = Math.max(0.65, +(this.drsScale - 0.12).toFixed(2));
+              this.applyGraphicsSettings();
+            }
+          } else if (this.emaFrameMs <= 17.2 && this.drsScale < 1.0) {
+            this.drsHighTimer = 0;
+            this.drsRecoverTimer += wallSec;
+            if (this.drsRecoverTimer >= 3.5) {
+              this.drsRecoverTimer = 0;
+              this.drsScale = Math.min(1.0, +(this.drsScale + 0.08).toFixed(2));
+              this.applyGraphicsSettings();
+            }
+          } else {
+            this.drsHighTimer = 0;
+            if (this.emaFrameMs > 17.2) {
+              this.drsRecoverTimer = 0;
+            }
+          }
+        }
+
+        if (this.fpsUiTimer >= 0.25) {
+          this.fpsUiTimer = 0;
+          this.updateFpsHudDom(false);
+        }
+      }
+
       const rawDt = Math.min(0.05, Math.max(0.001, (now - this.lastRafTime) / 1000));
       this.lastRafTime = now;
       this.globalElapsed += rawDt;
 
       this.frameUpdate(rawDt);
-      if (this.composer) {
+      if (this.useBloom && this.composer) {
         this.composer.render(rawDt);
       } else {
         this.renderer.render(this.scene, this.camera);
@@ -1419,7 +2249,7 @@ export class Game {
         this.hangarShipInstance.root.position.y = Math.sin(this.globalElapsed * 2.1) * 0.08 - 0.15;
         this.hangarShipRig.update({ dt: rawDt, elapsed: this.globalElapsed });
       }
-      this.camera.position.lerp(new THREE.Vector3(0.4, 1.45, 5.1), rawDt * 6);
+      this.camera.position.lerp(this.tmpCamTarget.set(0.4, 1.45, 5.1), rawDt * 6);
       this.camera.lookAt(0, -0.15, 0);
       this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, 50, rawDt * 5);
       this.camera.updateProjectionMatrix();
@@ -1596,7 +2426,7 @@ export class Game {
             0x00f0ff
           );
           this.enemyBullets.splice(i, 1);
-          this.sound.playRoll(true);
+          this.sound.playRoll(true, this.worldXToPan(eb.pos.x));
           this.score += Math.round(80 * this.combo);
         }
       }
@@ -1675,7 +2505,7 @@ export class Game {
     const ship = this.activeShip;
     this.fireCooldown = ship.fireInterval / this.upgrades.fireRateMult;
     this.shotCounter += 1;
-    this.sound.playShot(ship.id as WeaponVoice);
+    this.sound.playShot(ship.id as WeaponVoice, this.worldXToPan(this.playerPos.x));
 
     // Velocity scaling follows pierce chip stacks so Morph starts at configured bulletSpeed
     const speedBonus = 1 + (this.upgrades.stacks['pierce'] ?? 0) * 0.22;
@@ -1985,14 +2815,15 @@ export class Game {
         this.bossDetachTick = 0;
         const node = boss.detachQueue.shift();
         if (node && node.visible) {
+          node.getWorldPosition(this.tmpVec3);
           this.vfx.spawnDetachedPart(node, boss.pos, boss.config.accentHex);
-          this.sound.playExplosion('medium');
+          this.sound.playExplosion('medium', this.worldXToPan(this.tmpVec3.x));
           this.screenShake = Math.max(this.screenShake, 0.35);
         }
       }
       if (boss.deathTimer >= 1.8) {
         this.vfx.spawnExplosion(boss.pos, 5.2, boss.config.accentHex, true);
-        this.sound.playExplosion('boss');
+        this.sound.playExplosion('boss', this.worldXToPan(boss.pos.x));
         this.screenShake = 0.9;
         this.slowMoTimer = 0;
         this.enemyBullets.length = 0;
@@ -2236,7 +3067,7 @@ export class Game {
   ): void {
     e.hp -= damage;
     e.flashTimer = 0.09;
-    this.sound.playHit(isCrit);
+    this.sound.playHit(isCrit, this.worldXToPan(e.pos.x), this.combo);
     this.vfx.spawnSparks(e.pos, fromBeam ? 2 : 5, isCrit ? 0xffb347 : 0x00f0ff, 12);
     if (!fromBeam) {
       this.projectileVisuals.spawnBulletImpact(e.pos, isCrit ? 0xffb347 : 0x00f0ff, isCrit);
@@ -2265,7 +3096,10 @@ export class Game {
         e.isElite ? 0xff6b2b : 0x00f0ff,
         true
       );
-      this.sound.playExplosion(e.isElite ? 'medium' : 'small');
+      this.sound.playExplosion(
+        e.isElite ? 'medium' : 'small',
+        this.worldXToPan(dropPos.x)
+      );
       this.screenShake = Math.max(this.screenShake, e.isElite ? 0.24 : 0.1);
       this.spawnFloatingText(dropPos, `+${scoreGain}`, 'score');
 
@@ -2286,7 +3120,7 @@ export class Game {
     this.enemyBullets.length = 0;
     this.projectileVisuals.syncEnemyProjectiles(this.enemyBullets, 0, this.globalElapsed);
     this.invulnTimer = Math.max(this.invulnTimer, 3.0);
-    this.sound.playExplosion('boss');
+    this.sound.playExplosion('boss', this.worldXToPan(boss.pos.x));
     this.updateBossHud();
   }
 
@@ -2302,7 +3136,7 @@ export class Game {
     // Direct part hits also bleed 70% damage to core boss HP
     boss.hp -= damage * 0.7;
     boss.flashTimer = 0.08;
-    this.sound.playHit(isCrit);
+    this.sound.playHit(isCrit, this.worldXToPan(hitPos.x), this.combo);
     this.vfx.spawnSparks(hitPos, fromBeam ? 2 : 7, 0xffb347, 15);
     if (!fromBeam) {
       this.projectileVisuals.spawnBulletImpact(hitPos, isCrit ? 0xffb347 : 0xff9f43, isCrit);
@@ -2324,7 +3158,7 @@ export class Game {
       }
       this.hitStopTimer = 0.06;
       this.screenShake = Math.max(this.screenShake, 0.55);
-      this.sound.playPartBreak();
+      this.sound.playPartBreak(this.worldXToPan(part.worldPos.x));
       this.addUltimateCharge(22);
       this.score += Math.round(600 * this.combo);
       this.spawnFloatingText(part.worldPos, `${part.labelZh} 击碎!`, 'part');
@@ -2347,7 +3181,7 @@ export class Game {
   ): void {
     boss.hp -= damage;
     boss.flashTimer = 0.07;
-    this.sound.playHit(isCrit);
+    this.sound.playHit(isCrit, this.worldXToPan(hitPos.x), this.combo);
     this.vfx.spawnSparks(hitPos, fromBeam ? 2 : 5, boss.config.accentHex, 13);
     if (!fromBeam) {
       this.projectileVisuals.spawnBulletImpact(
@@ -2499,7 +3333,7 @@ export class Game {
 
       const d2 = pk.pos.distanceToSquared(this.playerPos);
       if (d2 < 2.2 * 2.2) {
-        this.sound.playPickup();
+        this.sound.playPickup(this.worldXToPan(pk.pos.x));
         if (pk.kind === 'repair') {
           this.playerHp = Math.min(this.playerMaxHp, this.playerHp + 22);
           this.flashDamageVignette('heal');
@@ -2559,7 +3393,7 @@ export class Game {
     const sy = (Math.random() - 0.5) * this.screenShake * 1.25;
 
     this.camera.position.lerp(
-      new THREE.Vector3(this.playerPos.x * 0.45 + sx, this.playerPos.y * 0.42 + 2.45 + sy, 14.2),
+      this.tmpCamTarget.set(this.playerPos.x * 0.45 + sx, this.playerPos.y * 0.42 + 2.45 + sy, 14.2),
       Math.min(1, rawDt * 8)
     );
     this.camera.lookAt(this.playerPos.x * 0.75, this.playerPos.y * 0.65, -28);
@@ -2608,31 +3442,92 @@ export class Game {
       this.els['boss-hud'].hidden = true;
     }
 
-    const hpPct = Math.max(0, (this.playerHp / this.playerMaxHp) * 100);
-    this.els['hud-hp-fill'].style.width = `${hpPct}%`;
-    this.els['hud-hp-text'].textContent = `${Math.ceil(this.playerHp)} / ${this.playerMaxHp}`;
-    this.els['hud-hp-fill'].classList.toggle('is-low', hpPct <= 30);
+    const hpPctNum = Math.max(0, (this.playerHp / this.playerMaxHp) * 100);
+    const hpPctStr = `${hpPctNum.toFixed(1)}%`;
+    const hpText = `${Math.ceil(this.playerHp)} / ${this.playerMaxHp}`;
+    const hpLow = hpPctNum <= 30;
+    const cache = this.lastHudCache;
 
-    this.els['hud-combo-val'].textContent = `x${this.combo.toFixed(1)}`;
-    this.els['hud-combo-box'].classList.toggle('is-hot', this.combo >= 3.0);
-    this.els['hud-combo-bar'].style.width = `${Math.min(100, (this.comboTimer / 4.0) * 100)}%`;
+    if (hpPctStr !== cache.hpPct) {
+      cache.hpPct = hpPctStr;
+      this.els['hud-hp-fill'].style.width = hpPctStr;
+      this.els['hud-hp-ghost'].style.width = hpPctStr;
+    }
+    if (hpText !== cache.hpText) {
+      cache.hpText = hpText;
+      this.els['hud-hp-text'].textContent = hpText;
+    }
+    if (hpLow !== cache.hpLow) {
+      cache.hpLow = hpLow;
+      this.els['hud-hp-fill'].classList.toggle('is-low', hpLow);
+      this.els['hud-cluster-tl'].classList.toggle('is-danger', hpLow);
+    }
 
-    this.els['hud-act-label'].textContent = this.waves.isEndless()
+    const comboVal = `x${this.combo.toFixed(1)}`;
+    const comboHot = this.combo >= 3.0;
+    const comboBar = `${Math.min(100, (this.comboTimer / 4.0) * 100).toFixed(1)}%`;
+    if (comboVal !== cache.comboVal) {
+      cache.comboVal = comboVal;
+      this.els['hud-combo-val'].textContent = comboVal;
+    }
+    if (comboHot !== cache.comboHot) {
+      cache.comboHot = comboHot;
+      this.els['hud-combo-box'].classList.toggle('is-hot', comboHot);
+    }
+    if (comboBar !== cache.comboBar) {
+      cache.comboBar = comboBar;
+      this.els['hud-combo-bar'].style.width = comboBar;
+    }
+
+    const actLabel = this.waves.isEndless()
       ? `无尽深空 · WAVE ${this.waves.getEndlessWave()}`
       : `ACT ${this.waves.getAct()} · WAVE ${this.waves.getWaveInAct()}/3`;
-    this.els['hud-score-value'].textContent = Math.round(this.score).toLocaleString();
+    if (actLabel !== cache.actLabel) {
+      cache.actLabel = actLabel;
+      this.els['hud-act-label'].textContent = actLabel;
+    }
+
+    const scoreStr = Math.round(this.score).toLocaleString();
+    if (scoreStr !== cache.score) {
+      cache.score = scoreStr;
+      this.els['hud-score-value'].textContent = scoreStr;
+    }
 
     const rollMax = Math.max(0.35, this.activeShip.rollCooldown * this.upgrades.rollCooldownMult);
-    const rollPct = this.rollCooldownTimer <= 0 ? 100 : (1 - this.rollCooldownTimer / rollMax) * 100;
-    this.els['hud-roll-fill'].style.width = `${Math.max(0, Math.min(100, rollPct))}%`;
-    this.els['hud-roll-status'].textContent =
-      this.rollCooldownTimer <= 0 ? 'READY' : `${this.rollCooldownTimer.toFixed(1)}s`;
-    this.els['hud-roll-card'].classList.toggle('is-ready', this.rollCooldownTimer <= 0);
+    const rollPctNum = this.rollCooldownTimer <= 0 ? 100 : (1 - this.rollCooldownTimer / rollMax) * 100;
+    const rollPct = `${Math.max(0, Math.min(100, rollPctNum)).toFixed(1)}%`;
+    const rollStatus = this.rollCooldownTimer <= 0 ? 'READY' : `${this.rollCooldownTimer.toFixed(1)}s`;
+    const rollReady = this.rollCooldownTimer <= 0;
+    if (rollPct !== cache.rollPct) {
+      cache.rollPct = rollPct;
+      this.els['hud-roll-fill'].style.width = rollPct;
+    }
+    if (rollStatus !== cache.rollStatus) {
+      cache.rollStatus = rollStatus;
+      this.els['hud-roll-status'].textContent = rollStatus;
+    }
+    if (rollReady !== cache.rollReady) {
+      cache.rollReady = rollReady;
+      this.els['hud-roll-card'].classList.toggle('is-ready', rollReady);
+    }
 
-    const ultPct = Math.min(100, (this.ultimateCharge / this.activeShip.ultimateCost) * 100);
-    this.els['hud-ult-fill'].style.width = `${ultPct}%`;
-    this.els['hud-ult-pct'].textContent = ultPct >= 100 ? 'READY!' : `${Math.floor(ultPct)}%`;
-    this.els['hud-ult-card'].classList.toggle('is-ready', ultPct >= 100);
+    const ultPctNum = Math.min(100, (this.ultimateCharge / this.activeShip.ultimateCost) * 100);
+    const ultBar = `${ultPctNum.toFixed(1)}%`;
+    const ultReady = ultPctNum >= 100;
+    const ultPctText = ultReady ? 'READY!' : `${Math.floor(ultPctNum)}%`;
+    if (ultBar !== cache.ultBar) {
+      cache.ultBar = ultBar;
+      this.els['hud-ult-fill'].style.width = ultBar;
+    }
+    if (ultPctText !== cache.ultPctText) {
+      cache.ultPctText = ultPctText;
+      this.els['hud-ult-pct'].textContent = ultPctText;
+    }
+    if (ultReady !== cache.ultReady) {
+      cache.ultReady = ultReady;
+      this.els['hud-ult-card'].classList.toggle('is-ready', ultReady);
+      this.els['hud-reticle'].classList.toggle('is-ult-ready', ultReady);
+    }
   }
 
   private registerQaHook(): void {
@@ -2689,6 +3584,14 @@ export class Game {
           critChance: +this.upgrades.critChance.toFixed(3),
           aeroBounceCount: this.aeroBounceCount,
           boss: bossSnapshot,
+          fps: this.currentFps,
+          frameMs: +this.emaFrameMs.toFixed(1),
+          graphicsPreset: this.graphicsPreset,
+          renderPixelRatio: +this.renderPixelRatio.toFixed(2),
+          internalWidth: this.internalWidth,
+          internalHeight: this.internalHeight,
+          hardware: { ...this.hardwareProfile },
+          audio: this.sound.getTelemetry(),
           dialogs: {
             upgradeOpen: this.dialogs.upgrade.open,
             pauseOpen: this.dialogs.pause.open,
@@ -2728,7 +3631,7 @@ export class Game {
           this.startSortie();
         } else if (this.state === 'paused') {
           this.closeAllDialogs();
-          this.state = 'playing';
+          this.setScreenState('playing');
         }
         if (this.state === 'playing') {
           this.openUpgradeDialog();
@@ -2744,7 +3647,7 @@ export class Game {
         } else if (this.state === 'paused' || this.state === 'upgrade') {
           this.closeAllDialogs();
           this.clearInputState();
-          this.state = 'playing';
+          this.setScreenState('playing');
         }
         this.enemyBullets.length = 0;
         this.projectileVisuals.syncEnemyProjectiles(this.enemyBullets, 0, this.globalElapsed);
@@ -2812,6 +3715,10 @@ export class Game {
         this.tryBarrelRoll();
         this.updateHud();
         return true;
+      },
+
+      setGraphicsPreset: (preset: GraphicsPreset): void => {
+        this.setGraphicsPreset(preset);
       },
     };
 

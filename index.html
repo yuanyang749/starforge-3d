@@ -3,12 +3,143 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>星穹铸舰：千模战役 · STARFORGE: AI ARMADA</title>
+    <title>星穹战翼：破晓远征 · STARFORGE: ECLIPSE VANGUARD</title>
     <link rel="icon" type="image/png" href="./ui/logo_emblem.png" />
   </head>
   <body>
-    <canvas id="game-canvas" aria-label="星穹铸舰 3D 战场画布"></canvas>
+    <canvas id="game-canvas" aria-label="星穹战翼 3D 战场画布"></canvas>
     <div id="damage-vignette" class="damage-vignette" aria-hidden="true"></div>
+    <aside id="fps-hud" class="fps-hud" popover="manual" aria-label="实时帧率与渲染模式">
+      <button
+        id="fps-hud-btn"
+        type="button"
+        class="fps-hud-btn"
+        data-spotlight
+        aria-expanded="false"
+        aria-controls="gfx-popover-panel"
+        title="点击查看硬件识别并选择分辨率，或按 [G] 循环切档"
+      >
+        <span class="ui-spotlight" aria-hidden="true"></span>
+        <i id="fps-hud-dot" class="fps-hud-dot is-good" aria-hidden="true"></i>
+        <span class="fps-hud-readout">
+          <strong id="fps-hud-val">60</strong>
+          <span class="fps-hud-unit">FPS</span>
+        </span>
+        <span class="fps-hud-sep" aria-hidden="true"></span>
+        <span id="fps-hud-ms" class="fps-hud-ms">16.7ms</span>
+        <span id="fps-hud-mode" class="fps-hud-mode">自动·1080P [G]</span>
+        <span class="fps-hud-caret" aria-hidden="true">▾</span>
+      </button>
+
+      <div
+        id="gfx-popover-panel"
+        class="gfx-popover-panel"
+        hidden
+        aria-label="硬件识别与渲染分辨率设置"
+      >
+        <div class="gfx-panel-head">
+          <div>
+            <span class="gfx-panel-tag">HARDWARE &amp; DISPLAY</span>
+            <h3>硬件识别与分辨率</h3>
+          </div>
+          <span id="gfx-hw-tier" class="gfx-tier-badge">主流均衡档</span>
+        </div>
+
+        <div class="gfx-hw-box">
+          <div class="gfx-hw-row">
+            <span>图形核心</span>
+            <strong id="gfx-hw-gpu">检测中</strong>
+          </div>
+          <div class="gfx-hw-row">
+            <span>处理器与显示</span>
+            <strong id="gfx-hw-sys">--</strong>
+          </div>
+          <div class="gfx-hw-row">
+            <span>实时渲染缓冲</span>
+            <strong id="gfx-hw-buf" class="is-cyan">--</strong>
+          </div>
+        </div>
+
+        <div id="gfx-opt-list" class="gfx-opt-list" role="group" aria-label="选择渲染分辨率">
+          <button
+            type="button"
+            class="gfx-opt-btn"
+            data-spotlight
+            data-gfx-preset="auto"
+            aria-pressed="true"
+          >
+            <span class="ui-spotlight" aria-hidden="true"></span>
+            <div class="gfx-opt-top">
+              <strong>智能硬件适配</strong>
+              <em id="gfx-auto-rec-tag">推荐</em>
+            </div>
+            <span id="gfx-auto-desc" class="gfx-opt-desc">按识别硬件匹配上限 + 动态稳帧 DRS</span>
+          </button>
+
+          <button
+            type="button"
+            class="gfx-opt-btn"
+            data-spotlight
+            data-gfx-preset="720p"
+            aria-pressed="false"
+          >
+            <span class="ui-spotlight" aria-hidden="true"></span>
+            <div class="gfx-opt-top">
+              <strong>1280 × 720</strong>
+              <em>720P 极速</em>
+            </div>
+            <span class="gfx-opt-desc">0.92M 像素 · 关闭泛光 · 核显与高刷首选</span>
+          </button>
+
+          <button
+            type="button"
+            class="gfx-opt-btn"
+            data-spotlight
+            data-gfx-preset="1080p"
+            aria-pressed="false"
+          >
+            <span class="ui-spotlight" aria-hidden="true"></span>
+            <div class="gfx-opt-top">
+              <strong>1920 × 1080</strong>
+              <em>1080P 均衡</em>
+            </div>
+            <span class="gfx-opt-desc">2.07M 像素 · 半分泛光 · 4K 显示器甜点档</span>
+          </button>
+
+          <button
+            type="button"
+            class="gfx-opt-btn"
+            data-spotlight
+            data-gfx-preset="1440p"
+            aria-pressed="false"
+          >
+            <span class="ui-spotlight" aria-hidden="true"></span>
+            <div class="gfx-opt-top">
+              <strong>2560 × 1440</strong>
+              <em>2K 超清</em>
+            </div>
+            <span class="gfx-opt-desc">3.69M 像素 · 高精泛光 · 中高配独显推荐</span>
+          </button>
+
+          <button
+            type="button"
+            class="gfx-opt-btn"
+            data-spotlight
+            data-gfx-preset="native"
+            aria-pressed="false"
+          >
+            <span class="ui-spotlight" aria-hidden="true"></span>
+            <div class="gfx-opt-top">
+              <strong>原生满血分辨率</strong>
+              <em>4K 极致</em>
+            </div>
+            <span class="gfx-opt-desc">最高 3840×2160 · 点对点满血锐度</span>
+          </button>
+        </div>
+
+        <div class="gfx-panel-foot">快捷键 <kbd>G</kbd> 循环切档 · 点击外部或 <kbd>ESC</kbd> 收起</div>
+      </div>
+    </aside>
 
     <!-- 1. Orbital Bootloader Screen -->
     <section id="boot-screen" class="boot-screen" aria-label="轨道启动终端">
@@ -24,32 +155,46 @@
       <div class="boot-door boot-door-left" aria-hidden="true"></div>
       <div class="boot-door boot-door-right" aria-hidden="true"></div>
 
-      <div class="boot-console">
+      <div class="boot-console framed-shell" data-spotlight>
         <img
-          src="./ui/logo_emblem.png"
-          class="boot-logo"
-          alt="STARFORGE AI ARMADA"
-          width="1536"
-          height="1024"
-          fetchpriority="high"
+          src="./ui/frames/modal_frame_sci_fi.webp"
+          class="ui-frame-bg"
+          alt=""
+          aria-hidden="true"
+          width="960"
+          height="640"
         />
-        <h1 class="boot-title">星穹铸舰：千模战役</h1>
-        <p class="boot-subtitle">
-          ORBITAL LAUNCH TERMINAL // 14-MODEL 100% ANIMATED GLB ROSTER · CC BY 4.0
-        </p>
+        <span class="ui-spotlight" aria-hidden="true"></span>
+        <span class="ui-sheen" aria-hidden="true"></span>
 
-        <div class="boot-progress-wrap">
-          <div class="boot-progress-track">
-            <div id="boot-progress-fill" class="boot-progress-fill"></div>
+        <div class="boot-console-inner">
+          <img
+            src="./ui/logo_emblem.png"
+            class="boot-logo"
+            alt="STARFORGE: ECLIPSE VANGUARD"
+            width="1536"
+            height="1024"
+            fetchpriority="high"
+          />
+          <h1 class="boot-title">星穹战翼：破晓远征</h1>
+          <p class="boot-subtitle">
+            STARFORGE: ECLIPSE VANGUARD · 轨道打击终端
+          </p>
+
+          <div class="boot-progress-wrap">
+            <div class="boot-progress-track">
+              <div id="boot-progress-fill" class="boot-progress-fill"></div>
+            </div>
+            <span id="boot-progress-pct" class="boot-progress-pct">0%</span>
           </div>
-          <span id="boot-progress-pct" class="boot-progress-pct">0%</span>
+
+          <div id="boot-log" class="boot-log" role="log" aria-live="polite"></div>
+
+          <button id="boot-enter-btn" type="button" class="btn-primary-launch" data-spotlight disabled>
+            <span class="ui-spotlight" aria-hidden="true"></span>
+            <span class="btn-label-text">正在同步神经火控与跃迁星图...</span>
+          </button>
         </div>
-
-        <div id="boot-log" class="boot-log" role="log" aria-live="polite"></div>
-
-        <button id="boot-enter-btn" type="button" class="btn-primary-launch" disabled>
-          正在校验骨骼资产与着色器管线...
-        </button>
       </div>
     </section>
 
@@ -59,147 +204,264 @@
         <div class="topbar-brand">
           <img src="./ui/logo_emblem.png" class="topbar-logo" alt="" width="1536" height="1024" />
           <div>
-            <div class="topbar-kicker">SCENARIO-LABS // 3D-COLLECTION · CC BY 4.0</div>
-            <div class="topbar-heading">星穹铸舰 · 全息装配机库</div>
+            <div class="topbar-kicker">天盾轨道司令部 · 07 号星港泊位</div>
+            <div class="topbar-heading">星穹战翼 · 轨道整备机库</div>
           </div>
         </div>
         <div class="topbar-right">
-          <span id="hangar-career-stats" class="career-pill">总击坠 0 // 出击 0 次</span>
-          <button id="hangar-mute-btn" type="button" class="btn-ghost">音效: 开 [M]</button>
+          <span id="hangar-career-stats" class="career-pill">累计击坠 0 · 出击 0 次</span>
+          <button id="hangar-mute-btn" type="button" class="btn-ghost" data-spotlight>
+            <span class="ui-spotlight" aria-hidden="true"></span>
+            <span>音效: 开 [M]</span>
+          </button>
         </div>
       </header>
 
-      <aside class="hangar-left-col" aria-label="可选战机列表">
-        <div class="panel-header">
-          <span class="panel-tag">STARFIGHTER ROSTER</span>
-          <h2>选择出击机体</h2>
+      <aside class="hangar-left-col framed-panel" data-spotlight aria-label="可选战机列表">
+        <img
+          src="./ui/frames/panel_frame_tall.webp"
+          class="ui-frame-bg"
+          alt=""
+          aria-hidden="true"
+          width="720"
+          height="1080"
+        />
+        <span class="ui-spotlight" aria-hidden="true"></span>
+
+        <div class="panel-scroll-inner">
+          <div class="panel-header">
+            <span class="panel-tag">STARFIGHTER ROSTER</span>
+            <h2>选择出击机体</h2>
+          </div>
+
+          <div id="hangar-ship-list" class="hangar-ship-list"></div>
+
+          <div id="hangar-blueprint-panel" class="hangar-blueprint-panel" data-spotlight>
+            <span class="ui-spotlight" aria-hidden="true"></span>
+            <div class="blueprint-head">
+              <span class="blueprint-tag">SCHEMATIC · 结构投影</span>
+              <span class="blueprint-status">SYS ONLINE</span>
+            </div>
+            <div class="blueprint-stage">
+              <div id="hangar-blueprint-svg" class="blueprint-svg-wrap" aria-hidden="true"></div>
+              <div class="blueprint-scanline" aria-hidden="true"></div>
+            </div>
+            <div id="hangar-spec-grid" class="blueprint-spec-grid"></div>
+          </div>
         </div>
-        <div id="hangar-ship-list" class="hangar-ship-list"></div>
       </aside>
 
-      <div class="hangar-viewport-hint">
-        <span>DRAG TO INSPECT 3D MODEL · 鼠标左右拖拽旋转检视真实骨骼与动画</span>
+      <div class="hangar-viewport-hint" aria-label="泊位检视提示">
+        <span class="dock-pill"><i class="dock-dot is-emerald"></i>泊位就绪</span>
+        <span class="dock-pill-main">鼠标左右拖拽全方位检视战机气动与武装构型</span>
+        <span class="dock-pill"><i class="dock-dot is-cyan"></i>核心在线</span>
       </div>
 
-      <aside class="hangar-right-col" aria-label="战机 AI 溯源与武装档案">
-        <div class="ship-profile-head">
-          <img
-            id="hangar-ship-badge"
-            class="profile-badge"
-            src="./ui/icons/badge_astra.png"
-            alt=""
-            width="256"
-            height="256"
-          />
-          <div>
-            <div id="hangar-ai-tag" class="profile-ai-tag">GPT-6 Astra 3D</div>
-            <h1 id="hangar-ship-name" class="profile-name">日曜四旋翼穿梭机</h1>
-            <div id="hangar-ship-code" class="profile-code">SOLARIS VTOL // X-01</div>
+      <aside class="hangar-right-col framed-panel" data-spotlight aria-label="战机战术档案与武装配置">
+        <img
+          src="./ui/frames/panel_frame_tall.webp"
+          class="ui-frame-bg"
+          alt=""
+          aria-hidden="true"
+          width="720"
+          height="1080"
+        />
+        <span class="ui-spotlight" aria-hidden="true"></span>
+
+        <div class="panel-scroll-inner">
+          <div class="ship-profile-head">
+            <img
+              id="hangar-ship-badge"
+              class="profile-badge"
+              src="./ui/icons/badge_astra.png"
+              alt=""
+              width="256"
+              height="256"
+            />
+            <div class="profile-meta">
+              <div class="profile-top-tags">
+                <span id="hangar-corps-tag" class="profile-corps-tag">赫利俄斯航宇</span>
+                <span id="hangar-ship-code" class="profile-code">X-01</span>
+              </div>
+              <h1 id="hangar-ship-name" class="profile-name">日曜四旋翼穿梭机</h1>
+            </div>
+          </div>
+
+          <div id="hangar-ship-record" class="ship-record-row"></div>
+          <div id="hangar-stats" class="hangar-stats"></div>
+
+          <div class="ability-box" data-spotlight>
+            <span class="ui-spotlight" aria-hidden="true"></span>
+            <div class="ability-row">
+              <span class="ability-tag is-cyan">W1 主武器</span>
+              <strong id="hangar-weapon-name"></strong>
+            </div>
+            <p id="hangar-weapon-desc" class="ability-desc"></p>
+          </div>
+
+          <div class="ability-box is-amber" data-spotlight>
+            <span class="ui-spotlight" aria-hidden="true"></span>
+            <div class="ability-row">
+              <span class="ability-tag is-amber">ULT 终极过载 [SPACE / Q]</span>
+              <strong id="hangar-ult-name"></strong>
+            </div>
+            <p id="hangar-ult-desc" class="ability-desc"></p>
+          </div>
+
+          <div class="tactical-lore-box" data-spotlight>
+            <span class="ui-spotlight" aria-hidden="true"></span>
+            <div class="lore-label">机体战术档案</div>
+            <p id="hangar-lore" class="lore-text"></p>
           </div>
         </div>
 
-        <div id="hangar-ship-record" class="ship-record-row"></div>
-        <div id="hangar-stats" class="hangar-stats"></div>
-
-        <div class="ability-box">
-          <div class="ability-row">
-            <span class="ability-tag is-cyan">MAIN WEAPON</span>
-            <strong id="hangar-weapon-name"></strong>
-          </div>
-          <p id="hangar-weapon-desc" class="ability-desc"></p>
+        <div class="hangar-launch-footer">
+          <button id="hangar-launch-btn" type="button" class="launch-plate-btn" data-spotlight>
+            <img
+              src="./ui/frames/launch_btn_amber.webp"
+              class="launch-plate-bg"
+              alt=""
+              aria-hidden="true"
+              width="760"
+              height="196"
+            />
+            <span class="ui-spotlight is-amber" aria-hidden="true"></span>
+            <span class="ui-sheen" aria-hidden="true"></span>
+            <span class="launch-plate-content">
+              <span class="launch-plate-title">点火出击</span>
+              <span class="launch-plate-sub">IGNITE &amp; LAUNCH</span>
+            </span>
+            <span class="launch-chevrons" aria-hidden="true">≫</span>
+          </button>
         </div>
-
-        <div class="ability-box is-amber">
-          <div class="ability-row">
-            <span class="ability-tag is-amber">OVERDRIVE [SPACE / Q]</span>
-            <strong id="hangar-ult-name"></strong>
-          </div>
-          <p id="hangar-ult-desc" class="ability-desc"></p>
-        </div>
-
-        <div class="prompt-provenance">
-          <div class="prompt-label">DATASET ORIGINAL PROMPT // 模型原始生成提示词</div>
-          <pre id="hangar-prompt" class="prompt-text"></pre>
-        </div>
-
-        <button id="hangar-launch-btn" type="button" class="btn-primary-launch">
-          点火出击 · LAUNCH SORTIE
-        </button>
       </aside>
     </section>
 
     <!-- 3. In-Combat HUD -->
     <section id="hud-ui" class="hud-ui" hidden aria-label="战斗战术 HUD">
-      <img
-        src="./ui/hud_visor_frame.png"
-        class="hud-visor-overlay"
-        alt=""
-        aria-hidden="true"
-        width="1672"
-        height="941"
-      />
       <div id="floating-numbers" class="floating-numbers" aria-hidden="true"></div>
 
       <div id="hud-reticle" class="hud-reticle" aria-hidden="true">
-        <img src="./ui/hud_reticle_compass.png" alt="" width="1254" height="1254" />
+        <svg viewBox="0 0 80 80" class="hud-reticle-svg" aria-hidden="true">
+          <g fill="none" stroke="rgba(0, 240, 255, 0.85)" stroke-width="1.4" stroke-linecap="round">
+            <path d="M 14 28 A 28 28 0 0 1 28 14" />
+            <path d="M 52 14 A 28 28 0 0 1 66 28" />
+            <path d="M 66 52 A 28 28 0 0 1 52 66" />
+            <path d="M 28 66 A 28 28 0 0 1 14 52" />
+            <line x1="40" y1="6" x2="40" y2="14" />
+            <line x1="40" y1="66" x2="40" y2="74" />
+            <line x1="6" y1="40" x2="14" y2="40" />
+            <line x1="66" y1="40" x2="74" y2="40" />
+          </g>
+          <g class="reticle-inner-ring" fill="none" stroke="rgba(255, 179, 71, 0.82)" stroke-width="1.2" stroke-linecap="round">
+            <circle cx="40" cy="40" r="16" stroke-dasharray="6 7" />
+            <line x1="30" y1="40" x2="34" y2="40" />
+            <line x1="46" y1="40" x2="50" y2="40" />
+          </g>
+          <circle cx="40" cy="40" r="2" fill="#00f0ff" />
+        </svg>
       </div>
 
       <!-- Top Left: Hull & Upgrades -->
-      <div class="hud-cluster-tl">
-        <div class="hud-ship-header">
-          <img id="hud-ship-badge" src="./ui/icons/badge_astra.png" alt="" width="256" height="256" />
-          <div>
-            <div id="hud-ship-name" class="hud-ship-name">日曜四旋翼穿梭机</div>
-            <div class="hud-hp-meta">
-              <span>SHIELD INTEGRITY</span>
-              <strong id="hud-hp-text">100 / 100</strong>
+      <div id="hud-cluster-tl" class="hud-cluster-tl" data-spotlight>
+        <img
+          src="./ui/frames/hud_status_frame.webp"
+          class="ui-frame-bg"
+          alt=""
+          aria-hidden="true"
+          width="680"
+          height="240"
+        />
+        <span class="ui-spotlight" aria-hidden="true"></span>
+        <div class="hud-panel-inner">
+          <div class="hud-ship-header">
+            <div class="hud-badge-socket">
+              <img id="hud-ship-badge" src="./ui/icons/badge_astra.png" alt="" width="256" height="256" />
+            </div>
+            <div class="hud-ship-titles">
+              <div class="hud-ship-title-row">
+                <span id="hud-ship-name" class="hud-ship-name">日曜四旋翼穿梭机</span>
+                <span id="hud-ship-code" class="hud-ship-code">X-01</span>
+              </div>
+              <div class="hud-hp-meta">
+                <span>SHIELD</span>
+                <strong id="hud-hp-text">100 / 100</strong>
+              </div>
             </div>
           </div>
+          <div class="hud-bar-track">
+            <div id="hud-hp-ghost" class="hud-bar-ghost"></div>
+            <div id="hud-hp-fill" class="hud-bar-fill is-cyan"></div>
+          </div>
+          <div id="hud-combo-box" class="hud-combo-box">
+            <span class="combo-label">COMBO</span>
+            <strong id="hud-combo-val">x1.0</strong>
+            <div class="combo-timer-track"><div id="hud-combo-bar" class="combo-timer-bar"></div></div>
+          </div>
+          <div id="hud-chip-strip" class="hud-chip-strip"></div>
         </div>
-        <div class="hud-bar-track">
-          <div id="hud-hp-fill" class="hud-bar-fill is-cyan"></div>
-        </div>
-        <div id="hud-combo-box" class="hud-combo-box">
-          <span class="combo-label">COMBO</span>
-          <strong id="hud-combo-val">x1.0</strong>
-          <div class="combo-timer-track"><div id="hud-combo-bar" class="combo-timer-bar"></div></div>
-        </div>
-        <div id="hud-chip-strip" class="hud-chip-strip"></div>
       </div>
 
       <!-- Top Center: Act, Score, Quick Toggles & Boss Telemetry -->
       <div class="hud-cluster-tc">
         <div class="hud-top-telemetry">
-          <span id="hud-act-label" class="hud-act-pill">ACT 1 · WAVE 1/3</span>
-          <span class="hud-score-wrap">SCORE <strong id="hud-score-value">0</strong></span>
+          <span class="hud-sector-group">
+            <i class="hud-live-dot" aria-hidden="true"></i>
+            <span id="hud-act-label" class="hud-act-pill">ACT 1 · WAVE 1/3</span>
+          </span>
+          <span class="hud-telemetry-sep" aria-hidden="true"></span>
+          <span class="hud-score-wrap">
+            <span class="hud-score-label">SCORE</span>
+            <strong id="hud-score-value">0</strong>
+          </span>
+          <span class="hud-telemetry-sep" aria-hidden="true"></span>
           <div class="hud-quick-controls">
-            <button id="hud-autofire-btn" type="button" class="btn-hud-sm is-active">
-              开火: 自动 [F]
+            <button id="hud-autofire-btn" type="button" class="btn-hud-sm is-active" data-spotlight>
+              <span class="ui-spotlight" aria-hidden="true"></span>
+              <span class="btn-hud-label">开火: 自动 [F]</span>
             </button>
-            <button id="hud-mute-btn" type="button" class="btn-hud-sm">音效: 开 [M]</button>
-            <button id="hud-pause-btn" type="button" class="btn-hud-sm">暂停 [ESC]</button>
+            <button id="hud-mute-btn" type="button" class="btn-hud-sm" data-spotlight>
+              <span class="ui-spotlight" aria-hidden="true"></span>
+              <span class="btn-hud-label">音效: 开 [M]</span>
+            </button>
+            <button id="hud-pause-btn" type="button" class="btn-hud-sm" data-spotlight>
+              <span class="ui-spotlight" aria-hidden="true"></span>
+              <span class="btn-hud-label">暂停 [ESC]</span>
+            </button>
           </div>
         </div>
 
-        <div id="boss-hud" class="boss-hud" hidden>
+        <div id="boss-hud" class="boss-hud" data-spotlight hidden>
           <img
-            src="./ui/icons/badge_boss_alert.png"
-            class="boss-alert-badge"
+            src="./ui/frames/hud_boss_frame.webp"
+            class="ui-frame-bg"
             alt=""
-            width="256"
-            height="256"
+            aria-hidden="true"
+            width="960"
+            height="230"
           />
-          <div class="boss-hud-body">
-            <div class="boss-hud-title-row">
-              <strong id="boss-hud-name">铁幕四足重炮机甲</strong>
-              <span id="boss-hud-ai-badge" class="boss-ai-pill">Claude Opus 5.5 3D</span>
-              <span id="boss-hud-hp-text" class="boss-hp-num">950 / 950</span>
+          <span class="ui-spotlight is-crimson" aria-hidden="true"></span>
+          <div class="boss-hud-inner">
+            <img
+              src="./ui/icons/badge_boss_alert.png"
+              class="boss-alert-badge"
+              alt=""
+              width="256"
+              height="256"
+            />
+            <div class="boss-hud-body">
+              <div class="boss-hud-title-row">
+                <strong id="boss-hud-name">铁幕四足重炮机甲</strong>
+                <span id="boss-hud-threat-badge" class="boss-threat-pill">威胁 IV 级 · 重装要塞</span>
+                <span id="boss-hud-hp-text" class="boss-hp-num">950 / 950</span>
+              </div>
+              <div class="boss-hp-track">
+                <div id="boss-hud-hp-ghost" class="boss-hp-ghost"></div>
+                <div id="boss-hud-hp-fill" class="boss-hp-fill"></div>
+              </div>
+              <div id="boss-parts-row" class="boss-parts-row"></div>
+              <div id="boss-hud-intel" class="boss-intel-line"></div>
             </div>
-            <div class="boss-hp-track">
-              <div id="boss-hud-hp-fill" class="boss-hp-fill"></div>
-            </div>
-            <div id="boss-parts-row" class="boss-parts-row"></div>
-            <div id="boss-hud-prompt" class="boss-prompt-line"></div>
           </div>
         </div>
 
@@ -208,15 +470,25 @@
 
       <!-- Bottom Left: Flight Hints -->
       <div class="hud-controls-legend">
-        <span>移动: 鼠标 / WASD</span>
-        <span>翻滚弹反: 右键 / SHIFT</span>
-        <span>过载大招: SPACE / Q</span>
+        <span>机动 <kbd>鼠标</kbd><kbd>WASD</kbd></span>
+        <span>翻滚弹反 <kbd>右键</kbd><kbd>SHIFT</kbd></span>
+        <span>终极过载 <kbd>SPACE</kbd><kbd>Q</kbd></span>
       </div>
 
       <!-- Bottom Right: Tactical Skills -->
       <div class="hud-cluster-br">
-        <button id="hud-roll-card" type="button" class="skill-card is-ready">
-          <img src="./ui/icons/icon_barrel_roll.png" alt="" width="256" height="256" />
+        <button id="hud-roll-card" type="button" class="skill-card is-ready" data-spotlight>
+          <img
+            class="slot-frame-bg slot-frame-base"
+            src="./ui/frames/card_slot_cyan.webp"
+            alt=""
+            aria-hidden="true"
+            width="760"
+            height="190"
+          />
+          <span class="ui-spotlight" aria-hidden="true"></span>
+          <span class="ui-corners" aria-hidden="true"></span>
+          <img class="skill-card-icon" src="./ui/icons/icon_barrel_roll.png" alt="" width="256" height="256" />
           <div class="skill-meta">
             <div class="skill-top">
               <span>战术翻滚 [SHIFT]</span>
@@ -226,8 +498,26 @@
           </div>
         </button>
 
-        <button id="hud-ult-card" type="button" class="skill-card">
-          <img src="./ui/icons/icon_ultimate.png" alt="" width="256" height="256" />
+        <button id="hud-ult-card" type="button" class="skill-card" data-spotlight>
+          <img
+            class="slot-frame-bg slot-frame-base"
+            src="./ui/frames/card_slot_cyan.webp"
+            alt=""
+            aria-hidden="true"
+            width="760"
+            height="190"
+          />
+          <img
+            class="slot-frame-bg slot-frame-active"
+            src="./ui/frames/card_slot_amber.webp"
+            alt=""
+            aria-hidden="true"
+            width="760"
+            height="190"
+          />
+          <span class="ui-spotlight is-amber" aria-hidden="true"></span>
+          <span class="ui-corners" aria-hidden="true"></span>
+          <img class="skill-card-icon" src="./ui/icons/icon_ultimate.png" alt="" width="256" height="256" />
           <div class="skill-meta">
             <div class="skill-top">
               <span>终极过载 [SPACE]</span>
@@ -243,70 +533,108 @@
 
     <!-- 4. Native Modal Dialogs (modern-web-guidance strictly observed) -->
     <dialog id="upgrade-dialog" closedby="none" aria-labelledby="upgrade-dialog-title">
-      <div class="dialog-shell upgrade-shell">
-        <div class="dialog-header">
-          <img
-            src="./ui/icons/icon_overcharge.png"
-            class="dialog-header-icon"
-            alt=""
-            width="256"
-            height="256"
-          />
-          <div>
-            <div class="dialog-kicker">ROGUELIKE TACTICAL UPGRADE // 波次战术强化</div>
-            <h2 id="upgrade-dialog-title">战术芯片协议装配 · SELECT UPGRADE</h2>
+      <div class="dialog-shell upgrade-shell framed-shell" data-spotlight>
+        <img
+          src="./ui/frames/modal_frame_sci_fi.webp"
+          class="ui-frame-bg"
+          alt=""
+          aria-hidden="true"
+          width="960"
+          height="640"
+        />
+        <span class="ui-spotlight" aria-hidden="true"></span>
+        <div class="dialog-inner">
+          <div class="dialog-header">
+            <img
+              src="./ui/icons/icon_overcharge.png"
+              class="dialog-header-icon"
+              alt=""
+              width="256"
+              height="256"
+            />
+            <div>
+              <div class="dialog-kicker">战地火控协议 · 波次强化整备</div>
+              <h2 id="upgrade-dialog-title">战术芯片协议装配 · SELECT UPGRADE</h2>
+            </div>
           </div>
+          <p id="upgrade-status-hint" class="upgrade-hint" role="status" aria-live="polite">
+            请点击任意芯片卡，或按键盘 [1] [2] [3] 完成装配后继续迎战 Boss（无法跳过）
+          </p>
+          <div id="upgrade-cards-grid" class="upgrade-cards-grid"></div>
         </div>
-        <p id="upgrade-status-hint" class="upgrade-hint" role="status" aria-live="polite">
-          请点击任意芯片卡，或按键盘 [1] [2] [3] 完成装配后继续迎战 Boss（无法跳过）
-        </p>
-        <div id="upgrade-cards-grid" class="upgrade-cards-grid"></div>
       </div>
     </dialog>
 
     <dialog id="pause-dialog" closedby="closerequest" aria-labelledby="pause-dialog-title">
-      <div class="dialog-shell compact-shell">
-        <div class="dialog-kicker">SYSTEM STANDBY</div>
-        <h2 id="pause-dialog-title">战术系统挂起 · TACTICAL PAUSE</h2>
-        <div class="pause-controls-box">
-          <div><strong>移动 / 瞄准：</strong>鼠标指针跟随 或 WASD / 方向键</div>
-          <div><strong>主炮开火：</strong>默认自动连射，按 [F] 切换手动（左键点射）</div>
-          <div><strong>战术翻滚：</strong>鼠标右键 或 [Shift]（0.46s 无敌帧并反弹敌弹）</div>
-          <div><strong>过载大招：</strong>[Space] 或 [Q]（蓄满 100% 释放各战机专属终极技）</div>
-          <div><strong>Boss 破部位：</strong>优先瞄准 Boss 血条下方标注的肩炮 / 巨钳 / 主炮，击碎后永久削弱弹幕</div>
+      <div class="dialog-shell compact-shell framed-shell" data-spotlight>
+        <img
+          src="./ui/frames/modal_frame_sci_fi.webp"
+          class="ui-frame-bg"
+          alt=""
+          aria-hidden="true"
+          width="960"
+          height="640"
+        />
+        <span class="ui-spotlight" aria-hidden="true"></span>
+        <div class="dialog-inner">
+          <div class="dialog-kicker">星舰指令终端</div>
+          <h2 id="pause-dialog-title">战术系统挂起 · TACTICAL PAUSE</h2>
+          <div class="pause-controls-box">
+            <div><strong>移动 / 瞄准：</strong>鼠标指针跟随 或 WASD / 方向键</div>
+            <div><strong>主炮开火：</strong>默认自动连射，按 [F] 切换手动（左键点射）</div>
+            <div><strong>战术翻滚：</strong>鼠标右键 或 [Shift]（0.46s 无敌帧并反弹敌弹）</div>
+            <div><strong>过载大招：</strong>[Space] 或 [Q]（蓄满 100% 释放各战机专属终极技）</div>
+            <div><strong>Boss 破部位：</strong>优先瞄准 Boss 血条下方标注的肩炮 / 巨钳 / 主炮，击碎后永久削弱弹幕</div>
+          </div>
+          <form method="dialog" class="dialog-actions">
+            <button value="resume" class="btn-primary-launch" data-spotlight autofocus>
+              <span class="ui-spotlight" aria-hidden="true"></span>
+              <span>继续作战 (RESUME)</span>
+            </button>
+            <button value="restart" class="btn-ghost" data-spotlight>重新出击 (RESTART)</button>
+            <button value="hangar" class="btn-ghost" data-spotlight>返回 3D 机库 (HANGAR)</button>
+          </form>
         </div>
-        <form method="dialog" class="dialog-actions">
-          <button value="resume" class="btn-primary-launch" autofocus>继续作战 (RESUME)</button>
-          <button value="restart" class="btn-ghost">重新出击 (RESTART)</button>
-          <button value="hangar" class="btn-ghost">返回 3D 机库 (HANGAR)</button>
-        </form>
       </div>
     </dialog>
 
     <dialog id="result-dialog" closedby="closerequest" aria-labelledby="result-dialog-title">
-      <div class="dialog-shell compact-shell result-shell">
+      <div class="dialog-shell compact-shell result-shell framed-shell" data-spotlight>
         <img
-          id="result-medal-img"
-          src="./ui/icons/medal_victory.png"
-          class="result-medal"
+          src="./ui/frames/modal_frame_sci_fi.webp"
+          class="ui-frame-bg"
           alt=""
-          width="256"
-          height="256"
+          aria-hidden="true"
+          width="960"
+          height="640"
         />
-        <h2 id="result-dialog-title">战役凯旋 · CAMPAIGN CLEARED</h2>
-        <p id="result-subtitle" class="result-subtitle"></p>
-        <div id="result-stats-grid" class="result-stats-grid"></div>
-        <form method="dialog" class="dialog-actions">
-          <button id="result-endless-btn" value="endless" class="btn-amber-launch" hidden>
-            挑战无尽深空 (ENDLESS MODE)
-          </button>
-          <button id="result-retry-btn" value="retry" class="btn-primary-launch" autofocus>
-            再次出击 (SORTIE AGAIN)
-          </button>
-          <button id="result-hangar-btn" value="hangar" class="btn-ghost">
-            返回 3D 机库 (HANGAR)
-          </button>
-        </form>
+        <span class="ui-spotlight" aria-hidden="true"></span>
+        <div class="dialog-inner result-inner">
+          <img
+            id="result-medal-img"
+            src="./ui/icons/medal_victory.png"
+            class="result-medal"
+            alt=""
+            width="256"
+            height="256"
+          />
+          <h2 id="result-dialog-title">战役凯旋 · CAMPAIGN CLEARED</h2>
+          <p id="result-subtitle" class="result-subtitle"></p>
+          <div id="result-stats-grid" class="result-stats-grid"></div>
+          <form method="dialog" class="dialog-actions">
+            <button id="result-endless-btn" value="endless" class="btn-amber-launch" data-spotlight hidden>
+              <span class="ui-spotlight is-amber" aria-hidden="true"></span>
+              <span>挑战无尽深空 (ENDLESS MODE)</span>
+            </button>
+            <button id="result-retry-btn" value="retry" class="btn-primary-launch" data-spotlight autofocus>
+              <span class="ui-spotlight" aria-hidden="true"></span>
+              <span>再次出击 (SORTIE AGAIN)</span>
+            </button>
+            <button id="result-hangar-btn" value="hangar" class="btn-ghost" data-spotlight>
+              返回 3D 机库 (HANGAR)
+            </button>
+          </form>
+        </div>
       </div>
     </dialog>
 

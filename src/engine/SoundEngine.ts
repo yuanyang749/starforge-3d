@@ -1,91 +1,223 @@
 export type WeaponVoice = 'astra' | 'opus' | 'morph' | 'aero';
+export type BgmTrackId = 'boot' | 'hangar' | 'act1' | 'act2' | 'act3' | 'boss';
+
+export interface AudioTelemetrySnapshot {
+  unlocked: boolean;
+  muted: boolean;
+  activeBgm: BgmTrackId | null;
+  muffled: boolean;
+  loadedSfxCount: number;
+  totalSfxCount: number;
+  loadedBgmCount: number;
+  totalBgmCount: number;
+}
+
+const SFX_KEYS = [
+  'shot_astra_1',
+  'shot_astra_2',
+  'shot_opus_1',
+  'shot_opus_2',
+  'shot_morph_1',
+  'shot_morph_2',
+  'shot_aero_1',
+  'shot_aero_2',
+  'hit_hull_1',
+  'hit_hull_2',
+  'hit_crit',
+  'exp_small_1',
+  'exp_small_2',
+  'exp_medium',
+  'exp_boss',
+  'part_break',
+  'deflect_parry',
+  'roll_whoosh',
+  'launch_sortie',
+  'shield_hit',
+  'pickup_item',
+  'upgrade_lock',
+  'hud_deploy',
+  'ship_select',
+  'boss_warning',
+  'boss_crescendo',
+  'ult_astra_beam',
+  'ult_opus_nova',
+  'ult_morph_salvo',
+  'ult_aero_chrono',
+  'door_bay',
+  'ui_click',
+  'ui_hover',
+  'stinger_victory',
+  'stinger_defeat',
+] as const;
+
+type SfxKey = (typeof SFX_KEYS)[number];
+
+const BGM_TRACKS: readonly BgmTrackId[] = ['boot', 'hangar', 'act1', 'act2', 'act3', 'boss'];
+const AUDIO_ASSET_VER = 'v6.0';
+
+interface ActiveBgmPlayback {
+  track: BgmTrackId;
+  source: AudioBufferSourceNode;
+  gain: GainNode;
+}
 
 export class SoundEngine {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
+  private compressor: DynamicsCompressorNode | null = null;
   private sfxGain: GainNode | null = null;
   private bgmGain: GainNode | null = null;
+  private bgmDuckGain: GainNode | null = null;
+  private bgmFilter: BiquadFilterNode | null = null;
   private noiseBuffer: AudioBuffer | null = null;
+
   private muted = false;
-  private bgmTimer: number | null = null;
-  private bgmStep = 0;
+  private muffled = false;
+  private desiredBgmTrack: BgmTrackId | null = null;
+  private activeBgmPlayback: ActiveBgmPlayback | null = null;
+  private duckResetTimer: number | null = null;
+  private preloadStarted = false;
+  private preloadPromise: Promise<void> | null = null;
+
+  private readonly sfxBuffers = new Map<SfxKey, AudioBuffer>();
+  private readonly bgmBuffers = new Map<BgmTrackId, AudioBuffer>();
+  private readonly bgmInFlight = new Map<BgmTrackId, Promise<void>>();
+  private readonly variantFlip = new Map<string, number>();
+
   private lastShotAt = -1;
   private lastHitAt = -1;
+  private lastHoverAt = -1;
 
   constructor(initialMuted = false) {
     this.muted = initialMuted;
   }
 
-  private resetContext(): void {
+  private resetAudioGraph(): void {
+    this.stopCurrentBgmNode(0);
+    this.sfxGain?.disconnect();
+    this.bgmFilter?.disconnect();
+    this.bgmDuckGain?.disconnect();
+    this.bgmGain?.disconnect();
+    this.compressor?.disconnect();
+    this.masterGain?.disconnect();
     this.ctx = null;
     this.masterGain = null;
+    this.compressor = null;
     this.sfxGain = null;
     this.bgmGain = null;
+    this.bgmDuckGain = null;
+    this.bgmFilter = null;
     this.noiseBuffer = null;
   }
 
-  private canPlay(): boolean {
-    return Boolean(this.ctx && this.sfxGain && !this.muted && this.ctx.state === 'running');
+  private ensureContext(): AudioContext | null {
+    if (typeof window === 'undefined') return null;
+
+    if (this.ctx && this.ctx.state === 'closed') {
+      this.resetAudioGraph();
+    }
+
+    if (this.ctx) return this.ctx;
+
+    const AC =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+    if (!AC) return null;
+
+    try {
+      const ctx = new AC();
+      this.ctx = ctx;
+
+      const masterGain = ctx.createGain();
+      masterGain.gain.value = this.muted ? 0 : 0.85;
+      masterGain.connect(ctx.destination);
+      this.masterGain = masterGain;
+
+      const comp = ctx.createDynamicsCompressor();
+      comp.threshold.value = -14;
+      comp.knee.value = 12;
+      comp.ratio.value = 4;
+      comp.attack.value = 0.003;
+      comp.release.value = 0.18;
+      comp.connect(masterGain);
+      this.compressor = comp;
+
+      const sfxGain = ctx.createGain();
+      sfxGain.gain.value = 0.84;
+      sfxGain.connect(comp);
+      this.sfxGain = sfxGain;
+
+      const bgmGain = ctx.createGain();
+      bgmGain.gain.value = 0.58;
+      bgmGain.connect(comp);
+      this.bgmGain = bgmGain;
+
+      const bgmDuckGain = ctx.createGain();
+      bgmDuckGain.gain.value = 1.0;
+      bgmDuckGain.connect(bgmGain);
+      this.bgmDuckGain = bgmDuckGain;
+
+      const bgmFilter = ctx.createBiquadFilter();
+      bgmFilter.type = 'lowpass';
+      bgmFilter.frequency.value = this.muffled ? 1650 : 20000;
+      bgmFilter.Q.value = 0.7;
+      bgmFilter.connect(bgmDuckGain);
+      this.bgmFilter = bgmFilter;
+
+      this.noiseBuffer = this.buildNoiseBuffer(ctx);
+
+      ctx.addEventListener('statechange', () => {
+        if (this.ctx === ctx && ctx.state === 'running' && this.desiredBgmTrack) {
+          this.syncDesiredBgmPlayback(0.45);
+        }
+      });
+
+      return ctx;
+    } catch {
+      this.resetAudioGraph();
+      return null;
+    }
   }
 
   unlock(): void {
-    if (typeof window === 'undefined') return;
+    const ctx = this.ensureContext();
+    if (!ctx) return;
 
-    if (this.ctx && this.ctx.state === 'closed') {
-      this.resetContext();
-    }
-
-    if (!this.ctx) {
-      const AC =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
-      if (!AC) return;
-      try {
-        this.ctx = new AC();
-        this.masterGain = this.ctx.createGain();
-        this.masterGain.gain.value = this.muted ? 0 : 0.7;
-        this.masterGain.connect(this.ctx.destination);
-
-        this.sfxGain = this.ctx.createGain();
-        this.sfxGain.gain.value = 0.75;
-        this.sfxGain.connect(this.masterGain);
-
-        this.bgmGain = this.ctx.createGain();
-        this.bgmGain.gain.value = 0.22;
-        this.bgmGain.connect(this.masterGain);
-
-        this.noiseBuffer = this.buildNoiseBuffer(this.ctx);
-      } catch {
-        this.resetContext();
-        return;
-      }
-    }
-
-    const state = this.ctx.state as string;
+    const state = ctx.state as string;
     if (state === 'suspended' || state === 'interrupted') {
       try {
-        const res = this.ctx.resume();
+        const res = ctx.resume();
         if (res && typeof res.catch === 'function') {
           void res.catch(() => {
-            // Locked AudioContext without user gesture safely stays silent
+            // Restricted or headless audio devices may remain suspended silently.
           });
         }
       } catch {
-        // Safe no-op in restricted/headless audio environments
+        // Ignore resume restrictions when no hardware output is attached.
       }
     }
+
+    if (ctx.state === 'running' && this.desiredBgmTrack) {
+      this.syncDesiredBgmPlayback(0.45);
+    }
+  }
+
+  private canPlaySfx(): boolean {
+    return Boolean(this.ctx && this.sfxGain && !this.muted && this.ctx.state === 'running');
   }
 
   setMuted(muted: boolean): void {
     this.muted = muted;
     if (this.masterGain && this.ctx && this.ctx.state !== 'closed') {
       try {
-        this.masterGain.gain.setTargetAtTime(muted ? 0 : 0.7, this.ctx.currentTime, 0.03);
+        const now = this.ctx.currentTime;
+        this.masterGain.gain.cancelScheduledValues(now);
+        this.masterGain.gain.setTargetAtTime(muted ? 0 : 0.85, now, 0.03);
       } catch {
         try {
-          this.masterGain.gain.value = muted ? 0 : 0.7;
+          this.masterGain.gain.value = muted ? 0 : 0.85;
         } catch {
-          // Ignore locked/closed audio context errors
+          // Ignore locked/closed audio context errors.
         }
       }
     }
@@ -93,6 +225,98 @@ export class SoundEngine {
 
   isMuted(): boolean {
     return this.muted;
+  }
+
+  setMuffled(muffled: boolean): void {
+    this.muffled = muffled;
+    if (!this.bgmFilter || !this.ctx || this.ctx.state === 'closed') return;
+    try {
+      const now = this.ctx.currentTime;
+      this.bgmFilter.frequency.cancelScheduledValues(now);
+      this.bgmFilter.frequency.setTargetAtTime(muffled ? 1650 : 20000, now, 0.08);
+    } catch {
+      // Safe no-op
+    }
+  }
+
+  getTelemetry(): AudioTelemetrySnapshot {
+    return {
+      unlocked: Boolean(this.ctx && this.ctx.state === 'running'),
+      muted: this.muted,
+      activeBgm: this.desiredBgmTrack,
+      muffled: this.muffled,
+      loadedSfxCount: this.sfxBuffers.size,
+      totalSfxCount: SFX_KEYS.length,
+      loadedBgmCount: this.bgmBuffers.size,
+      totalBgmCount: BGM_TRACKS.length,
+    };
+  }
+
+  preloadAllAudio(onProgress?: (msg: string) => void): Promise<void> {
+    if (this.preloadPromise) return this.preloadPromise;
+    this.preloadStarted = true;
+
+    this.preloadPromise = (async () => {
+      const ctx = this.ensureContext();
+      if (!ctx) return;
+
+      // Prioritize bootloader score immediately so the opening screen pulse drives cleanly.
+      await this.loadBgmBuffer('boot');
+
+      const sfxJobs = SFX_KEYS.map((key) => this.loadSfxBuffer(ctx, key));
+      const coreBgmJobs = [this.loadBgmBuffer('hangar'), this.loadBgmBuffer('act1')];
+      await Promise.allSettled([...sfxJobs, ...coreBgmJobs]);
+
+      // Stream remaining campaign/boss BGM tracks cleanly in the background.
+      for (const track of ['act2', 'act3', 'boss'] as const) {
+        void this.loadBgmBuffer(track);
+      }
+
+      onProgress?.('[AUDIO] 舰载全向声学雷达与战区战术交响阵列就绪');
+    })();
+
+    return this.preloadPromise;
+  }
+
+  private async loadSfxBuffer(ctx: AudioContext, key: SfxKey): Promise<void> {
+    if (this.sfxBuffers.has(key)) return;
+    try {
+      const res = await fetch(`./audio/sfx/${key}.mp3?v=${AUDIO_ASSET_VER}`);
+      if (!res.ok) return;
+      const arr = await res.arrayBuffer();
+      const decoded = await ctx.decodeAudioData(arr);
+      this.sfxBuffers.set(key, decoded);
+    } catch {
+      // Keep fallback synthesis active if fetch or decode fails.
+    }
+  }
+
+  private async loadBgmBuffer(track: BgmTrackId): Promise<void> {
+    if (this.bgmBuffers.has(track)) return;
+    const existing = this.bgmInFlight.get(track);
+    if (existing) return existing;
+
+    const job = (async () => {
+      const ctx = this.ensureContext();
+      if (!ctx) return;
+      try {
+        const res = await fetch(`./audio/bgm/bgm_${track}.mp3?v=${AUDIO_ASSET_VER}`);
+        if (!res.ok) return;
+        const arr = await res.arrayBuffer();
+        const decoded = await ctx.decodeAudioData(arr);
+        this.bgmBuffers.set(track, decoded);
+        if (this.desiredBgmTrack === track && ctx.state === 'running') {
+          this.syncDesiredBgmPlayback(0.55);
+        }
+      } catch {
+        // Ignore network/decode error safely.
+      } finally {
+        this.bgmInFlight.delete(track);
+      }
+    })();
+
+    this.bgmInFlight.set(track, job);
+    return job;
   }
 
   private buildNoiseBuffer(ctx: AudioContext): AudioBuffer {
@@ -105,64 +329,195 @@ export class SoundEngine {
     return buffer;
   }
 
-  startBgm(): void {
-    this.unlock();
-    if (!this.ctx || !this.bgmGain || this.bgmTimer !== null || this.ctx.state === 'closed') return;
-    const bassNotes = [55, 55, 65.41, 73.42, 55, 55, 82.41, 73.42];
-    const arpNotes = [220, 277.18, 329.63, 440, 246.94, 329.63, 392, 493.88];
-    this.bgmTimer = window.setInterval(() => {
-      if (!this.ctx || !this.bgmGain || this.muted || this.ctx.state !== 'running') return;
-      try {
-        const now = this.ctx.currentTime;
-        const step = this.bgmStep++ % bassNotes.length;
-
-        // Sub bass pulse
-        const osc = this.ctx.createOscillator();
-        const filter = this.ctx.createBiquadFilter();
-        const gain = this.ctx.createGain();
-        osc.type = 'sawtooth';
-        osc.frequency.setValueAtTime(bassNotes[step], now);
-        filter.type = 'lowpass';
-        filter.frequency.setValueAtTime(240, now);
-        filter.frequency.exponentialRampToValueAtTime(110, now + 0.16);
-        gain.gain.setValueAtTime(0.001, now);
-        gain.gain.linearRampToValueAtTime(0.16, now + 0.015);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + 0.18);
-        osc.connect(filter);
-        filter.connect(gain);
-        gain.connect(this.bgmGain);
-        osc.start(now);
-        osc.stop(now + 0.2);
-
-        // Subtle sci-fi arp on even steps
-        if (step % 2 === 0) {
-          const arp = this.ctx.createOscillator();
-          const ag = this.ctx.createGain();
-          arp.type = 'triangle';
-          arp.frequency.setValueAtTime(arpNotes[(this.bgmStep >> 1) % arpNotes.length], now);
-          ag.gain.setValueAtTime(0.001, now);
-          ag.gain.linearRampToValueAtTime(0.055, now + 0.01);
-          ag.gain.exponentialRampToValueAtTime(0.001, now + 0.22);
-          arp.connect(ag);
-          ag.connect(this.bgmGain);
-          arp.start(now);
-          arp.stop(now + 0.24);
-        }
-      } catch {
-        // Safe no-op if audio graph fails
-      }
-    }, 185);
+  setBgmTrack(track: BgmTrackId | null, fadeSec = 0.75): void {
+    this.desiredBgmTrack = track;
+    if (!this.preloadStarted) {
+      void this.preloadAllAudio();
+    }
+    if (track && !this.bgmBuffers.has(track)) {
+      void this.loadBgmBuffer(track);
+    }
+    this.syncDesiredBgmPlayback(fadeSec);
   }
 
-  stopBgm(): void {
-    if (this.bgmTimer !== null) {
-      window.clearInterval(this.bgmTimer);
-      this.bgmTimer = null;
+  startBgm(): void {
+    this.unlock();
+    this.setBgmTrack('act1', 0.65);
+  }
+
+  stopBgm(fadeSec = 0.45): void {
+    this.setBgmTrack(null, fadeSec);
+  }
+
+  private stopCurrentBgmNode(fadeSec: number): void {
+    const prev = this.activeBgmPlayback;
+    if (!prev) return;
+    this.activeBgmPlayback = null;
+
+    if (!this.ctx || this.ctx.state === 'closed' || fadeSec <= 0.02) {
+      try {
+        prev.source.stop();
+      } catch {
+        // Ignore already stopped source
+      }
+      prev.source.disconnect();
+      prev.gain.disconnect();
+      return;
+    }
+
+    try {
+      const now = this.ctx.currentTime;
+      prev.gain.gain.cancelScheduledValues(now);
+      prev.gain.gain.setValueAtTime(Math.max(0.0001, prev.gain.gain.value), now);
+      prev.gain.gain.exponentialRampToValueAtTime(0.0001, now + fadeSec);
+      prev.source.stop(now + fadeSec + 0.04);
+      prev.source.onended = () => {
+        prev.source.disconnect();
+        prev.gain.disconnect();
+      };
+    } catch {
+      try {
+        prev.source.stop();
+      } catch {
+        // Safe cleanup
+      }
+      prev.source.disconnect();
+      prev.gain.disconnect();
+    }
+  }
+
+  private syncDesiredBgmPlayback(fadeSec: number): void {
+    const target = this.desiredBgmTrack;
+    if (!target) {
+      this.stopCurrentBgmNode(fadeSec);
+      return;
+    }
+
+    if (this.activeBgmPlayback?.track === target) {
+      return;
+    }
+
+    if (!this.ctx || !this.bgmFilter || this.ctx.state !== 'running') {
+      return;
+    }
+
+    const buffer = this.bgmBuffers.get(target);
+    if (!buffer) {
+      return;
+    }
+
+    this.stopCurrentBgmNode(Math.min(fadeSec, 0.85));
+
+    try {
+      const now = this.ctx.currentTime;
+      const source = this.ctx.createBufferSource();
+      source.buffer = buffer;
+      source.loop = true;
+
+      const trackGain = this.ctx.createGain();
+      trackGain.gain.setValueAtTime(0.0001, now);
+      trackGain.gain.exponentialRampToValueAtTime(1.0, now + Math.max(0.06, fadeSec));
+
+      source.connect(trackGain);
+      trackGain.connect(this.bgmFilter);
+      source.start(now);
+
+      this.activeBgmPlayback = {
+        track: target,
+        source,
+        gain: trackGain,
+      };
+    } catch {
+      // Safe no-op
+    }
+  }
+
+  private duckBgm(amount = 0.35, holdSec = 1.2): void {
+    if (!this.bgmDuckGain || !this.ctx || this.ctx.state !== 'running') return;
+    if (this.duckResetTimer !== null) {
+      window.clearTimeout(this.duckResetTimer);
+      this.duckResetTimer = null;
+    }
+
+    try {
+      const now = this.ctx.currentTime;
+      const minGain = Math.max(0.15, Math.min(0.85, amount));
+      this.bgmDuckGain.gain.cancelScheduledValues(now);
+      this.bgmDuckGain.gain.setTargetAtTime(minGain, now, 0.04);
+      this.duckResetTimer = window.setTimeout(() => {
+        this.duckResetTimer = null;
+        if (!this.bgmDuckGain || !this.ctx || this.ctx.state !== 'running') return;
+        const t = this.ctx.currentTime;
+        this.bgmDuckGain.gain.cancelScheduledValues(t);
+        this.bgmDuckGain.gain.setTargetAtTime(1.0, t, 0.25);
+      }, Math.round(holdSec * 1000));
+    } catch {
+      // Safe no-op
+    }
+  }
+
+  private pickAlt<T extends SfxKey>(group: string, keys: readonly [T, T]): T {
+    const next = ((this.variantFlip.get(group) ?? 0) + 1) & 1;
+    this.variantFlip.set(group, next);
+    return keys[next];
+  }
+
+  private playBufferSfx(
+    key: SfxKey,
+    opts?: {
+      gain?: number;
+      rate?: number;
+      pan?: number;
+      bypassMuteCheck?: boolean;
+    }
+  ): boolean {
+    if (!this.ctx || !this.sfxGain) return false;
+    if (!opts?.bypassMuteCheck && (this.muted || this.ctx.state !== 'running')) return false;
+    const buffer = this.sfxBuffers.get(key);
+    if (!buffer) return false;
+
+    try {
+      const src = this.ctx.createBufferSource();
+      src.buffer = buffer;
+      src.playbackRate.value = Math.max(0.4, Math.min(2.2, opts?.rate ?? 1.0));
+
+      const g = this.ctx.createGain();
+      g.gain.value = Math.max(0.01, Math.min(1.8, opts?.gain ?? 1.0));
+      src.connect(g);
+
+      const panVal = opts?.pan ?? 0;
+      if (Math.abs(panVal) > 0.02 && typeof this.ctx.createStereoPanner === 'function') {
+        const panner = this.ctx.createStereoPanner();
+        panner.pan.value = Math.max(-0.9, Math.min(0.9, panVal));
+        g.connect(panner);
+        panner.connect(this.sfxGain);
+        src.onended = () => {
+          src.disconnect();
+          g.disconnect();
+          panner.disconnect();
+        };
+      } else {
+        g.connect(this.sfxGain);
+        src.onended = () => {
+          src.disconnect();
+          g.disconnect();
+        };
+      }
+
+      src.start(this.ctx.currentTime);
+      return true;
+    } catch {
+      return false;
     }
   }
 
   dispose(): void {
-    this.stopBgm();
+    if (this.duckResetTimer !== null) {
+      window.clearTimeout(this.duckResetTimer);
+      this.duckResetTimer = null;
+    }
+    this.desiredBgmTrack = null;
+    this.stopCurrentBgmNode(0);
     if (this.ctx && this.ctx.state !== 'closed') {
       try {
         const res = this.ctx.close();
@@ -173,15 +528,207 @@ export class SoundEngine {
         // Ignore close failures
       }
     }
-    this.resetContext();
+    this.sfxBuffers.clear();
+    this.bgmBuffers.clear();
+    this.bgmInFlight.clear();
+    this.resetAudioGraph();
   }
 
-  playShot(voice: WeaponVoice): void {
-    if (!this.canPlay() || !this.ctx || !this.sfxGain) return;
+  playShot(voice: WeaponVoice, pan = 0): void {
+    if (!this.canPlaySfx() || !this.ctx) return;
     const now = this.ctx.currentTime;
-    if (this.lastShotAt >= 0 && now - this.lastShotAt < 0.045) return;
+    if (this.lastShotAt >= 0 && now - this.lastShotAt < 0.042) return;
     this.lastShotAt = now;
 
+    const rateJitter = 0.96 + Math.random() * 0.09;
+    let key: SfxKey;
+    let vol = 0.28;
+    if (voice === 'astra') {
+      key = this.pickAlt('shot_astra', ['shot_astra_1', 'shot_astra_2']);
+      vol = 0.28;
+    } else if (voice === 'opus') {
+      key = this.pickAlt('shot_opus', ['shot_opus_1', 'shot_opus_2']);
+      vol = 0.32;
+    } else if (voice === 'morph') {
+      key = this.pickAlt('shot_morph', ['shot_morph_1', 'shot_morph_2']);
+      vol = 0.29;
+    } else {
+      key = this.pickAlt('shot_aero', ['shot_aero_1', 'shot_aero_2']);
+      vol = 0.28;
+    }
+
+    if (this.playBufferSfx(key, { gain: vol, rate: rateJitter, pan })) return;
+
+    // Fallback synthesis if audio buffers are still warming up
+    this.synthShot(voice);
+  }
+
+  playHit(crit = false, pan = 0, combo = 1): void {
+    if (!this.canPlaySfx() || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    if (!crit && this.lastHitAt >= 0 && now - this.lastHitAt < 0.032) return;
+    this.lastHitAt = now;
+
+    const comboNorm = Math.max(0, Math.min(1, (combo - 1) / 7));
+    const comboRate = 1 + comboNorm * 0.12;
+    const key: SfxKey = crit ? 'hit_crit' : this.pickAlt('hit_hull', ['hit_hull_1', 'hit_hull_2']);
+    if (
+      this.playBufferSfx(key, {
+        gain: crit ? 0.52 : 0.26,
+        rate: comboRate * (0.97 + Math.random() * 0.06),
+        pan,
+      })
+    ) {
+      return;
+    }
+
+    this.synthHit(crit);
+  }
+
+  playExplosion(scale: 'small' | 'medium' | 'boss' = 'small', pan = 0): void {
+    if (!this.canPlaySfx()) return;
+    if (scale === 'boss') {
+      this.duckBgm(0.52, 1.4);
+      if (this.playBufferSfx('exp_boss', { gain: 1.05, rate: 1.0, pan })) return;
+    } else if (scale === 'medium') {
+      if (this.playBufferSfx('exp_medium', { gain: 0.78, rate: 0.96 + Math.random() * 0.08, pan })) {
+        return;
+      }
+    } else {
+      const key = this.pickAlt('exp_small', ['exp_small_1', 'exp_small_2']);
+      if (this.playBufferSfx(key, { gain: 0.58, rate: 0.94 + Math.random() * 0.12, pan })) {
+        return;
+      }
+    }
+
+    this.synthExplosion(scale);
+  }
+
+  playPartBreak(pan = 0): void {
+    if (!this.canPlaySfx()) return;
+    this.duckBgm(0.76, 0.45);
+    if (this.playBufferSfx('part_break', { gain: 0.92, rate: 1.0, pan })) return;
+    this.synthExplosion('medium');
+    this.playToneSweep(1100, 190, 0.28, 'sawtooth', 0.18);
+  }
+
+  playRoll(deflected = false, pan = 0): void {
+    if (!this.canPlaySfx()) return;
+    if (deflected) {
+      if (this.playBufferSfx('deflect_parry', { gain: 0.78, rate: 0.96 + Math.random() * 0.08, pan })) {
+        return;
+      }
+      this.playToneSweep(880, 1760, 0.12, 'triangle', 0.14);
+      return;
+    }
+
+    if (this.playBufferSfx('roll_whoosh', { gain: 0.74, rate: 0.97 + Math.random() * 0.06, pan })) {
+      return;
+    }
+    this.synthRoll();
+  }
+
+  playShieldHit(): void {
+    if (!this.canPlaySfx()) return;
+    if (this.playBufferSfx('shield_hit', { gain: 0.88, rate: 1.0 })) return;
+    this.playToneSweep(280, 75, 0.22, 'sawtooth', 0.22);
+  }
+
+  playPickup(pan = 0): void {
+    if (!this.canPlaySfx()) return;
+    if (this.playBufferSfx('pickup_item', { gain: 0.62, rate: 0.96 + Math.random() * 0.1, pan })) {
+      return;
+    }
+    this.playToneSweep(523.25, 1046.5, 0.16, 'triangle', 0.13);
+  }
+
+  playUpgrade(): void {
+    if (!this.canPlaySfx()) return;
+    if (this.playBufferSfx('upgrade_lock', { gain: 0.84, rate: 1.0 })) return;
+    this.synthUpgrade();
+  }
+
+  playBossWarning(): void {
+    if (!this.canPlaySfx()) return;
+    this.duckBgm(0.38, 3.2);
+    const klaxon = this.playBufferSfx('boss_warning', { gain: 0.92, rate: 1.0 });
+    const crescendo = this.playBufferSfx('boss_crescendo', { gain: 0.56, rate: 1.0 });
+    if (!klaxon && !crescendo) {
+      this.synthBossWarning();
+    }
+  }
+
+  playUltimate(voice: WeaponVoice = 'astra'): void {
+    if (!this.canPlaySfx()) return;
+    this.duckBgm(0.65, 0.9);
+    const map: Record<WeaponVoice, SfxKey> = {
+      astra: 'ult_astra_beam',
+      opus: 'ult_opus_nova',
+      morph: 'ult_morph_salvo',
+      aero: 'ult_aero_chrono',
+    };
+    if (this.playBufferSfx(map[voice], { gain: 0.96, rate: 1.0 })) return;
+    this.playToneSweep(160, 960, 0.45, 'sawtooth', 0.24);
+    this.synthExplosion('medium');
+  }
+
+  playBootDoorOpen(): void {
+    if (!this.canPlaySfx()) return;
+    if (this.playBufferSfx('door_bay', { gain: 0.86, rate: 1.0 })) return;
+    this.playToneSweep(140, 65, 0.4, 'sawtooth', 0.14);
+  }
+
+  playShipSelect(): void {
+    if (!this.canPlaySfx()) return;
+    if (this.playBufferSfx('ship_select', { gain: 0.78, rate: 1.0 })) return;
+    this.playUiClick();
+  }
+
+  playHudDeploy(): void {
+    if (!this.canPlaySfx()) return;
+    if (this.playBufferSfx('hud_deploy', { gain: 0.68, rate: 1.0 })) return;
+    this.playToneSweep(640, 1280, 0.09, 'sine', 0.06);
+  }
+
+  playLaunchSortie(): void {
+    if (!this.canPlaySfx()) return;
+    if (this.playBufferSfx('launch_sortie', { gain: 0.88, rate: 1.0 })) return;
+    if (this.playBufferSfx('roll_whoosh', { gain: 0.82, rate: 0.82 })) return;
+    this.playToneSweep(220, 880, 0.28, 'sawtooth', 0.16);
+  }
+
+  playResultStinger(victory: boolean): void {
+    this.stopBgm(0.35);
+    if (!this.canPlaySfx()) return;
+    const key: SfxKey = victory ? 'stinger_victory' : 'stinger_defeat';
+    if (this.playBufferSfx(key, { gain: 0.92, rate: 1.0 })) return;
+    if (victory) {
+      this.synthUpgrade();
+    } else {
+      this.playToneSweep(320, 72, 0.65, 'sawtooth', 0.2);
+    }
+  }
+
+  playUiClick(): void {
+    if (!this.canPlaySfx()) return;
+    if (this.playBufferSfx('ui_click', { gain: 0.5, rate: 0.98 + Math.random() * 0.04 })) return;
+    this.playToneSweep(780, 1120, 0.05, 'sine', 0.08);
+  }
+
+  playUiHover(): void {
+    if (!this.canPlaySfx() || !this.ctx) return;
+    const now = this.ctx.currentTime;
+    if (this.lastHoverAt >= 0 && now - this.lastHoverAt < 0.065) return;
+    this.lastHoverAt = now;
+    if (this.playBufferSfx('ui_hover', { gain: 0.28, rate: 0.98 + Math.random() * 0.05 })) return;
+    this.playToneSweep(1900, 2500, 0.012, 'sine', 0.025);
+  }
+
+  // ==================== Fallback Oscillator Synthesis ====================
+
+  private synthShot(voice: WeaponVoice): void {
+    if (!this.ctx || !this.sfxGain) return;
+    const now = this.ctx.currentTime;
     try {
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
@@ -202,7 +749,6 @@ export class SoundEngine {
         osc.frequency.setValueAtTime(760, now);
         osc.frequency.exponentialRampToValueAtTime(290, now + 0.075);
       }
-
       gain.gain.setValueAtTime(0.09, now);
       gain.gain.exponentialRampToValueAtTime(0.001, now + 0.095);
       osc.connect(gain);
@@ -214,12 +760,9 @@ export class SoundEngine {
     }
   }
 
-  playHit(crit = false): void {
-    if (!this.canPlay() || !this.ctx || !this.sfxGain) return;
+  private synthHit(crit: boolean): void {
+    if (!this.ctx || !this.sfxGain) return;
     const now = this.ctx.currentTime;
-    if (!crit && this.lastHitAt >= 0 && now - this.lastHitAt < 0.035) return;
-    this.lastHitAt = now;
-
     try {
       const osc = this.ctx.createOscillator();
       const gain = this.ctx.createGain();
@@ -237,11 +780,10 @@ export class SoundEngine {
     }
   }
 
-  playExplosion(scale: 'small' | 'medium' | 'boss' = 'small'): void {
-    if (!this.canPlay() || !this.ctx || !this.sfxGain || !this.noiseBuffer) return;
+  private synthExplosion(scale: 'small' | 'medium' | 'boss'): void {
+    if (!this.ctx || !this.sfxGain || !this.noiseBuffer) return;
     const now = this.ctx.currentTime;
     const dur = scale === 'boss' ? 1.15 : scale === 'medium' ? 0.45 : 0.24;
-
     try {
       const noise = this.ctx.createBufferSource();
       noise.buffer = this.noiseBuffer;
@@ -275,8 +817,8 @@ export class SoundEngine {
     }
   }
 
-  playRoll(deflected = false): void {
-    if (!this.canPlay() || !this.ctx || !this.sfxGain || !this.noiseBuffer) return;
+  private synthRoll(): void {
+    if (!this.ctx || !this.sfxGain || !this.noiseBuffer) return;
     const now = this.ctx.currentTime;
     try {
       const noise = this.ctx.createBufferSource();
@@ -295,30 +837,13 @@ export class SoundEngine {
       gain.connect(this.sfxGain);
       noise.start(now);
       noise.stop(now + 0.4);
-
-      if (deflected) {
-        this.playToneSweep(880, 1760, 0.12, 'triangle', 0.14);
-      }
     } catch {
       // Safe no-op
     }
   }
 
-  playShieldHit(): void {
-    this.playToneSweep(280, 75, 0.22, 'sawtooth', 0.22);
-  }
-
-  playPickup(): void {
-    this.playToneSweep(523.25, 1046.5, 0.16, 'triangle', 0.13);
-  }
-
-  playPartBreak(): void {
-    this.playExplosion('medium');
-    this.playToneSweep(1100, 190, 0.28, 'sawtooth', 0.18);
-  }
-
-  playUpgrade(): void {
-    if (!this.canPlay() || !this.ctx || !this.sfxGain) return;
+  private synthUpgrade(): void {
+    if (!this.ctx || !this.sfxGain) return;
     const notes = [440, 554.37, 659.25, 880];
     const now = this.ctx.currentTime;
     try {
@@ -340,8 +865,8 @@ export class SoundEngine {
     }
   }
 
-  playBossWarning(): void {
-    if (!this.canPlay() || !this.ctx || !this.sfxGain) return;
+  private synthBossWarning(): void {
+    if (!this.ctx || !this.sfxGain) return;
     const now = this.ctx.currentTime;
     try {
       for (let i = 0; i < 3; i++) {
@@ -364,15 +889,6 @@ export class SoundEngine {
     }
   }
 
-  playUltimate(): void {
-    this.playToneSweep(160, 960, 0.45, 'sawtooth', 0.24);
-    this.playExplosion('medium');
-  }
-
-  playUiClick(): void {
-    this.playToneSweep(780, 1120, 0.05, 'sine', 0.08);
-  }
-
   private playToneSweep(
     fromHz: number,
     toHz: number,
@@ -380,7 +896,7 @@ export class SoundEngine {
     type: OscillatorType,
     vol: number
   ): void {
-    if (!this.canPlay() || !this.ctx || !this.sfxGain) return;
+    if (!this.canPlaySfx() || !this.ctx || !this.sfxGain) return;
     const safeDur = Math.max(0.01, Number.isFinite(dur) ? dur : 0.05);
     const safeFrom = Math.max(20, Number.isFinite(fromHz) ? fromHz : 440);
     const safeTo = Math.max(20, Number.isFinite(toHz) ? toHz : 440);

@@ -8,6 +8,7 @@
     "build": "tsc && vite build",
     "preview": "vite preview --port 5179",
     "fetch-models": "node scripts/fetch-and-optimize-models.mjs",
+    "fetch-audio": "node scripts/fetch-and-generate-audio.mjs",
     "test:e2e": "node tests/headless-e2e.mjs"
   },
   "dependencies": {
