@@ -64,8 +64,11 @@ const DYNAMIC_NODE_KEYWORDS = [
   'canopy',
   'rearhatch',
   'nacelle_',
-  'elevator_',
-  'aileron_',
+  'elevator',
+  'aileron',
+  'rudder',
+  'gear-',
+  'bay-',
   'door',
 ];
 
@@ -347,6 +350,88 @@ function tintEnemyFoldwing(root: THREE.Object3D): void {
   });
 }
 
+function enhanceShipMorph(root: THREE.Object3D): void {
+  const seen = new Set<THREE.Material>();
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.material) return;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const mat of mats) {
+      if (seen.has(mat)) continue;
+      seen.add(mat);
+      if (!(mat instanceof THREE.MeshStandardMaterial)) continue;
+
+      switch (mat.name) {
+        case 'steel':
+          // Main swept wings, airframe & control surfaces: stealth obsidian gunmetal
+          mat.color.setHex(0x283346);
+          mat.metalness = 0.42;
+          mat.roughness = 0.36;
+          mat.envMapIntensity = 0.92;
+          mat.emissive.setHex(0x07101e);
+          mat.emissiveIntensity = 0.2;
+          break;
+        case 'shell':
+          // Twin intake fairings & dorsal spine: Valkyrie Crimson tactical livery
+          mat.color.setHex(0xd62839);
+          mat.metalness = 0.32;
+          mat.roughness = 0.3;
+          mat.envMapIntensity = 1.0;
+          mat.emissive.setHex(0x4c0914);
+          mat.emissiveIntensity = 0.3;
+          break;
+        case 'trim':
+          // Canopy arch & nose stripe: vivid scarlet crimson accent
+          mat.color.setHex(0xff3b54);
+          mat.metalness = 0.34;
+          mat.roughness = 0.26;
+          mat.envMapIntensity = 1.05;
+          mat.emissive.setHex(0x700c1e);
+          mat.emissiveIntensity = 0.48;
+          break;
+        case 'alloy':
+          // Wingtip pods, intake lips & landing gear struts: satin brushed titanium
+          mat.color.setHex(0x9fb2c8);
+          mat.metalness = 0.76;
+          mat.roughness = 0.24;
+          mat.envMapIntensity = 1.18;
+          break;
+        case 'dark':
+          // Intake interiors, tires & exhaust ducts
+          mat.color.setHex(0x161d2b);
+          mat.metalness = 0.3;
+          mat.roughness = 0.52;
+          break;
+        case 'glass':
+          // Tandem bubble canopy: deep smoked cyan fighter glass
+          mat.color.setHex(0x0f314d);
+          mat.metalness = 0.32;
+          mat.roughness = 0.08;
+          mat.opacity = 0.84;
+          mat.transparent = true;
+          mat.envMapIntensity = 1.1;
+          mat.emissive.setHex(0x0b3959);
+          mat.emissiveIntensity = 0.52;
+          break;
+        case 'instr':
+          // Glowing holographic cyan cockpit instrumentation
+          mat.color.setHex(0x7ef7ff);
+          mat.emissive.setHex(0x00f0ff);
+          mat.emissiveIntensity = 2.4;
+          break;
+        case 'navRed':
+        case 'navGreen':
+        case 'navWhite':
+          mat.emissiveIntensity = Math.max(mat.emissiveIntensity, 2.5);
+          break;
+        default:
+          break;
+      }
+      mat.needsUpdate = true;
+    }
+  });
+}
+
 function enhancePropCityTile(root: THREE.Object3D): void {
   const seen = new Set<THREE.Material>();
   const skyLiftColor = new THREE.Color(0x90b8d8);
@@ -552,6 +637,8 @@ export class AssetLoader {
       }
       if (key === 'enemy_foldwing') {
         tintEnemyFoldwing(rawScene);
+      } else if (key === 'ship_morph') {
+        enhanceShipMorph(rawScene);
       } else if (key === 'prop_city_tile') {
         enhancePropCityTile(rawScene);
       }

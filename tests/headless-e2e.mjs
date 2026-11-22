@@ -518,7 +518,12 @@ async function runTests() {
         shipList: box('#hangar-ship-list'),
         blueprintPanel: box('#hangar-blueprint-panel'),
         loreBox: box('#hangar-lore'),
+        controlTip: box('#hangar-control-tip'),
+        controlTipText: document.getElementById('hangar-control-tip')?.innerText?.trim() || '',
         launchBtn: box('#hangar-launch-btn'),
+        rightScrollOverflowY:
+          (document.querySelector('.hangar-right-col .panel-scroll-inner')?.scrollHeight ?? 0) -
+          (document.querySelector('.hangar-right-col .panel-scroll-inner')?.clientHeight ?? 0),
       };
     });
     check(
@@ -529,7 +534,17 @@ async function runTests() {
     await assertRectFitsViewport(hangarLayout1440.rightCol, 1440, 900, 'Hangar right col at 1440x900');
     await assertRectFitsViewport(hangarLayout1440.blueprintPanel, 1440, 900, 'Hangar blueprint at 1440x900');
     await assertRectFitsViewport(hangarLayout1440.loreBox, 1440, 900, 'Hangar lore at 1440x900');
+    await assertRectFitsViewport(hangarLayout1440.controlTip, 1440, 900, 'Hangar mouse control tip at 1440x900');
     await assertRectFitsViewport(hangarLayout1440.launchBtn, 1440, 900, 'Hangar launch button at 1440x900');
+    check(
+      hangarLayout1440.controlTipText.includes('鼠标') &&
+        hangarLayout1440.controlTip.bottom <= hangarLayout1440.launchBtn.top + 1,
+      `Expected #hangar-control-tip directly above #hangar-launch-btn, got tip=${JSON.stringify(hangarLayout1440.controlTip)} btn=${JSON.stringify(hangarLayout1440.launchBtn)} text="${hangarLayout1440.controlTipText}"`
+    );
+    check(
+      hangarLayout1440.rightScrollOverflowY <= 2,
+      `Expected zero vertical scroll overflow in right Hangar col at 1440x900, got ${hangarLayout1440.rightScrollOverflowY}px`
+    );
     check(
       !rectsOverlap(hangarLayout1440.leftCol, hangarLayout1440.rightCol),
       'Hangar left and right columns overlap at 1440x900'
@@ -586,6 +601,12 @@ async function runTests() {
     check(gfxPanelClosedInfo.expanded === 'false' && gfxPanelClosedInfo.hidden === true, 'Expected Escape to dismiss #gfx-popover-panel cleanly');
     passedChecks += 6;
 
+    // Capture Opus vs Morph in 3D Hangar for visual model comparison
+    await page.locator('#hangar-ship-list .hangar-ship-card').nth(1).click();
+    await sleep(240);
+    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'v4_02b_hangar_opus.png') });
+    console.log('[e2e] Saved v4_02b_hangar_opus.png');
+
     // Verify pointer-tracking spotlight coordinates & hover state over Morph card
     const morphCardBox = await page.locator('#hangar-ship-list .hangar-ship-card').nth(2).boundingBox();
     check(Boolean(morphCardBox), 'Expected bounding box for Morph ship card');
@@ -615,19 +636,52 @@ async function runTests() {
       morphCardBox.y + morphCardBox.height * 0.5,
       { steps: 3 }
     );
-    await sleep(260);
+    await sleep(320);
     await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'v4_03_hangar_hover_morph.png') });
     console.log('[e2e] Saved v4_03_hangar_hover_morph.png');
 
     // ==================== STAGE 3: Active Combat, Passives, Roll & Ultimates ====================
     console.log('[e2e] Stage 3: Active Combat, Ship Passives, Roll & Ultimates...');
 
-    // 3a. Morph sortie (+1 base pierce + 18x homing missile trail & enemy plasma orbs)
+    // 3a. Morph sortie (verify 3 -> 2 -> 1 launch countdown transition before enemies engage)
     await page.locator('#hangar-ship-list .hangar-ship-card').nth(2).click();
     await page.click('#hangar-launch-btn');
     await page.waitForFunction(() => !document.getElementById('hud-ui')?.hidden, null, {
       timeout: 5000,
     });
+    await sleep(180);
+    const countdownInfo = await page.evaluate(() => {
+      const el = document.getElementById('launch-countdown');
+      return {
+        snap: window.__STARFORGE__.getSnapshot(),
+        hidden: el?.hidden ?? true,
+        numText: document.getElementById('launch-countdown-num')?.textContent?.trim() || '',
+        fullText: el?.innerText || '',
+      };
+    });
+    check(
+      countdownInfo.snap.countdownActive === true &&
+        countdownInfo.hidden === false &&
+        ['3', '2', '1'].includes(countdownInfo.numText),
+      `Expected active 3-2-1 launch countdown overlay after sortie launch, got ${JSON.stringify(countdownInfo)}`
+    );
+    check(
+      countdownInfo.snap.enemyCount === 0,
+      `Expected 0 enemies spawned during launch countdown, got ${countdownInfo.snap.enemyCount}`
+    );
+    assertImmersionPurity(countdownInfo.fullText, 'launch-countdown');
+    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'v4_03b_launch_countdown.png') });
+    console.log('[e2e] Saved v4_03b_launch_countdown.png');
+
+    // Wait for 3-2-1 countdown to finish and wave enemies to engage
+    await page.waitForFunction(
+      () => {
+        const s = window.__STARFORGE__.getSnapshot();
+        return s.countdownActive === false && document.getElementById('launch-countdown')?.hidden === true;
+      },
+      null,
+      { timeout: 6000 }
+    );
     await page.waitForFunction(
       () => {
         const s = window.__STARFORGE__.getSnapshot();
@@ -762,8 +816,43 @@ async function runTests() {
     console.log('[e2e] Saved v4_04_combat_hud.png');
 
     // ==================== STAGE 4: Modals (<dialog>) ====================
-    console.log('[e2e] Stage 4: Native <dialog> Pause & Upgrade Modals...');
+    console.log('[e2e] Stage 4: Native <dialog> Pause (ESC + Button) & Upgrade Modals...');
 
+    // 4a. Keyboard Escape must open #pause-dialog AND keep it open after keyup (no CloseWatcher instant-dismiss)
+    await page.keyboard.press('Escape');
+    await sleep(360);
+    const escPauseOpenInfo = await page.evaluate(() => ({
+      openAttr: document.getElementById('pause-dialog')?.hasAttribute('open') ?? false,
+      snap: window.__STARFORGE__.getSnapshot(),
+      text: document.getElementById('pause-dialog')?.innerText || '',
+    }));
+    check(
+      escPauseOpenInfo.openAttr === true && escPauseOpenInfo.snap.dialogs?.pauseOpen === true,
+      `Expected pressing Escape during combat to open and hold #pause-dialog, got ${JSON.stringify(escPauseOpenInfo.snap.dialogs)} mode=${escPauseOpenInfo.snap.mode}`
+    );
+    check(
+      escPauseOpenInfo.snap.mode === 'paused' && escPauseOpenInfo.snap.audio?.muffled === true,
+      `Expected mode=paused and audio.muffled=true after Escape, got mode=${escPauseOpenInfo.snap.mode} audio=${JSON.stringify(escPauseOpenInfo.snap.audio)}`
+    );
+    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'v4_04b_pause_esc.png') });
+    console.log('[e2e] Saved v4_04b_pause_esc.png');
+
+    // Second Escape press must close #pause-dialog and resume gameplay cleanly
+    await page.keyboard.press('Escape');
+    await page.waitForFunction(
+      () =>
+        !document.getElementById('pause-dialog')?.hasAttribute('open') &&
+        window.__STARFORGE__.getSnapshot().mode === 'playing',
+      null,
+      { timeout: 3000 }
+    );
+    const escPauseClosedSnap = await page.evaluate(() => window.__STARFORGE__.getSnapshot());
+    check(
+      escPauseClosedSnap.dialogs?.pauseOpen === false && escPauseClosedSnap.audio?.muffled === false,
+      `Expected second Escape to resume combat & unmuffle audio, got ${JSON.stringify(escPauseClosedSnap.audio)}`
+    );
+
+    // 4b. Also verify Pause button click + Resume button flow
     await page.click('#hud-pause-btn');
     await page.waitForFunction(() => document.getElementById('pause-dialog')?.hasAttribute('open'));
     const pauseOpenInfo = await page.evaluate(() => ({
@@ -1150,6 +1239,64 @@ async function runTests() {
       `Expected activeBgm='act3' in Endless Mode, got ${JSON.stringify(endlessSnap.snap.audio)}`
     );
 
+    // ==================== STAGE 6b: Warp Gate Safe Passage vs Solid Door Crash ====================
+    console.log('[e2e] Stage 6b: Warp Gate Safe Passage vs Solid Door Crash Destruction...');
+    await page.evaluate(() => window.__STARFORGE__.spawnBossNow(2));
+    await page.mouse.move(720, 450);
+    await sleep(320);
+
+    // 6b-1. Centered flight through a wide-open 112-deg portal must stay completely safe (no clipping)
+    await page.evaluate(() => window.__STARFORGE__.spawnGateNow(-50, 'open'));
+    await sleep(1900);
+    const gatePassSnap = await page.evaluate(() => window.__STARFORGE__.getSnapshot());
+    check(
+      gatePassSnap.hp > 0 && gatePassSnap.playerDying === false && gatePassSnap.mode === 'playing',
+      `Expected centered flight through open gate to survive cleanly, got hp=${gatePassSnap.hp} dying=${gatePassSnap.playerDying} mode=${gatePassSnap.mode}`
+    );
+
+    // 6b-2. Steer to far right (+x into swung-open vault door slab) -> must explode & open defeat dialog
+    await page.mouse.move(1400, 450, { steps: 6 });
+    await sleep(500);
+    await page.evaluate(() => window.__STARFORGE__.spawnGateNow(-30, 'open'));
+    await page.waitForFunction(
+      () => {
+        const s = window.__STARFORGE__.getSnapshot();
+        return s.hp === 0 && (s.playerDying || s.dialogs?.resultOpen);
+      },
+      null,
+      { polling: 'raf', timeout: 5000 }
+    );
+    await sleep(140);
+    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'v4_06b_gate_crash_explosion.png') });
+    console.log('[e2e] Saved v4_06b_gate_crash_explosion.png');
+
+    await page.waitForFunction(
+      () => document.getElementById('result-dialog')?.hasAttribute('open'),
+      null,
+      { timeout: 5000 }
+    );
+    const crashResultInfo = await page.evaluate(() => ({
+      snap: window.__STARFORGE__.getSnapshot(),
+      subtitle: document.getElementById('result-subtitle')?.textContent?.trim() || '',
+      dialogText: document.getElementById('result-dialog')?.innerText || '',
+    }));
+    check(
+      crashResultInfo.snap.dialogs?.resultOpen === true && crashResultInfo.snap.hp === 0,
+      `Expected defeat result dialog open after gate crash, got ${JSON.stringify(crashResultInfo.snap)}`
+    );
+    check(
+      crashResultInfo.subtitle.includes('撞击星际跃迁闸门'),
+      `Expected gate crash subtitle, got "${crashResultInfo.subtitle}"`
+    );
+    assertImmersionPurity(crashResultInfo.dialogText, 'gate-crash-result');
+    await page.click('#result-retry-btn');
+    await page.waitForFunction(
+      () => !document.getElementById('result-dialog')?.hasAttribute('open'),
+      null,
+      { timeout: 5000 }
+    );
+    await page.mouse.move(720, 450);
+
     // ==================== STAGE 7: 1280x720 Responsive Bounds Check ====================
     console.log('[e2e] Stage 7: 1280x720 Responsive Bounds & Overlap Checks...');
     await page.setViewportSize({ width: 1280, height: 720 });
@@ -1224,7 +1371,11 @@ async function runTests() {
         shipList: box('#hangar-ship-list'),
         blueprintPanel: box('#hangar-blueprint-panel'),
         loreBox: box('#hangar-lore'),
+        controlTip: box('#hangar-control-tip'),
         launchBtn: box('#hangar-launch-btn'),
+        rightScrollOverflowY:
+          (document.querySelector('.hangar-right-col .panel-scroll-inner')?.scrollHeight ?? 0) -
+          (document.querySelector('.hangar-right-col .panel-scroll-inner')?.clientHeight ?? 0),
       };
     });
     check(
@@ -1235,7 +1386,16 @@ async function runTests() {
     await assertRectFitsViewport(hangarLayout720.rightCol, 1280, 720, 'Hangar right col at 1280x720');
     await assertRectFitsViewport(hangarLayout720.blueprintPanel, 1280, 720, 'Hangar blueprint at 1280x720');
     await assertRectFitsViewport(hangarLayout720.loreBox, 1280, 720, 'Hangar lore at 1280x720');
+    await assertRectFitsViewport(hangarLayout720.controlTip, 1280, 720, 'Hangar mouse control tip at 1280x720');
     await assertRectFitsViewport(hangarLayout720.launchBtn, 1280, 720, 'Hangar launch button at 1280x720');
+    check(
+      hangarLayout720.controlTip.bottom <= hangarLayout720.launchBtn.top + 1,
+      `Expected #hangar-control-tip above #hangar-launch-btn at 1280x720, got tip=${JSON.stringify(hangarLayout720.controlTip)} btn=${JSON.stringify(hangarLayout720.launchBtn)}`
+    );
+    check(
+      hangarLayout720.rightScrollOverflowY <= 2,
+      `Expected zero vertical scroll overflow in right Hangar col at 1280x720, got ${hangarLayout720.rightScrollOverflowY}px`
+    );
     check(
       !rectsOverlap(hangarLayout720.leftCol, hangarLayout720.rightCol),
       'Hangar left and right columns overlap at 1280x720'

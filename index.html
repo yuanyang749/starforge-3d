@@ -316,6 +316,30 @@
         </div>
 
         <div class="hangar-launch-footer">
+          <div id="hangar-control-tip" class="launch-control-tip" role="note">
+            <svg class="launch-tip-icon" viewBox="0 0 20 20" aria-hidden="true">
+              <rect
+                x="4.5"
+                y="2.2"
+                width="11"
+                height="15.6"
+                rx="5.5"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="1.5"
+              />
+              <line
+                x1="10"
+                y1="5.2"
+                x2="10"
+                y2="8.6"
+                stroke="currentColor"
+                stroke-width="1.6"
+                stroke-linecap="round"
+              />
+            </svg>
+            <span>建议使用<strong>鼠标</strong>操控战机移动 · 右键翻滚弹反</span>
+          </div>
           <button id="hangar-launch-btn" type="button" class="launch-plate-btn" data-spotlight>
             <img
               src="./ui/frames/launch_btn_amber.webp"
@@ -360,6 +384,16 @@
           </g>
           <circle cx="40" cy="40" r="2" fill="#00f0ff" />
         </svg>
+      </div>
+
+      <div id="launch-countdown" class="launch-countdown" hidden role="status" aria-live="assertive">
+        <div class="launch-countdown-core">
+          <svg class="launch-countdown-ring" viewBox="0 0 220 220" aria-hidden="true">
+            <circle class="countdown-ring-outer" cx="110" cy="110" r="96" />
+            <circle class="countdown-ring-inner" cx="110" cy="110" r="76" />
+          </svg>
+          <strong id="launch-countdown-num" class="launch-countdown-num">3</strong>
+        </div>
       </div>
 
       <!-- Top Left: Hull & Upgrades -->

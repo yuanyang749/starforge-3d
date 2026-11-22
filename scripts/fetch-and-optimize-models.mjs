@@ -24,7 +24,7 @@ const MODELS = [
   },
   {
     key: 'ship_morph',
-    url: 'https://huggingface.co/datasets/scenario-labs/3d-collection/resolve/main/assets/099348bab8f2f8be/f7f5149c8b8e6896.glb',
+    url: 'https://cdn.3dassets.dev/assets/32594/v1/model.glb',
   },
   {
     key: 'ship_aero',

@@ -53,7 +53,16 @@ const SFX_KEYS = [
 type SfxKey = (typeof SFX_KEYS)[number];
 
 const BGM_TRACKS: readonly BgmTrackId[] = ['boot', 'hangar', 'act1', 'act2', 'act3', 'boss'];
-const AUDIO_ASSET_VER = 'v6.0';
+const BGM_TRACK_GAIN: Record<BgmTrackId, number> = {
+  boot: 1.04,
+  hangar: 0.96,
+  act1: 1.08,
+  act2: 1.24,
+  act3: 1.12,
+  boss: 1.16,
+};
+const MASTER_GAIN_LEVEL = 0.92;
+const AUDIO_ASSET_VER = 'v6.1';
 
 interface ActiveBgmPlayback {
   track: BgmTrackId;
@@ -64,7 +73,8 @@ interface ActiveBgmPlayback {
 export class SoundEngine {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
-  private compressor: DynamicsCompressorNode | null = null;
+  private masterLimiter: DynamicsCompressorNode | null = null;
+  private sfxCompressor: DynamicsCompressorNode | null = null;
   private sfxGain: GainNode | null = null;
   private bgmGain: GainNode | null = null;
   private bgmDuckGain: GainNode | null = null;
@@ -95,14 +105,16 @@ export class SoundEngine {
   private resetAudioGraph(): void {
     this.stopCurrentBgmNode(0);
     this.sfxGain?.disconnect();
+    this.sfxCompressor?.disconnect();
     this.bgmFilter?.disconnect();
     this.bgmDuckGain?.disconnect();
     this.bgmGain?.disconnect();
-    this.compressor?.disconnect();
+    this.masterLimiter?.disconnect();
     this.masterGain?.disconnect();
     this.ctx = null;
     this.masterGain = null;
-    this.compressor = null;
+    this.masterLimiter = null;
+    this.sfxCompressor = null;
     this.sfxGain = null;
     this.bgmGain = null;
     this.bgmDuckGain = null;
@@ -129,27 +141,36 @@ export class SoundEngine {
       this.ctx = ctx;
 
       const masterGain = ctx.createGain();
-      masterGain.gain.value = this.muted ? 0 : 0.85;
+      masterGain.gain.value = this.muted ? 0 : MASTER_GAIN_LEVEL;
       masterGain.connect(ctx.destination);
       this.masterGain = masterGain;
 
-      const comp = ctx.createDynamicsCompressor();
-      comp.threshold.value = -14;
-      comp.knee.value = 12;
-      comp.ratio.value = 4;
-      comp.attack.value = 0.003;
-      comp.release.value = 0.18;
-      comp.connect(masterGain);
-      this.compressor = comp;
+      const masterLimiter = ctx.createDynamicsCompressor();
+      masterLimiter.threshold.value = -2.0;
+      masterLimiter.knee.value = 3;
+      masterLimiter.ratio.value = 12;
+      masterLimiter.attack.value = 0.002;
+      masterLimiter.release.value = 0.12;
+      masterLimiter.connect(masterGain);
+      this.masterLimiter = masterLimiter;
+
+      const sfxCompressor = ctx.createDynamicsCompressor();
+      sfxCompressor.threshold.value = -10;
+      sfxCompressor.knee.value = 10;
+      sfxCompressor.ratio.value = 3.5;
+      sfxCompressor.attack.value = 0.003;
+      sfxCompressor.release.value = 0.14;
+      sfxCompressor.connect(masterLimiter);
+      this.sfxCompressor = sfxCompressor;
 
       const sfxGain = ctx.createGain();
-      sfxGain.gain.value = 0.84;
-      sfxGain.connect(comp);
+      sfxGain.gain.value = 0.68;
+      sfxGain.connect(sfxCompressor);
       this.sfxGain = sfxGain;
 
       const bgmGain = ctx.createGain();
-      bgmGain.gain.value = 0.58;
-      bgmGain.connect(comp);
+      bgmGain.gain.value = 0.92;
+      bgmGain.connect(masterLimiter);
       this.bgmGain = bgmGain;
 
       const bgmDuckGain = ctx.createGain();
@@ -212,10 +233,10 @@ export class SoundEngine {
       try {
         const now = this.ctx.currentTime;
         this.masterGain.gain.cancelScheduledValues(now);
-        this.masterGain.gain.setTargetAtTime(muted ? 0 : 0.85, now, 0.03);
+        this.masterGain.gain.setTargetAtTime(muted ? 0 : MASTER_GAIN_LEVEL, now, 0.03);
       } catch {
         try {
-          this.masterGain.gain.value = muted ? 0 : 0.85;
+          this.masterGain.gain.value = muted ? 0 : MASTER_GAIN_LEVEL;
         } catch {
           // Ignore locked/closed audio context errors.
         }
@@ -415,8 +436,9 @@ export class SoundEngine {
       source.loop = true;
 
       const trackGain = this.ctx.createGain();
+      const targetGain = BGM_TRACK_GAIN[target];
       trackGain.gain.setValueAtTime(0.0001, now);
-      trackGain.gain.exponentialRampToValueAtTime(1.0, now + Math.max(0.06, fadeSec));
+      trackGain.gain.exponentialRampToValueAtTime(targetGain, now + Math.max(0.06, fadeSec));
 
       source.connect(trackGain);
       trackGain.connect(this.bgmFilter);
@@ -542,19 +564,19 @@ export class SoundEngine {
 
     const rateJitter = 0.96 + Math.random() * 0.09;
     let key: SfxKey;
-    let vol = 0.28;
+    let vol = 0.22;
     if (voice === 'astra') {
       key = this.pickAlt('shot_astra', ['shot_astra_1', 'shot_astra_2']);
-      vol = 0.28;
+      vol = 0.22;
     } else if (voice === 'opus') {
       key = this.pickAlt('shot_opus', ['shot_opus_1', 'shot_opus_2']);
-      vol = 0.32;
+      vol = 0.25;
     } else if (voice === 'morph') {
       key = this.pickAlt('shot_morph', ['shot_morph_1', 'shot_morph_2']);
-      vol = 0.29;
+      vol = 0.27;
     } else {
       key = this.pickAlt('shot_aero', ['shot_aero_1', 'shot_aero_2']);
-      vol = 0.28;
+      vol = 0.27;
     }
 
     if (this.playBufferSfx(key, { gain: vol, rate: rateJitter, pan })) return;
@@ -574,7 +596,7 @@ export class SoundEngine {
     const key: SfxKey = crit ? 'hit_crit' : this.pickAlt('hit_hull', ['hit_hull_1', 'hit_hull_2']);
     if (
       this.playBufferSfx(key, {
-        gain: crit ? 0.52 : 0.26,
+        gain: crit ? 0.42 : 0.19,
         rate: comboRate * (0.97 + Math.random() * 0.06),
         pan,
       })
@@ -588,15 +610,15 @@ export class SoundEngine {
   playExplosion(scale: 'small' | 'medium' | 'boss' = 'small', pan = 0): void {
     if (!this.canPlaySfx()) return;
     if (scale === 'boss') {
-      this.duckBgm(0.52, 1.4);
-      if (this.playBufferSfx('exp_boss', { gain: 1.05, rate: 1.0, pan })) return;
+      this.duckBgm(0.62, 1.1);
+      if (this.playBufferSfx('exp_boss', { gain: 1.12, rate: 1.0, pan })) return;
     } else if (scale === 'medium') {
-      if (this.playBufferSfx('exp_medium', { gain: 0.78, rate: 0.96 + Math.random() * 0.08, pan })) {
+      if (this.playBufferSfx('exp_medium', { gain: 0.72, rate: 0.96 + Math.random() * 0.08, pan })) {
         return;
       }
     } else {
       const key = this.pickAlt('exp_small', ['exp_small_1', 'exp_small_2']);
-      if (this.playBufferSfx(key, { gain: 0.58, rate: 0.94 + Math.random() * 0.12, pan })) {
+      if (this.playBufferSfx(key, { gain: 0.46, rate: 0.94 + Math.random() * 0.12, pan })) {
         return;
       }
     }
@@ -606,8 +628,8 @@ export class SoundEngine {
 
   playPartBreak(pan = 0): void {
     if (!this.canPlaySfx()) return;
-    this.duckBgm(0.76, 0.45);
-    if (this.playBufferSfx('part_break', { gain: 0.92, rate: 1.0, pan })) return;
+    this.duckBgm(0.76, 0.38);
+    if (this.playBufferSfx('part_break', { gain: 1.08, rate: 1.0, pan })) return;
     this.synthExplosion('medium');
     this.playToneSweep(1100, 190, 0.28, 'sawtooth', 0.18);
   }
@@ -615,14 +637,14 @@ export class SoundEngine {
   playRoll(deflected = false, pan = 0): void {
     if (!this.canPlaySfx()) return;
     if (deflected) {
-      if (this.playBufferSfx('deflect_parry', { gain: 0.78, rate: 0.96 + Math.random() * 0.08, pan })) {
+      if (this.playBufferSfx('deflect_parry', { gain: 0.82, rate: 0.96 + Math.random() * 0.08, pan })) {
         return;
       }
       this.playToneSweep(880, 1760, 0.12, 'triangle', 0.14);
       return;
     }
 
-    if (this.playBufferSfx('roll_whoosh', { gain: 0.74, rate: 0.97 + Math.random() * 0.06, pan })) {
+    if (this.playBufferSfx('roll_whoosh', { gain: 0.78, rate: 0.97 + Math.random() * 0.06, pan })) {
       return;
     }
     this.synthRoll();
@@ -630,7 +652,8 @@ export class SoundEngine {
 
   playShieldHit(): void {
     if (!this.canPlaySfx()) return;
-    if (this.playBufferSfx('shield_hit', { gain: 0.88, rate: 1.0 })) return;
+    this.duckBgm(0.74, 0.26);
+    if (this.playBufferSfx('shield_hit', { gain: 1.25, rate: 1.0 })) return;
     this.playToneSweep(280, 75, 0.22, 'sawtooth', 0.22);
   }
 
@@ -644,15 +667,15 @@ export class SoundEngine {
 
   playUpgrade(): void {
     if (!this.canPlaySfx()) return;
-    if (this.playBufferSfx('upgrade_lock', { gain: 0.84, rate: 1.0 })) return;
+    if (this.playBufferSfx('upgrade_lock', { gain: 0.9, rate: 1.0 })) return;
     this.synthUpgrade();
   }
 
   playBossWarning(): void {
     if (!this.canPlaySfx()) return;
-    this.duckBgm(0.38, 3.2);
-    const klaxon = this.playBufferSfx('boss_warning', { gain: 0.92, rate: 1.0 });
-    const crescendo = this.playBufferSfx('boss_crescendo', { gain: 0.56, rate: 1.0 });
+    this.duckBgm(0.48, 2.6);
+    const klaxon = this.playBufferSfx('boss_warning', { gain: 1.02, rate: 1.0 });
+    const crescendo = this.playBufferSfx('boss_crescendo', { gain: 0.62, rate: 1.0 });
     if (!klaxon && !crescendo) {
       this.synthBossWarning();
     }
@@ -660,14 +683,14 @@ export class SoundEngine {
 
   playUltimate(voice: WeaponVoice = 'astra'): void {
     if (!this.canPlaySfx()) return;
-    this.duckBgm(0.65, 0.9);
+    this.duckBgm(0.68, 0.85);
     const map: Record<WeaponVoice, SfxKey> = {
       astra: 'ult_astra_beam',
       opus: 'ult_opus_nova',
       morph: 'ult_morph_salvo',
       aero: 'ult_aero_chrono',
     };
-    if (this.playBufferSfx(map[voice], { gain: 0.96, rate: 1.0 })) return;
+    if (this.playBufferSfx(map[voice], { gain: 1.08, rate: 1.0 })) return;
     this.playToneSweep(160, 960, 0.45, 'sawtooth', 0.24);
     this.synthExplosion('medium');
   }
@@ -680,7 +703,7 @@ export class SoundEngine {
 
   playShipSelect(): void {
     if (!this.canPlaySfx()) return;
-    if (this.playBufferSfx('ship_select', { gain: 0.78, rate: 1.0 })) return;
+    if (this.playBufferSfx('ship_select', { gain: 0.82, rate: 1.0 })) return;
     this.playUiClick();
   }
 
@@ -692,16 +715,40 @@ export class SoundEngine {
 
   playLaunchSortie(): void {
     if (!this.canPlaySfx()) return;
-    if (this.playBufferSfx('launch_sortie', { gain: 0.88, rate: 1.0 })) return;
+    if (this.playBufferSfx('launch_sortie', { gain: 0.96, rate: 1.0 })) return;
     if (this.playBufferSfx('roll_whoosh', { gain: 0.82, rate: 0.82 })) return;
     this.playToneSweep(220, 880, 0.28, 'sawtooth', 0.16);
+  }
+
+  playCountdownTick(step: 3 | 2 | 1 | 0): void {
+    if (!this.canPlaySfx() || !this.ctx || !this.sfxGain) return;
+    if (step === 0) {
+      this.playLaunchSortie();
+      this.playToneSweep(880, 1318.5, 0.22, 'triangle', 0.11);
+      return;
+    }
+
+    const pitchMap: Record<3 | 2 | 1, number> = {
+      3: 523.25,
+      2: 659.25,
+      1: 783.99,
+    };
+    const rateMap: Record<3 | 2 | 1, number> = {
+      3: 0.92,
+      2: 1.04,
+      1: 1.18,
+    };
+    const freq = pitchMap[step];
+    this.playBufferSfx('ui_click', { gain: 0.4, rate: rateMap[step] });
+    this.playToneSweep(freq, freq * 1.015, 0.16, 'triangle', 0.13);
+    this.playToneSweep(freq * 2, freq * 1.98, 0.085, 'sine', 0.055);
   }
 
   playResultStinger(victory: boolean): void {
     this.stopBgm(0.35);
     if (!this.canPlaySfx()) return;
     const key: SfxKey = victory ? 'stinger_victory' : 'stinger_defeat';
-    if (this.playBufferSfx(key, { gain: 0.92, rate: 1.0 })) return;
+    if (this.playBufferSfx(key, { gain: 0.98, rate: 1.0 })) return;
     if (victory) {
       this.synthUpgrade();
     } else {

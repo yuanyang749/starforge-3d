@@ -99,6 +99,10 @@ export interface StarforgeSnapshot {
   ultCharge: number;
   ultMax: number;
   ultActiveTimer: number;
+  countdownActive: boolean;
+  countdownRemaining: number;
+  playerDying: boolean;
+  activeGateCount: number;
   enemyCount: number;
   enemyBulletCount: number;
   playerBulletCount: number;
@@ -134,6 +138,7 @@ export interface StarforgeQaApi {
   triggerUltimate(): boolean;
   triggerBarrelRoll(): boolean;
   setGraphicsPreset(preset: GraphicsPreset): void;
+  spawnGateNow(z?: number, mode?: 'closed' | 'opening' | 'open'): void;
 }
 
 declare global {
@@ -311,6 +316,16 @@ export class Game {
   };
 
   private bannerTimer = 0;
+  private playerDying = false;
+  private playerDeathTimer = 0;
+  private playerDeathSecondaryBurstDone = false;
+  private playerDeathReason: 'combat' | 'gate_crash' = 'combat';
+  private launchCountdownRemaining = 0;
+  private launchCountdownStage: -1 | 0 | 1 | 2 | 3 = -1;
+  private launchCountdownCombatUnlocked = true;
+  private pendingLaunchWaveEvent: ReturnType<WaveDirector['startCampaign']> | null = null;
+  private pauseEscGuardActive = false;
+  private pauseEscGuardTimer: number | null = null;
   private lastRafTime = 0;
   private globalElapsed = 0;
   private bossDetachTick = 0;
@@ -532,6 +547,8 @@ export class Game {
       'hud-ui',
       'hud-cluster-tl',
       'hud-reticle',
+      'launch-countdown',
+      'launch-countdown-num',
       'floating-numbers',
       'hud-ship-badge',
       'hud-ship-name',
@@ -1069,7 +1086,27 @@ export class Game {
     this.isDraggingHangar = false;
   }
 
+  private armPauseEscGuard(): void {
+    this.pauseEscGuardActive = true;
+    if (this.pauseEscGuardTimer !== null) {
+      window.clearTimeout(this.pauseEscGuardTimer);
+    }
+    this.pauseEscGuardTimer = window.setTimeout(() => {
+      this.pauseEscGuardActive = false;
+      this.pauseEscGuardTimer = null;
+    }, 360);
+  }
+
+  private clearPauseEscGuard(): void {
+    this.pauseEscGuardActive = false;
+    if (this.pauseEscGuardTimer !== null) {
+      window.clearTimeout(this.pauseEscGuardTimer);
+      this.pauseEscGuardTimer = null;
+    }
+  }
+
   private closeAllDialogs(): void {
+    this.clearPauseEscGuard();
     if (this.gfxMenuOpen) this.setGfxMenuOpen(false);
     if (this.dialogs.upgrade.open) this.dialogs.upgrade.close();
     if (this.dialogs.pause.open) this.dialogs.pause.close();
@@ -1237,13 +1274,26 @@ export class Game {
           this.autoFire = !this.autoFire;
           this.updateAutoFireButton();
         } else if (code === 'Escape') {
-          this.openPauseDialog();
+          e.preventDefault();
+          e.stopPropagation();
+          if (!e.repeat) {
+            this.openPauseDialog(true);
+          }
         }
       }
     });
 
     window.addEventListener('keyup', (e) => {
       this.keys.delete(e.code);
+      if (e.code === 'Escape' && this.pauseEscGuardActive) {
+        if (this.pauseEscGuardTimer !== null) {
+          window.clearTimeout(this.pauseEscGuardTimer);
+        }
+        this.pauseEscGuardTimer = window.setTimeout(() => {
+          this.pauseEscGuardActive = false;
+          this.pauseEscGuardTimer = null;
+        }, 40);
+      }
     });
 
     // Native <dialog> handlers following modern-web-guidance strictly
@@ -1258,7 +1308,14 @@ export class Game {
       this.dialogs.upgrade.returnValue = '';
     });
 
+    this.dialogs.pause.addEventListener('cancel', (e) => {
+      if (this.pauseEscGuardActive) {
+        e.preventDefault();
+      }
+    });
+
     this.dialogs.pause.addEventListener('close', () => {
+      this.clearPauseEscGuard();
       const val = this.dialogs.pause.returnValue;
       this.dialogs.pause.returnValue = '';
       if (this.state !== 'paused') return;
@@ -1423,6 +1480,11 @@ export class Game {
   // ==================== HANGAR ====================
 
   private enterHangar(): void {
+    this.clearLaunchCountdown(false);
+    this.playerDying = false;
+    this.playerDeathTimer = 0;
+    this.playerDeathSecondaryBurstDone = false;
+    this.playerDeathReason = 'combat';
     this.closeAllDialogs();
     this.clearInputState();
     this.cleanupCombatObjects();
@@ -1569,7 +1631,7 @@ export class Game {
       </g>`;
 
     if (shipId === 'astra') {
-      return `<svg viewBox="0 0 280 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      return `<svg viewBox="0 -8 280 136" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
         ${grid}
         <g stroke="#00f0ff" stroke-width="1.5" fill="rgba(0,240,255,0.09)">
           <path d="M62 52 L115 48 L186 45 L226 60 L186 75 L115 72 L62 68 Z" />
@@ -1593,7 +1655,7 @@ export class Game {
     }
 
     if (shipId === 'opus') {
-      return `<svg viewBox="0 0 280 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      return `<svg viewBox="0 -8 280 136" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
         ${grid}
         <g stroke="#00f0ff" stroke-width="1.6" fill="rgba(0,240,255,0.1)">
           <path d="M46 46 L94 40 L204 42 L230 53 L230 67 L204 78 L94 80 L46 74 Z" />
@@ -1615,7 +1677,7 @@ export class Game {
     }
 
     if (shipId === 'morph') {
-      return `<svg viewBox="0 0 280 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+      return `<svg viewBox="0 -8 280 136" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
         ${grid}
         <g stroke="#00f0ff" stroke-width="1.5" fill="rgba(0,240,255,0.1)">
           <path d="M52 54 L118 47 L218 53 L252 60 L218 67 L118 73 L52 66 Z" />
@@ -1634,7 +1696,7 @@ export class Game {
       </svg>`;
     }
 
-    return `<svg viewBox="0 0 280 120" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+    return `<svg viewBox="0 -8 280 136" preserveAspectRatio="xMidYMid meet" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
       ${grid}
       <g stroke="#00f0ff" stroke-width="1.5" fill="rgba(0,240,255,0.09)">
         <path d="M52 55 L112 49 L210 52 L246 60 L210 68 L112 71 L52 65 Z" />
@@ -1696,6 +1758,10 @@ export class Game {
     this.hitStopTimer = 0;
     this.slowMoTimer = 0;
     this.screenShake = 0;
+    this.playerDying = false;
+    this.playerDeathTimer = 0;
+    this.playerDeathSecondaryBurstDone = false;
+    this.playerDeathReason = 'combat';
 
     this.playerMaxHp = ship.baseHp;
     this.playerHp = ship.baseHp;
@@ -1717,11 +1783,11 @@ export class Game {
     this.renderChipStrip();
 
     this.sound.setMuffled(false);
-    this.sound.playLaunchSortie();
+    this.sound.playHudDeploy();
     this.sound.setBgmTrack('act1');
     const startEv = this.waves.startCampaign();
-    this.handleWaveEvent(startEv);
     this.envSystem.setAct(1, true);
+    this.beginLaunchCountdown(startEv);
     this.updateHud();
   }
 
@@ -1729,21 +1795,111 @@ export class Game {
     this.closeAllDialogs();
     this.clearInputState();
     this.setScreenState('playing');
+    this.playerDying = false;
+    this.playerDeathTimer = 0;
+    this.playerDeathSecondaryBurstDone = false;
+    this.playerDeathReason = 'combat';
+    if (this.playerInstance) {
+      this.playerInstance.root.visible = true;
+    }
     this.sound.setMuffled(false);
-    this.sound.playLaunchSortie();
-    this.waves.setCombatActive(true);
+    this.sound.playHudDeploy();
     this.envSystem.setMode('combat');
     this.els['hud-ui'].hidden = false;
     this.els['boss-hud'].hidden = true;
     this.playerHp = Math.min(this.playerMaxHp, this.playerHp + Math.round(this.playerMaxHp * 0.45));
     const ev = this.waves.startEndlessMode();
-    this.handleWaveEvent(ev);
     this.sound.setBgmTrack('act3');
     this.envSystem.setAct(this.waves.getAct(), true);
+    this.beginLaunchCountdown(ev);
     this.updateHud();
   }
 
+  private beginLaunchCountdown(waveEvent: ReturnType<WaveDirector['startCampaign']>): void {
+    this.pendingLaunchWaveEvent = waveEvent;
+    this.launchCountdownRemaining = 2.85;
+    this.launchCountdownStage = -1;
+    this.launchCountdownCombatUnlocked = false;
+    this.waves.setCombatActive(false);
+    this.els['hud-banner'].classList.remove('is-visible');
+    this.bannerTimer = 0;
+    this.applyLaunchCountdownStage(3);
+  }
+
+  private clearLaunchCountdown(unlockCombat: boolean): void {
+    const pendingEv = this.pendingLaunchWaveEvent;
+    this.pendingLaunchWaveEvent = null;
+    this.launchCountdownRemaining = 0;
+    this.launchCountdownStage = -1;
+    this.launchCountdownCombatUnlocked = true;
+    const overlay = this.els['launch-countdown'];
+    overlay.hidden = true;
+    overlay.classList.remove('is-engage');
+    if (unlockCombat) {
+      this.waves.setCombatActive(true);
+      if (pendingEv) {
+        this.handleWaveEvent(pendingEv);
+      }
+    }
+  }
+
+  private applyLaunchCountdownStage(stage: 3 | 2 | 1 | 0): void {
+    if (this.launchCountdownStage === stage) return;
+    this.launchCountdownStage = stage;
+    const overlay = this.els['launch-countdown'];
+    const numEl = this.els['launch-countdown-num'];
+    const coreEl = overlay.querySelector<HTMLElement>('.launch-countdown-core');
+
+    overlay.hidden = false;
+    overlay.classList.toggle('is-engage', stage === 0);
+    numEl.textContent = stage === 0 ? '出击' : String(stage);
+
+    if (coreEl) {
+      coreEl.classList.remove('is-pulse');
+      void coreEl.offsetWidth;
+      coreEl.classList.add('is-pulse');
+    }
+
+    this.sound.playCountdownTick(stage);
+
+    if (stage === 0 && !this.launchCountdownCombatUnlocked) {
+      this.launchCountdownCombatUnlocked = true;
+      this.boostFovTimer = Math.max(this.boostFovTimer, 0.75);
+      this.flashDamageVignette('boost');
+      this.waves.setCombatActive(true);
+      const pendingEv = this.pendingLaunchWaveEvent;
+      this.pendingLaunchWaveEvent = null;
+      if (pendingEv) {
+        this.handleWaveEvent(pendingEv);
+      }
+    }
+  }
+
+  private updateLaunchCountdown(dt: number): void {
+    if (this.launchCountdownRemaining <= 0) return;
+    this.launchCountdownRemaining = Math.max(0, this.launchCountdownRemaining - dt);
+    const rem = this.launchCountdownRemaining;
+    if (rem > 2.05) {
+      this.applyLaunchCountdownStage(3);
+    } else if (rem > 1.25) {
+      this.applyLaunchCountdownStage(2);
+    } else if (rem > 0.45) {
+      this.applyLaunchCountdownStage(1);
+    } else if (rem > 0) {
+      this.applyLaunchCountdownStage(0);
+    } else {
+      this.applyLaunchCountdownStage(0);
+      this.els['launch-countdown'].hidden = true;
+      this.els['launch-countdown'].classList.remove('is-engage');
+      this.launchCountdownStage = -1;
+    }
+  }
+
   private cleanupCombatObjects(): void {
+    this.playerDying = false;
+    this.playerDeathTimer = 0;
+    this.playerDeathSecondaryBurstDone = false;
+    this.playerDeathReason = 'combat';
     this.vfx.clearTransientEffects();
     this.projectileVisuals.clearTrails();
     this.waves.clearCombatEntities();
@@ -1755,6 +1911,7 @@ export class Game {
     this.beamGroup.visible = false;
 
     if (this.playerInstance) {
+      this.playerInstance.root.visible = true;
       this.loader.release(this.playerInstance);
       this.playerInstance = null;
       this.playerRig = null;
@@ -1782,7 +1939,7 @@ export class Game {
   }
 
   private tryBarrelRoll(): void {
-    if (this.state !== 'playing') return;
+    if (this.state !== 'playing' || this.playerDying) return;
     if (this.rollCooldownTimer > 0 || this.rollTimer > 0) return;
 
     this.rollDuration = 0.46 + (this.upgrades.stacks['deflect'] ?? 0) * 0.08;
@@ -1822,7 +1979,7 @@ export class Game {
   }
 
   private tryUltimate(): void {
-    if (this.state !== 'playing') return;
+    if (this.state !== 'playing' || this.playerDying) return;
     if (this.ultimateCharge < this.activeShip.ultimateCost) return;
 
     const id: ShipId = this.activeShip.id;
@@ -1889,13 +2046,17 @@ export class Game {
     }
   }
 
-  private openPauseDialog(): void {
-    if (this.state !== 'playing') return;
+  private openPauseDialog(fromEscape = false): void {
+    if (this.state !== 'playing' || this.playerDying) return;
     this.closeAllDialogs();
     this.clearInputState();
     this.setScreenState('paused');
     this.sound.setMuffled(true);
     this.sound.playHudDeploy();
+    if (fromEscape) {
+      // Guard against Chromium CloseWatcher firing `cancel` on keyup of the opening Escape press.
+      this.armPauseEscGuard();
+    }
     this.dialogs.pause.returnValue = '';
     if (!this.dialogs.pause.open) {
       this.dialogs.pause.showModal();
@@ -1991,6 +2152,7 @@ export class Game {
   }
 
   private showResultDialog(victory: boolean): void {
+    this.clearLaunchCountdown(false);
     this.closeAllDialogs();
     this.clearInputState();
     this.setScreenState('result');
@@ -2035,7 +2197,9 @@ export class Game {
       : '机体战损 · SIGNAL LOST';
     this.els['result-subtitle'].textContent = victory
       ? `${this.activeShip.nameZh} 成功摧毁龙骨母舰，破晓航道已全面肃清`
-      : `在第 ${this.waves.getAct()} 幕空域遭遇重创，请整备战机再战`;
+      : this.playerDeathReason === 'gate_crash'
+        ? `${this.activeShip.nameZh} 高速撞击星际跃迁闸门装甲结构，机体已爆炸解体`
+        : `在第 ${this.waves.getAct()} 幕空域遭遇重创，请整备战机再战`;
 
     const newRecordTag = recordInfo.isNewBestScore ? ' <span class="badge-new">NEW BEST!</span>' : '';
     const endlessRow = this.waves.isEndless()
@@ -2298,6 +2462,37 @@ export class Game {
     const enemySlowFactor =
       this.activeShip.id === 'aero' && this.ultimateActiveTimer > 0 ? 0.28 : 1.0;
 
+    if (this.playerDying) {
+      this.playerDeathTimer -= rawDt;
+      if (this.playerDeathTimer <= 0.48 && !this.playerDeathSecondaryBurstDone) {
+        this.playerDeathSecondaryBurstDone = true;
+        this.vfx.spawnExplosion(
+          this.playerPos.clone().add(new THREE.Vector3(-0.45, 0.25, 0.2)),
+          3.4,
+          0xff6b2b,
+          true
+        );
+        this.vfx.spawnSparks(this.playerPos, 18, 0xffb347, 22);
+      }
+
+      this.waves.updateEnvironment(dt, 0.85);
+      this.vfx.update(dt);
+      this.updatePlayerBullets(dt);
+      this.updateEnemyBullets(dt * enemySlowFactor);
+      this.updateCameraAndFloatingTexts(rawDt);
+      this.envSystem.update(dt, this.globalElapsed, 36 * 0.85, this.camera);
+      this.updateHud();
+
+      if (this.playerDeathTimer <= 0) {
+        this.playerDying = false;
+        this.showResultDialog(false);
+      }
+      return;
+    }
+
+    // 0. Launch Countdown Transition (3 -> 2 -> 1 -> ENGAGE)
+    this.updateLaunchCountdown(dt);
+
     // 1. Environment & boost ring checks
     const envBoost = this.boostFovTimer > 0 || this.ultimateActiveTimer > 0 ? 1.55 : 1.0;
     this.waves.updateEnvironment(dt, envBoost);
@@ -2324,9 +2519,20 @@ export class Game {
     // 2. Player Movement, Firing, Abilities & Rig
     this.updatePlayer(dt);
 
-    // 3. Wave Director Spawning
-    const waveEv = this.waves.updateWaves(dt);
-    if (waveEv) this.handleWaveEvent(waveEv);
+    // Solid obstacle impact test against Act 2/3 Warp Gate bulkhead & door armor
+    if (!this.playerDying && this.launchCountdownCombatUnlocked) {
+      const gateHit = this.waves.checkGateSolidCollision(this.playerPos, 1.1);
+      if (gateHit !== null) {
+        this.triggerPlayerCrashDestruction();
+        return;
+      }
+    }
+
+    // 3. Wave Director Spawning (held until countdown reaches ENGAGE)
+    if (this.launchCountdownCombatUnlocked) {
+      const waveEv = this.waves.updateWaves(dt);
+      if (waveEv) this.handleWaveEvent(waveEv);
+    }
 
     // 4. Enemies & Bosses
     this.updateEnemies(dt * enemySlowFactor);
@@ -2480,8 +2686,10 @@ export class Game {
       w.rig.update({ dt, elapsed: this.globalElapsed });
     }
 
-    // Firing
-    if ((this.autoFire || this.pointerDown) && this.fireCooldown <= 0) {
+    // Firing (held cleanly until 3-2-1 launch countdown completes)
+    if (!this.launchCountdownCombatUnlocked) {
+      this.invulnTimer = Math.max(this.invulnTimer, 0.8);
+    } else if ((this.autoFire || this.pointerDown) && this.fireCooldown <= 0) {
       this.fireMainWeapons();
     }
 
@@ -2946,6 +3154,13 @@ export class Game {
 
       b.pos.addScaledVector(b.vel, dt);
 
+      if (this.waves.checkGateSolidCollision(b.pos, 0.55) !== null) {
+        this.projectileVisuals.spawnBulletImpact(b.pos, 0xffb347, false);
+        this.vfx.spawnSparks(b.pos, 4, 0xffb347, 10);
+        this.playerBullets.splice(i, 1);
+        continue;
+      }
+
       // 1. Check Enemies
       let removed = false;
       for (let ei = this.waves.activeEnemies.length - 1; ei >= 0; ei--) {
@@ -3279,7 +3494,7 @@ export class Game {
 
       eb.pos.addScaledVector(eb.vel, dt);
 
-      if (this.invulnTimer <= 0 && eb.pos.distanceToSquared(this.playerPos) < 1.55 * 1.55) {
+      if (!this.playerDying && this.invulnTimer <= 0 && eb.pos.distanceToSquared(this.playerPos) < 1.55 * 1.55) {
         this.applyPlayerDamage(eb.damage);
         this.enemyBullets.splice(i, 1);
         continue;
@@ -3289,7 +3504,57 @@ export class Game {
     this.projectileVisuals.syncEnemyProjectiles(this.enemyBullets, dt, this.globalElapsed);
   }
 
+  private triggerPlayerCrashDestruction(): void {
+    if (this.playerDying) return;
+    this.playerDying = true;
+    this.playerDeathTimer = 0.85;
+    this.playerDeathSecondaryBurstDone = false;
+    this.playerDeathReason = 'gate_crash';
+    this.playerHp = 0;
+    this.slowMoTimer = Math.max(this.slowMoTimer, 0.72);
+    this.screenShake = 1.25;
+
+    if (this.playerInstance) {
+      this.playerInstance.root.visible = false;
+    }
+    this.beamGroup.visible = false;
+    this.projectileVisuals.updateRollShield(
+      false,
+      this.playerPos,
+      0,
+      this.activeShip.accentHex,
+      this.globalElapsed
+    );
+    this.projectileVisuals.updatePlayerThrusters(
+      false,
+      this.playerPos,
+      this.tmpQuat,
+      this.playerVel,
+      this.activeShip.engineColor,
+      false,
+      0,
+      this.globalElapsed
+    );
+
+    this.vfx.spawnExplosion(this.playerPos, 4.4, 0xff4757, true);
+    this.vfx.spawnExplosion(
+      this.playerPos.clone().add(new THREE.Vector3(0.55, 0.35, -0.35)),
+      2.8,
+      0xffb347,
+      false
+    );
+    this.vfx.spawnSparks(this.playerPos, 32, 0xff8c2b, 26);
+    this.vfx.spawnSparks(this.playerPos, 24, 0x00f0ff, 20);
+
+    this.sound.playShieldHit();
+    this.sound.playExplosion('boss');
+    this.flashDamageVignette('damage');
+    this.showBanner('⚠ 警报: 撞击闸门装甲 · 机体爆炸解体');
+    this.updateHud();
+  }
+
   private applyPlayerDamage(dmg: number): void {
+    if (this.playerDying) return;
     this.playerHp = Math.max(0, this.playerHp - dmg);
     this.invulnTimer = 0.55;
     this.timeSinceHit = 0;
@@ -3301,6 +3566,7 @@ export class Game {
     this.projectileVisuals.spawnBulletImpact(this.playerPos, 0xff4757, false);
 
     if (this.playerHp <= 0) {
+      this.playerDeathReason = 'combat';
       this.vfx.spawnExplosion(this.playerPos, 3.4, 0xff4757, true);
       this.sound.playExplosion('boss');
       this.showResultDialog(false);
@@ -3576,6 +3842,10 @@ export class Game {
           ultCharge: Math.round(this.ultimateCharge),
           ultMax: this.activeShip.ultimateCost,
           ultActiveTimer: +this.ultimateActiveTimer.toFixed(3),
+          countdownActive: !this.launchCountdownCombatUnlocked,
+          countdownRemaining: +Math.max(0, this.launchCountdownRemaining).toFixed(2),
+          playerDying: this.playerDying,
+          activeGateCount: this.waves.getActiveGateCount(),
           enemyCount: this.waves.activeEnemies.length,
           enemyBulletCount: this.enemyBullets.length,
           playerBulletCount: this.playerBullets.length,
@@ -3634,6 +3904,7 @@ export class Game {
           this.setScreenState('playing');
         }
         if (this.state === 'playing') {
+          this.clearLaunchCountdown(true);
           this.openUpgradeDialog();
         }
       },
@@ -3649,6 +3920,14 @@ export class Game {
           this.clearInputState();
           this.setScreenState('playing');
         }
+        this.playerDying = false;
+        this.playerDeathTimer = 0;
+        this.playerDeathSecondaryBurstDone = false;
+        this.playerDeathReason = 'combat';
+        if (this.playerInstance) {
+          this.playerInstance.root.visible = true;
+        }
+        this.clearLaunchCountdown(false);
         this.enemyBullets.length = 0;
         this.projectileVisuals.syncEnemyProjectiles(this.enemyBullets, 0, this.globalElapsed);
         const ev = this.waves.forceSpawnBoss(act);
@@ -3719,6 +3998,14 @@ export class Game {
 
       setGraphicsPreset: (preset: GraphicsPreset): void => {
         this.setGraphicsPreset(preset);
+      },
+
+      spawnGateNow: (z = -220, mode: 'closed' | 'opening' | 'open' = 'open'): void => {
+        if (this.state !== 'playing') return;
+        this.clearLaunchCountdown(false);
+        this.waves.setCombatActive(true);
+        this.waves.forceSpawnGate(z, mode);
+        this.waves.updateEnvironment(0, 1.0);
       },
     };
 

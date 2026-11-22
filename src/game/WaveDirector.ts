@@ -94,6 +94,23 @@ export interface WaveEvent {
   bossConfig?: BossConfig;
 }
 
+export type GateHitKind = 'door' | 'frame' | null;
+
+// Analytical prop_gate dimensions derived from GLB bounds (maxDim=4.52, targetSize=44).
+const GATE_SCALE = 44 / 4.52;
+const GATE_FRAME_HALF_X = 2.26 * GATE_SCALE;
+const GATE_FRAME_HALF_Y = 1.98 * GATE_SCALE;
+const GATE_FRAME_Z_OFFSET = -0.08 * GATE_SCALE;
+const GATE_FRAME_HALF_Z = 0.34 * GATE_SCALE;
+const GATE_APERTURE_R = 1.47 * GATE_SCALE;
+const GATE_HINGE_X = 1.698 * GATE_SCALE;
+const GATE_HINGE_Y = -0.007 * GATE_SCALE;
+const GATE_HINGE_Z = 0.250 * GATE_SCALE;
+const GATE_DOOR_CENTER_DX = -1.698 * GATE_SCALE;
+const GATE_DOOR_CENTER_DZ = -0.330 * GATE_SCALE;
+const GATE_DOOR_R = 1.47 * GATE_SCALE;
+const GATE_DOOR_HALF_THICK = 0.51 * GATE_SCALE;
+
 const ENEMY_CAPS: Record<EnemyKind, number> = {
   enemy_drone: 8,
   enemy_turret: 5,
@@ -108,11 +125,17 @@ export class WaveDirector {
   private readonly envGroup = new THREE.Group();
   private readonly corridorProps: CorridorProp[] = [];
   private readonly boostRings: BoostRing[] = [];
-  private readonly gateBeaconGeo = new THREE.TorusGeometry(6.0, 0.16, 10, 40);
+  private readonly gateBeaconGeo = new THREE.TorusGeometry(9.2, 0.18, 12, 48);
   private readonly gateBeaconMat = new THREE.MeshBasicMaterial({
     color: 0x00f0ff,
     transparent: true,
     opacity: 0.72,
+    blending: THREE.AdditiveBlending,
+  });
+  private readonly gateBeaconWarnMat = new THREE.MeshBasicMaterial({
+    color: 0xffb347,
+    transparent: true,
+    opacity: 0.78,
     blending: THREE.AdditiveBlending,
   });
 
@@ -234,6 +257,7 @@ export class WaveDirector {
   clearCorridorProps(): void {
     for (const p of this.corridorProps) {
       if (p.beaconRing) p.beaconRing.removeFromParent();
+      p.rig?.dispose();
       this.loader.release(p.instance);
     }
     this.corridorProps.length = 0;
@@ -244,6 +268,7 @@ export class WaveDirector {
       const p = this.corridorProps[i];
       if (p.kind !== 'gate') continue;
       if (p.beaconRing) p.beaconRing.removeFromParent();
+      p.rig?.dispose();
       this.loader.release(p.instance);
       this.corridorProps.splice(i, 1);
     }
@@ -552,10 +577,13 @@ export class WaveDirector {
       }
       if (p.beaconRing) {
         p.beaconRing.rotation.z += dt * 1.8;
+        const doorAngle = p.rig ? p.rig.getGateDoorAngleRad() : 0;
+        p.beaconRing.material = doorAngle < 1.48 ? this.gateBeaconWarnMat : this.gateBeaconMat;
       }
 
-      if (p.instance.root.position.z > 32) {
+      if (p.instance.root.position.z > 34) {
         if (p.beaconRing) p.beaconRing.removeFromParent();
+        p.rig?.dispose();
         this.loader.release(p.instance);
         this.corridorProps.splice(i, 1);
       }
@@ -592,19 +620,76 @@ export class WaveDirector {
     }
   }
 
-  private spawnCorridorGate(): void {
+  forceSpawnGate(z = -220, mode: 'closed' | 'opening' | 'open' = 'closed'): void {
+    this.clearTransientCorridorGates();
+    this.spawnCorridorGate(z, mode);
+  }
+
+  getActiveGateCount(): number {
+    let count = 0;
+    for (const p of this.corridorProps) {
+      if (p.kind === 'gate') count += 1;
+    }
+    return count;
+  }
+
+  checkGateSolidCollision(point: THREE.Vector3, radius: number): GateHitKind {
+    for (const p of this.corridorProps) {
+      if (p.kind !== 'gate') continue;
+      const gPos = p.instance.root.position;
+      const lx = point.x - gPos.x;
+      const ly = point.y - gPos.y;
+      const lz = point.z - gPos.z;
+      if (Math.abs(lz) > 42 || Math.abs(lx) > 36 || Math.abs(ly) > 26) continue;
+
+      // Exact rotated vault door solid disc test around right-side vertical hinge.
+      const theta = p.rig ? p.rig.getGateDoorAngleRad() : 0;
+      const rx = lx - GATE_HINGE_X;
+      const ry = ly - GATE_HINGE_Y;
+      const rz = lz - GATE_HINGE_Z;
+      const c = Math.cos(theta);
+      const sn = Math.sin(theta);
+      const ux = rx * c - rz * sn;
+      const uz = rx * sn + rz * c;
+      const radDist = Math.hypot(ux - GATE_DOOR_CENTER_DX, ry);
+      const axialDist = Math.abs(uz - GATE_DOOR_CENTER_DZ);
+      const dr = Math.max(0, radDist - GATE_DOOR_R);
+      const dz = Math.max(0, axialDist - GATE_DOOR_HALF_THICK);
+      if (dr * dr + dz * dz < radius * radius) {
+        return 'door';
+      }
+
+      // Bulkhead outer frame test outside circular portal aperture.
+      if (
+        Math.abs(lz - GATE_FRAME_Z_OFFSET) < GATE_FRAME_HALF_Z + radius &&
+        Math.abs(lx) < GATE_FRAME_HALF_X + radius &&
+        Math.abs(ly) < GATE_FRAME_HALF_Y + radius
+      ) {
+        if (Math.hypot(lx, ly) > GATE_APERTURE_R - radius * 0.85) {
+          return 'frame';
+        }
+      }
+    }
+    return null;
+  }
+
+  private spawnCorridorGate(
+    startZ = -220,
+    initialMode: 'closed' | 'opening' | 'open' = 'closed'
+  ): void {
     // Cap concurrent active gates at 2
     const activeGates = this.corridorProps.filter((p) => p.kind === 'gate').length;
     if (activeGates >= 2) return;
 
     const inst = this.loader.acquire('prop_gate', false);
-    const rig = new AnimationRig('prop_gate', inst.modelRoot, inst.animations, 'closed');
-    inst.root.position.set(0, 0, -210);
+    const rig = new AnimationRig('prop_gate', inst.modelRoot, inst.animations, initialMode);
+    inst.root.position.set(0, 0, startZ);
     inst.root.rotation.set(0, 0, 0);
 
-    // Holographic cyan guidance ring indicating safe open passage (prop_gate is centered at origin)
-    const beaconRing = new THREE.Mesh(this.gateBeaconGeo, this.gateBeaconMat);
-    beaconRing.position.set(0, 0, 1.2);
+    // Holographic guidance ring indicating safe open passage inside the circular aperture.
+    const initMat = rig.getGateDoorAngleRad() < 1.48 ? this.gateBeaconWarnMat : this.gateBeaconMat;
+    const beaconRing = new THREE.Mesh(this.gateBeaconGeo, initMat);
+    beaconRing.position.set(0, 0, 1.4);
     inst.root.add(beaconRing);
 
     this.envGroup.add(inst.root);
