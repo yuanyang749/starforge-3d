@@ -81,9 +81,8 @@ export interface BoostRing {
 interface CorridorProp {
   instance: PooledModelInstance;
   rig: AnimationRig | null;
-  kind: 'tile' | 'gate';
+  kind: 'gate';
   beaconRing: THREE.Mesh | null;
-  sideSign: number;
 }
 
 export interface WaveEvent {
@@ -204,54 +203,8 @@ export class WaveDirector {
     }
   }
 
-  initCorridorProps(): void {
-    this.clearCorridorProps();
-    // Spawn 10 flanking city blocks (-220 to +20) seated along Act 1 terrace decks (y = -10.2)
-    const scaleHeights = [0.92, 1.28, 1.05, 1.42, 0.86];
-    const scaleDepths = [1.0, 1.12, 0.94, 1.16, 1.04];
-    const yawOffsets = [0, Math.PI, Math.PI * 0.5, -Math.PI * 0.5, Math.PI];
-
-    for (let i = 0; i < 5; i++) {
-      const z = -i * 48 - 10;
-      for (const side of [-1, 1]) {
-        const inst = this.loader.acquire('prop_city_tile', false);
-        const slotIdx = (i + (side > 0 ? 2 : 0)) % scaleHeights.length;
-        const heightScale = scaleHeights[slotIdx];
-        const depthScale = scaleDepths[slotIdx];
-        const yBase = -9.6 + (heightScale - 1.0) * 3.1;
-        const xOffset = side * (25.5 + (slotIdx % 2) * 1.4);
-        inst.root.position.set(xOffset, yBase, z);
-        inst.root.scale.set(depthScale, heightScale, depthScale);
-        inst.root.rotation.set(
-          0,
-          (side > 0 ? Math.PI * 0.5 : -Math.PI * 0.5) + yawOffsets[(i + (side > 0 ? 1 : 0)) % yawOffsets.length],
-          0
-        );
-        this.envGroup.add(inst.root);
-        this.corridorProps.push({
-          instance: inst,
-          rig: null,
-          kind: 'tile',
-          beaconRing: null,
-          sideSign: side,
-        });
-      }
-    }
-    this.syncCityTileVisibility();
-  }
-
   setCombatActive(active: boolean): void {
     this.combatActive = active;
-    this.syncCityTileVisibility();
-  }
-
-  private syncCityTileVisibility(): void {
-    const showTiles = this.combatActive && this.currentAct === 1;
-    for (const p of this.corridorProps) {
-      if (p.kind === 'tile') {
-        p.instance.root.visible = showTiles;
-      }
-    }
   }
 
   clearCorridorProps(): void {
@@ -293,7 +246,6 @@ export class WaveDirector {
     }
 
     this.clearTransientCorridorGates();
-    this.syncCityTileVisibility();
   }
 
   getBoostRings(): BoostRing[] {
@@ -318,7 +270,6 @@ export class WaveDirector {
 
   startCampaign(): WaveEvent {
     this.clearCombatEntities();
-    if (this.corridorProps.length === 0) this.initCorridorProps();
 
     this.combatActive = true;
     this.currentAct = 1;
@@ -334,7 +285,6 @@ export class WaveDirector {
 
   startEndlessMode(): WaveEvent {
     this.clearCombatEntities();
-    if (this.corridorProps.length === 0) this.initCorridorProps();
 
     this.combatActive = true;
     this.endlessMode = true;
@@ -350,7 +300,6 @@ export class WaveDirector {
 
   forceSpawnBoss(act: 1 | 2 | 3): WaveEvent {
     this.clearCombatEntities();
-    if (this.corridorProps.length === 0) this.initCorridorProps();
     this.combatActive = true;
     this.currentAct = act;
     this.waveInAct = 3;
@@ -412,7 +361,6 @@ export class WaveDirector {
 
     this.phaseState = 'idle';
     this.combatActive = false;
-    this.syncCityTileVisibility();
     return {
       type: 'campaign_victory',
       act: 3,
@@ -539,7 +487,6 @@ export class WaveDirector {
         this.scene.fog.density = 0.0022;
       }
     }
-    this.syncCityTileVisibility();
   }
 
   updateEnvironment(dt: number, speedMultiplier: number): void {
@@ -556,21 +503,9 @@ export class WaveDirector {
       this.scene.fog.density = 0.0022;
     }
 
-    const showCityTiles = this.combatActive && this.currentAct === 1;
-
-    // Move Act 1 skyline tiles (hidden in Hangar/Act 2/Act 3) and handle Act 2/3 Warp Gateways
+    // Move and animate Act 2/3 Warp Gateways
     for (let i = this.corridorProps.length - 1; i >= 0; i--) {
       const p = this.corridorProps[i];
-      if (p.kind === 'tile') {
-        p.instance.root.visible = showCityTiles;
-        if (!showCityTiles) continue;
-        p.instance.root.position.z += scrollSpeed * dt;
-        if (p.instance.root.position.z > 32) {
-          p.instance.root.position.z -= 240;
-        }
-        continue;
-      }
-
       p.instance.root.position.z += scrollSpeed * dt;
       if (p.rig) {
         p.rig.update({ dt, elapsed: performance.now() * 0.001, worldPos: p.instance.root.position });
@@ -698,7 +633,6 @@ export class WaveDirector {
       rig,
       kind: 'gate',
       beaconRing,
-      sideSign: 0,
     });
   }
 

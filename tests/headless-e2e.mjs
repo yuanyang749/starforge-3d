@@ -781,8 +781,18 @@ async function runTests() {
     });
     await sleep(170);
 
+    await page.evaluate(() => {
+      window.__STARFORGE__.spawnPickupNow('repair', -4.2, 0.2, -13);
+      window.__STARFORGE__.spawnPickupNow('energy', 4.2, 0.2, -13);
+    });
+    await sleep(120);
+
     const aeroSnap = await page.evaluate(() => window.__STARFORGE__.getSnapshot());
     check(aeroSnap.selectedShipId === 'aero', `Expected aero sortie, got ${aeroSnap.selectedShipId}`);
+    check(
+      aeroSnap.pickupCount >= 2,
+      `Expected >=2 active 3D pickups spawned for HUD/visual inspection, got ${aeroSnap.pickupCount}`
+    );
     check(
       aeroSnap.critChance >= 0.25,
       `Expected ship_aero passive critChance >= 0.25, got ${aeroSnap.critChance}`
@@ -1151,6 +1161,10 @@ async function runTests() {
     // ==================== STAGE 6: Slow-Mo Boss Kill, Victory, Save & Endless ====================
     console.log('[e2e] Stage 6: Slow-Mo Boss Kill, Victory Dialog, Save & Endless Mode...');
 
+    await page.evaluate(() => window.__STARFORGE__.setPlayerHp(35));
+    const preClearSnap = await page.evaluate(() => window.__STARFORGE__.getSnapshot());
+    check(preClearSnap.hp === 35, `Expected pre-clear damaged hp === 35, got ${preClearSnap.hp}`);
+
     const bossKilled = await page.evaluate(() => window.__STARFORGE__.damageBossCore(999999));
     check(bossKilled === true, 'Expected damageBossCore() to return true');
     await sleep(120);
@@ -1188,6 +1202,10 @@ async function runTests() {
     }));
     check(resultInfo.snap.dialogs?.resultOpen === true, 'Expected resultOpen=true');
     check(
+      resultInfo.snap.hp === resultInfo.snap.maxHp,
+      `Expected full HP restored on stage clear (${resultInfo.snap.hp}/${resultInfo.snap.maxHp})`
+    );
+    check(
       resultInfo.snap.audio?.activeBgm === null,
       `Expected activeBgm=null during result stinger, got ${JSON.stringify(resultInfo.snap.audio)}`
     );
@@ -1213,7 +1231,8 @@ async function runTests() {
     await assertFpsHudVisible(page, 'victory-dialog');
     passedChecks += 2;
 
-    // Enter Endless Mode
+    // Enter Endless Mode (verify full HP restoration again)
+    await page.evaluate(() => window.__STARFORGE__.setPlayerHp(40));
     await page.click('#result-endless-btn');
     await page.waitForFunction(
       () =>
@@ -1226,6 +1245,10 @@ async function runTests() {
       snap: window.__STARFORGE__.getSnapshot(),
       actLabel: document.getElementById('hud-act-label')?.textContent?.trim() || '',
     }));
+    check(
+      endlessSnap.snap.hp === endlessSnap.snap.maxHp,
+      `Expected full HP restored on entering Endless Mode (${endlessSnap.snap.hp}/${endlessSnap.snap.maxHp})`
+    );
     check(
       endlessSnap.snap.endless === true,
       `Expected snapshot.endless === true after clicking Endless Mode, got ${JSON.stringify(endlessSnap)}`

@@ -103,6 +103,7 @@ export interface StarforgeSnapshot {
   countdownRemaining: number;
   playerDying: boolean;
   activeGateCount: number;
+  pickupCount: number;
   enemyCount: number;
   enemyBulletCount: number;
   playerBulletCount: number;
@@ -139,6 +140,8 @@ export interface StarforgeQaApi {
   triggerBarrelRoll(): boolean;
   setGraphicsPreset(preset: GraphicsPreset): void;
   spawnGateNow(z?: number, mode?: 'closed' | 'opening' | 'open'): void;
+  spawnPickupNow(kind: 'repair' | 'energy', x?: number, y?: number, z?: number): void;
+  setPlayerHp(hp: number): void;
 }
 
 declare global {
@@ -174,6 +177,9 @@ interface EnemyBullet {
 
 interface PickupItem {
   kind: 'repair' | 'energy';
+  instance: PooledModelInstance;
+  haloRing: THREE.Mesh;
+  glowSprite: THREE.Sprite;
   pos: THREE.Vector3;
   vel: THREE.Vector3;
   age: number;
@@ -245,14 +251,18 @@ export class Game {
   private readonly waves: WaveDirector;
 
   // Lighting & Hangar Pedestal
+  private readonly keyLight: THREE.DirectionalLight;
   private readonly accentPointLight: THREE.PointLight;
   private readonly hangarPedestal = new THREE.Group();
   private readonly beamGroup = new THREE.Group();
 
-  // Instanced Pickups
-  private readonly repairPickupInst: THREE.InstancedMesh;
-  private readonly energyPickupInst: THREE.InstancedMesh;
-  private readonly dummy = new THREE.Object3D();
+  // 3D Pickup Aura & Halo Resources
+  private readonly pickupHaloGeo: THREE.TorusGeometry;
+  private readonly pickupRepairHaloMat: THREE.MeshBasicMaterial;
+  private readonly pickupEnergyHaloMat: THREE.MeshBasicMaterial;
+  private readonly pickupGlowTex: THREE.CanvasTexture;
+  private readonly pickupRepairGlowMat: THREE.SpriteMaterial;
+  private readonly pickupEnergyGlowMat: THREE.SpriteMaterial;
 
   // State
   private state: GameState = 'boot';
@@ -386,8 +396,10 @@ export class Game {
       stencil: false,
     });
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.25;
+    this.renderer.toneMappingExposure = 1.12;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.hardwareProfile = this.detectHardwareProfile();
 
     this.scene = new THREE.Scene();
@@ -402,16 +414,26 @@ export class Game {
     );
     this.camera.position.set(0, 2.2, 8.2);
 
-    // Rich 3-point + hemisphere space lighting
-    const hemi = new THREE.HemisphereLight(0xa5f3fc, 0x1e1b4b, 1.35);
-    const keyLight = new THREE.DirectionalLight(0xfff4e6, 2.6);
-    keyLight.position.set(14, 24, 18);
-    const rimCyan = new THREE.DirectionalLight(0x00f0ff, 1.55);
+    // Rich 3-point + hemisphere space lighting with real-time Hangar key shadow
+    const hemi = new THREE.HemisphereLight(0x9ee6ff, 0x0e1428, 0.78);
+    this.keyLight = new THREE.DirectionalLight(0xfff6ea, 2.85);
+    this.keyLight.position.set(10, 18, 12);
+    this.keyLight.castShadow = false;
+    this.keyLight.shadow.mapSize.set(2048, 2048);
+    this.keyLight.shadow.camera.near = 2;
+    this.keyLight.shadow.camera.far = 45;
+    this.keyLight.shadow.camera.left = -5;
+    this.keyLight.shadow.camera.right = 5;
+    this.keyLight.shadow.camera.top = 5;
+    this.keyLight.shadow.camera.bottom = -5;
+    this.keyLight.shadow.bias = -0.0004;
+    this.keyLight.shadow.normalBias = 0.02;
+    const rimCyan = new THREE.DirectionalLight(0x22e8ff, 1.75);
     rimCyan.position.set(-18, 8, -14);
-    const fillWarm = new THREE.DirectionalLight(0xffb347, 0.9);
+    const fillWarm = new THREE.DirectionalLight(0xffa63b, 0.65);
     fillWarm.position.set(12, -10, -8);
     this.accentPointLight = new THREE.PointLight(0x00f0ff, 2.5, 22);
-    this.scene.add(hemi, keyLight, rimCyan, fillWarm, this.accentPointLight);
+    this.scene.add(hemi, this.keyLight, rimCyan, fillWarm, this.accentPointLight);
 
     this.envSystem = new EnvironmentSystem(this.scene, this.renderer);
     this.projectileVisuals = new ProjectileVisuals(this.scene);
@@ -419,31 +441,59 @@ export class Game {
     this.waves = new WaveDirector(this.scene, this.loader);
     this.initPostProcessing();
 
-    // Hangar turntable pedestal
+    // Hangar recessed open-berth turntable pedestal (exposes 2K PBR deck plate & 2K shadow beneath fighter)
     const padOuter = new THREE.Mesh(
-      new THREE.TorusGeometry(2.65, 0.05, 10, 64),
-      new THREE.MeshBasicMaterial({ color: 0x00f0ff, transparent: true, opacity: 0.85 })
-    );
-    padOuter.rotation.x = Math.PI * 0.5;
-    padOuter.position.y = -1.6;
-    const padInner = new THREE.Mesh(
-      new THREE.TorusGeometry(1.9, 0.03, 8, 48),
-      new THREE.MeshBasicMaterial({ color: 0xffb347, transparent: true, opacity: 0.65 })
-    );
-    padInner.rotation.x = Math.PI * 0.5;
-    padInner.position.y = -1.62;
-    const padDisc = new THREE.Mesh(
-      new THREE.CylinderGeometry(2.6, 2.8, 0.12, 48),
-      new THREE.MeshStandardMaterial({
-        color: 0x0b162c,
-        metalness: 0.85,
-        roughness: 0.25,
-        emissive: 0x082f49,
-        emissiveIntensity: 0.65,
+      new THREE.TorusGeometry(2.72, 0.028, 10, 72),
+      new THREE.MeshBasicMaterial({
+        color: 0x22e8ff,
+        transparent: true,
+        opacity: 0.72,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
       })
     );
-    padDisc.position.y = -1.68;
-    this.hangarPedestal.add(padOuter, padInner, padDisc);
+    padOuter.rotation.x = Math.PI * 0.5;
+    padOuter.position.y = -1.692;
+    const padInner = new THREE.Mesh(
+      new THREE.TorusGeometry(1.96, 0.02, 8, 56),
+      new THREE.MeshBasicMaterial({
+        color: 0xffb347,
+        transparent: true,
+        opacity: 0.45,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+    );
+    padInner.rotation.x = Math.PI * 0.5;
+    padInner.position.y = -1.696;
+    const padCollarGeo = new THREE.RingGeometry(2.42, 2.76, 72);
+    padCollarGeo.rotateX(-Math.PI * 0.5);
+    const padCollar = new THREE.Mesh(
+      padCollarGeo,
+      new THREE.MeshPhysicalMaterial({
+        color: 0x16243a,
+        metalness: 0.9,
+        roughness: 0.22,
+        clearcoat: 0.65,
+        clearcoatRoughness: 0.18,
+      })
+    );
+    padCollar.position.y = -1.706;
+    padCollar.receiveShadow = true;
+    const padHoloGeo = new THREE.CircleGeometry(2.4, 64);
+    padHoloGeo.rotateX(-Math.PI * 0.5);
+    const padHolo = new THREE.Mesh(
+      padHoloGeo,
+      new THREE.MeshBasicMaterial({
+        color: 0x0ea5e9,
+        transparent: true,
+        opacity: 0.07,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+      })
+    );
+    padHolo.position.y = -1.712;
+    this.hangarPedestal.add(padOuter, padInner, padCollar, padHolo);
     this.hangarPedestal.visible = false;
     this.scene.add(this.hangarPedestal);
 
@@ -477,32 +527,39 @@ export class Game {
     this.beamGroup.visible = false;
     this.scene.add(this.beamGroup);
 
-    // Instanced Pickups
-    const repairGeo = new THREE.OctahedronGeometry(0.7, 0);
-    const repairMat = new THREE.MeshStandardMaterial({
-      color: 0x10b981,
-      emissive: 0x34d399,
-      emissiveIntensity: 1.5,
-      roughness: 0.2,
-      metalness: 0.5,
+    // 3D Pickup Aura & Halo Resources
+    this.pickupHaloGeo = new THREE.TorusGeometry(1.22, 0.036, 10, 32);
+    this.pickupRepairHaloMat = new THREE.MeshBasicMaterial({
+      color: 0x34f5a8,
+      transparent: true,
+      opacity: 0.68,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
     });
-    this.repairPickupInst = new THREE.InstancedMesh(repairGeo, repairMat, MAX_PICKUPS);
-    this.repairPickupInst.frustumCulled = false;
-    this.repairPickupInst.count = 0;
-
-    const energyGeo = new THREE.IcosahedronGeometry(0.7, 0);
-    const energyMat = new THREE.MeshStandardMaterial({
-      color: 0xf59e0b,
-      emissive: 0xc084fc,
-      emissiveIntensity: 1.6,
-      roughness: 0.2,
-      metalness: 0.5,
+    this.pickupEnergyHaloMat = new THREE.MeshBasicMaterial({
+      color: 0xffbe42,
+      transparent: true,
+      opacity: 0.72,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
     });
-    this.energyPickupInst = new THREE.InstancedMesh(energyGeo, energyMat, MAX_PICKUPS);
-    this.energyPickupInst.frustumCulled = false;
-    this.energyPickupInst.count = 0;
-
-    this.scene.add(this.repairPickupInst, this.energyPickupInst);
+    this.pickupGlowTex = this.createPickupGlowTexture();
+    this.pickupRepairGlowMat = new THREE.SpriteMaterial({
+      map: this.pickupGlowTex,
+      color: 0x22ff99,
+      transparent: true,
+      opacity: 0.22,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
+    this.pickupEnergyGlowMat = new THREE.SpriteMaterial({
+      map: this.pickupGlowTex,
+      color: 0xffaa2b,
+      transparent: true,
+      opacity: 0.24,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+    });
 
     // Query required DOM elements & native dialogs
     this.els = this.cacheDomElements([
@@ -630,7 +687,7 @@ export class Game {
 
     const isHighGpu =
       !isLowGpu &&
-      /(rtx\s*(30[789]0|40[789]0|50[789]0)|radeon\s*rx\s*(6[89]\d0|7[89]\d0|9070)|apple\s*m[1-9]\d?\s*(max|ultra))/i.test(
+      /(rtx\s*(30[789]0|40[789]0|50[789]0)|radeon\s*rx\s*(6[89]\d0|7[89]\d0|9070)|apple\s*m[1-9]\d?\s*(pro|max|ultra))/i.test(
         rawLower
       ) &&
       cpuCores >= 8 &&
@@ -644,7 +701,7 @@ export class Game {
     const recommendedLabelZh =
       tier === 'low' ? '720P 极速' : tier === 'high' ? '2K 超清' : '1080P 均衡';
     const autoPixelBudget =
-      tier === 'low' ? 1_100_000 : tier === 'high' ? 3_686_400 : 2_073_600;
+      tier === 'low' ? 1_100_000 : tier === 'high' ? 3_686_400 : 2_560_000;
 
     const screenCssW = Math.max(1, Math.round(window.screen?.width || window.innerWidth));
     const screenCssH = Math.max(1, Math.round(window.screen?.height || window.innerHeight));
@@ -759,8 +816,8 @@ export class Game {
     const preset = this.graphicsPreset;
     const tier = this.hardwareProfile.tier;
     let budget: number;
-    let bloomCapW = 960;
-    let bloomCapH = 540;
+    let bloomCapW = 1280;
+    let bloomCapH = 720;
     let useBloom = true;
 
     if (preset === '720p') {
@@ -770,12 +827,12 @@ export class Game {
       bloomCapH = 360;
     } else if (preset === '1080p') {
       budget = 2_073_600;
-      bloomCapW = 960;
-      bloomCapH = 540;
-    } else if (preset === '1440p') {
-      budget = 3_686_400;
       bloomCapW = 1280;
       bloomCapH = 720;
+    } else if (preset === '1440p') {
+      budget = 3_686_400;
+      bloomCapW = 1440;
+      bloomCapH = 810;
     } else if (preset === 'native') {
       budget = 8_294_400;
       bloomCapW = 1440;
@@ -783,8 +840,8 @@ export class Game {
     } else {
       budget = this.hardwareProfile.autoPixelBudget * this.drsScale * this.drsScale;
       if (tier === 'high') {
-        bloomCapW = 1280;
-        bloomCapH = 720;
+        bloomCapW = 1440;
+        bloomCapH = 810;
       } else if (tier === 'low') {
         bloomCapW = 640;
         bloomCapH = 360;
@@ -798,10 +855,13 @@ export class Game {
     const internalH = Math.max(1, Math.round(h * dpr));
     const bloomW = Math.min(bloomCapW, Math.max(1, Math.round(internalW * 0.5)));
     const bloomH = Math.min(bloomCapH, Math.max(1, Math.round(internalH * 0.5)));
+    const maxSamples = this.renderer.capabilities.maxSamples || 0;
     const msaaSamples =
-      preset === '720p' || internalW * internalH > 2_000_000 || !this.renderer.capabilities.isWebGL2
+      preset === '720p' || !this.renderer.capabilities.isWebGL2
         ? 0
-        : Math.min(2, this.renderer.capabilities.maxSamples || 0);
+        : internalW * internalH <= 3_700_000
+          ? Math.min(4, maxSamples)
+          : Math.min(2, maxSamples);
     return { dpr, internalW, internalH, bloomW, bloomH, useBloom, msaaSamples };
   }
 
@@ -821,11 +881,19 @@ export class Game {
 
     if (this.composer) {
       if (this.composer.renderTarget1.samples !== res.msaaSamples) {
-        const nextRt = new THREE.WebGLRenderTarget(res.internalW, res.internalH, {
-          type: THREE.HalfFloatType,
-          samples: res.msaaSamples,
-        });
-        this.composer.reset(nextRt);
+        try {
+          const nextRt = new THREE.WebGLRenderTarget(res.internalW, res.internalH, {
+            type: THREE.HalfFloatType,
+            samples: res.msaaSamples,
+          });
+          this.composer.reset(nextRt);
+        } catch {
+          const fallbackRt = new THREE.WebGLRenderTarget(res.internalW, res.internalH, {
+            type: THREE.HalfFloatType,
+            samples: 0,
+          });
+          this.composer.reset(fallbackRt);
+        }
       }
       this.composer.setPixelRatio(res.dpr);
       this.composer.setSize(w, h);
@@ -859,9 +927,9 @@ export class Game {
         composer.addPass(new RenderPass(this.scene, this.camera));
         const bloomPass = new UnrealBloomPass(
           new THREE.Vector2(res.bloomW, res.bloomH),
-          0.35,
-          0.30,
-          0.90
+          0.28,
+          0.22,
+          1.18
         );
         bloomPass.enabled = res.useBloom;
         composer.addPass(bloomPass);
@@ -889,6 +957,7 @@ export class Game {
   private setScreenState(next: GameState): void {
     this.state = next;
     document.body.dataset.screen = next;
+    this.keyLight.castShadow = next === 'hangar';
   }
 
   private promoteFpsHudToTopLayer(): void {
@@ -1055,7 +1124,6 @@ export class Game {
       extraWarmup
     );
 
-    this.waves.initCorridorProps();
     this.waves.setCombatActive(false);
 
     const enterBtn = this.els['boot-enter-btn'] as HTMLButtonElement;
@@ -1558,6 +1626,12 @@ export class Game {
     const inst = this.loader.instantiateFresh(ship.modelKey, false);
     inst.root.position.set(0, -0.2, 0);
     inst.root.rotation.set(0, this.hangarYaw, 0);
+    inst.root.traverse((obj) => {
+      if ((obj as THREE.Mesh).isMesh) {
+        obj.castShadow = true;
+        obj.receiveShadow = true;
+      }
+    });
     this.scene.add(inst.root);
     this.hangarShipInstance = inst;
     this.hangarShipRig = new AnimationRig(ship.modelKey, inst.modelRoot, inst.animations, 'hangar');
@@ -1802,12 +1876,13 @@ export class Game {
     if (this.playerInstance) {
       this.playerInstance.root.visible = true;
     }
+    this.clearPickups();
     this.sound.setMuffled(false);
     this.sound.playHudDeploy();
     this.envSystem.setMode('combat');
     this.els['hud-ui'].hidden = false;
     this.els['boss-hud'].hidden = true;
-    this.playerHp = Math.min(this.playerMaxHp, this.playerHp + Math.round(this.playerMaxHp * 0.45));
+    this.playerHp = this.playerMaxHp;
     const ev = this.waves.startEndlessMode();
     this.sound.setBgmTrack('act3');
     this.envSystem.setAct(this.waves.getAct(), true);
@@ -1905,9 +1980,7 @@ export class Game {
     this.waves.clearCombatEntities();
     this.playerBullets.length = 0;
     this.enemyBullets.length = 0;
-    this.pickups.length = 0;
-    this.repairPickupInst.count = 0;
-    this.energyPickupInst.count = 0;
+    this.clearPickups();
     this.beamGroup.visible = false;
 
     if (this.playerInstance) {
@@ -2340,25 +2413,32 @@ export class Game {
         this.fpsUiTimer += wallSec;
 
         if (this.graphicsPreset === 'auto' && this.loadProgress >= 100) {
-          if (this.emaFrameMs > 19.5) {
-            this.drsHighTimer += wallSec;
+          if (this.state === 'hangar') {
+            this.drsHighTimer = 0;
             this.drsRecoverTimer = 0;
-            if (this.drsHighTimer >= 0.75 && this.drsScale > 0.65) {
-              this.drsHighTimer = 0;
-              this.drsScale = Math.max(0.65, +(this.drsScale - 0.12).toFixed(2));
+            if (this.drsScale < 1.0) {
+              this.drsScale = 1.0;
               this.applyGraphicsSettings();
             }
-          } else if (this.emaFrameMs <= 17.2 && this.drsScale < 1.0) {
+          } else if (this.emaFrameMs > 24.0) {
+            this.drsHighTimer += wallSec;
+            this.drsRecoverTimer = 0;
+            if (this.drsHighTimer >= 1.4 && this.drsScale > 0.82) {
+              this.drsHighTimer = 0;
+              this.drsScale = Math.max(0.82, +(this.drsScale - 0.09).toFixed(2));
+              this.applyGraphicsSettings();
+            }
+          } else if (this.emaFrameMs <= 18.5 && this.drsScale < 1.0) {
             this.drsHighTimer = 0;
             this.drsRecoverTimer += wallSec;
-            if (this.drsRecoverTimer >= 3.5) {
+            if (this.drsRecoverTimer >= 3.0) {
               this.drsRecoverTimer = 0;
-              this.drsScale = Math.min(1.0, +(this.drsScale + 0.08).toFixed(2));
+              this.drsScale = Math.min(1.0, +(this.drsScale + 0.09).toFixed(2));
               this.applyGraphicsSettings();
             }
           } else {
             this.drsHighTimer = 0;
-            if (this.emaFrameMs > 17.2) {
+            if (this.emaFrameMs > 18.5) {
               this.drsRecoverTimer = 0;
             }
           }
@@ -2405,6 +2485,7 @@ export class Game {
 
     if (this.state === 'hangar') {
       this.waves.updateEnvironment(rawDt, 0.35);
+      this.hangarPedestal.rotation.y += rawDt * 0.14;
       if (!this.isDraggingHangar) {
         this.hangarYaw += rawDt * 0.35;
       }
@@ -3041,6 +3122,13 @@ export class Game {
         this.addUltimateCharge(45);
         this.score += Math.round(2500 * boss.config.act * this.combo);
         this.kills += 1;
+        const missingHp = Math.max(0, this.playerMaxHp - this.playerHp);
+        this.playerHp = this.playerMaxHp;
+        if (missingHp > 0) {
+          this.flashDamageVignette('heal');
+          this.spawnFloatingText(this.playerPos, '通关修复 · 护盾全满', 'heal');
+        }
+        this.updateHud();
         return this.waves.onBossDefeated();
       }
       return null;
@@ -3573,26 +3661,79 @@ export class Game {
     }
   }
 
-  private spawnPickup(kind: 'repair' | 'energy', pos: THREE.Vector3): void {
+  private createPickupGlowTexture(): THREE.CanvasTexture {
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 64;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+      grad.addColorStop(0, 'rgba(255, 255, 255, 1.0)');
+      grad.addColorStop(0.32, 'rgba(255, 255, 255, 0.72)');
+      grad.addColorStop(0.68, 'rgba(255, 255, 255, 0.20)');
+      grad.addColorStop(1, 'rgba(255, 255, 255, 0.0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 64, 64);
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
+  private releasePickup(pk: PickupItem): void {
+    pk.haloRing.removeFromParent();
+    pk.glowSprite.removeFromParent();
+    this.loader.release(pk.instance);
+  }
+
+  private clearPickups(): void {
+    for (const pk of this.pickups) {
+      this.releasePickup(pk);
+    }
+    this.pickups.length = 0;
+  }
+
+  private spawnPickup(kind: 'repair' | 'energy', pos: THREE.Vector3, initialVel?: THREE.Vector3): void {
     if (this.pickups.length >= MAX_PICKUPS) return;
+    const instance = this.loader.acquire(
+      kind === 'repair' ? 'pickup_repair' : 'pickup_energy',
+      false
+    );
+    const haloRing = new THREE.Mesh(
+      this.pickupHaloGeo,
+      kind === 'repair' ? this.pickupRepairHaloMat : this.pickupEnergyHaloMat
+    );
+    const glowSprite = new THREE.Sprite(
+      kind === 'repair' ? this.pickupRepairGlowMat : this.pickupEnergyGlowMat
+    );
+    glowSprite.scale.setScalar(2.05);
+    instance.root.add(glowSprite, haloRing);
+    instance.root.position.copy(pos);
+    this.scene.add(instance.root);
+
     this.pickups.push({
       kind,
+      instance,
+      haloRing,
+      glowSprite,
       pos: pos.clone(),
-      vel: new THREE.Vector3((Math.random() - 0.5) * 3, (Math.random() - 0.5) * 2, 18),
+      vel: initialVel
+        ? initialVel.clone()
+        : new THREE.Vector3((Math.random() - 0.5) * 3, (Math.random() - 0.5) * 2, 18),
       age: 0,
       maxAge: 7.5,
     });
   }
 
   private updatePickups(dt: number): void {
-    let repairCount = 0;
-    let energyCount = 0;
     const magnetR2 = this.upgrades.pickupMagnetRadius * this.upgrades.pickupMagnetRadius;
 
     for (let i = this.pickups.length - 1; i >= 0; i--) {
       const pk = this.pickups[i];
       pk.age += dt;
       if (pk.age >= pk.maxAge || pk.pos.z > 14) {
+        this.releasePickup(pk);
         this.pickups.splice(i, 1);
         continue;
       }
@@ -3608,33 +3749,28 @@ export class Game {
           this.addUltimateCharge(25);
           this.spawnFloatingText(this.playerPos, '+25 超频能量', 'score');
         }
+        this.releasePickup(pk);
         this.pickups.splice(i, 1);
         continue;
       }
 
-      if (d2 < magnetR2) {
+      const inMagnet = d2 < magnetR2;
+      if (inMagnet) {
         this.tmpDir.subVectors(this.playerPos, pk.pos).normalize();
         pk.pos.addScaledVector(this.tmpDir, 28 * dt);
       } else {
         pk.pos.addScaledVector(pk.vel, dt);
       }
 
-      this.dummy.position.copy(pk.pos);
-      this.dummy.rotation.set(pk.age * 2.5, pk.age * 3.8, 0);
-      this.dummy.scale.setScalar(1 + Math.sin(pk.age * 7) * 0.12);
-      this.dummy.updateMatrix();
-
-      if (pk.kind === 'repair' && repairCount < MAX_PICKUPS) {
-        this.repairPickupInst.setMatrixAt(repairCount++, this.dummy.matrix);
-      } else if (pk.kind === 'energy' && energyCount < MAX_PICKUPS) {
-        this.energyPickupInst.setMatrixAt(energyCount++, this.dummy.matrix);
-      }
+      pk.instance.root.position.copy(pk.pos);
+      pk.instance.modelRoot.rotation.set(
+        0.32 + Math.sin(pk.age * 2.4) * 0.14,
+        pk.age * (inMagnet ? 5.6 : 2.5),
+        Math.sin(pk.age * 1.9) * 0.1
+      );
+      pk.instance.modelRoot.scale.setScalar(1.0 + Math.sin(pk.age * 6.5) * 0.07);
+      pk.haloRing.rotation.set(Math.PI * 0.35 + pk.age * 1.8, pk.age * 2.3, 0);
     }
-
-    this.repairPickupInst.count = repairCount;
-    this.repairPickupInst.instanceMatrix.needsUpdate = true;
-    this.energyPickupInst.count = energyCount;
-    this.energyPickupInst.instanceMatrix.needsUpdate = true;
   }
 
   private applyHitFlashVisuals(inst: PooledModelInstance, timer: number): void {
@@ -3846,6 +3982,7 @@ export class Game {
           countdownRemaining: +Math.max(0, this.launchCountdownRemaining).toFixed(2),
           playerDying: this.playerDying,
           activeGateCount: this.waves.getActiveGateCount(),
+          pickupCount: this.pickups.length,
           enemyCount: this.waves.activeEnemies.length,
           enemyBulletCount: this.enemyBullets.length,
           playerBulletCount: this.playerBullets.length,
@@ -4006,6 +4143,22 @@ export class Game {
         this.waves.setCombatActive(true);
         this.waves.forceSpawnGate(z, mode);
         this.waves.updateEnvironment(0, 1.0);
+      },
+
+      spawnPickupNow: (kind: 'repair' | 'energy', x = 0, y = 0, z = -14): void => {
+        if (this.state !== 'playing') return;
+        this.clearLaunchCountdown(false);
+        this.spawnPickup(kind, new THREE.Vector3(x, y, z), new THREE.Vector3(0, 0, 1.5));
+      },
+
+      setPlayerHp: (hp: number): void => {
+        const clamped = THREE.MathUtils.clamp(
+          Math.round(Number.isFinite(hp) ? hp : this.playerMaxHp),
+          1,
+          this.playerMaxHp
+        );
+        this.playerHp = clamped;
+        this.updateHud();
       },
     };
 

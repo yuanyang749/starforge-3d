@@ -11,7 +11,8 @@ export type ModelKey =
   | 'enemy_rover'
   | 'enemy_foldwing'
   | 'ally_biplane'
-  | 'prop_city_tile'
+  | 'pickup_repair'
+  | 'pickup_energy'
   | 'prop_gate';
 
 export type ShipId = 'astra' | 'opus' | 'morph' | 'aero';
@@ -111,9 +112,9 @@ export const MODEL_ASSETS: Record<ModelKey, ModelAssetSpec> = {
   ship_morph: {
     key: 'ship_morph',
     url: './models/ship_morph.glb',
-    bootLog: '[SYNC] A-103 苍穹超音速截击机 · 串列座舱、全动翼面与收放起落架自检通过',
-    targetSize: 3.35,
-    orientation: { yaw: Math.PI },
+    bootLog: '[SYNC] A-103 苍穹可变翼截击舰 · 15 骨骼可变掠翼与双联磁轨武装校准就绪',
+    targetSize: 3.45,
+    orientation: { yaw: 0 },
   },
   ship_aero: {
     key: 'ship_aero',
@@ -185,11 +186,18 @@ export const MODEL_ASSETS: Record<ModelKey, ModelAssetSpec> = {
     targetSize: 1.55,
     orientation: { yaw: Math.PI },
   },
-  prop_city_tile: {
-    key: 'prop_city_tile',
-    url: './models/prop_city_tile.glb',
-    bootLog: '[NAV] 第 1 战区 · 轨道城峡谷三维航道测绘完成',
-    targetSize: 18,
+  pickup_repair: {
+    key: 'pickup_repair',
+    url: './models/pickup_repair.glb',
+    bootLog: '[SUPPLY] 纳米装甲修复舱模块校验就绪',
+    targetSize: 2.05,
+    orientation: { yaw: 0 },
+  },
+  pickup_energy: {
+    key: 'pickup_energy',
+    url: './models/pickup_energy.glb',
+    bootLog: '[SUPPLY] 量子超频核心补给单元校验就绪',
+    targetSize: 2.15,
     orientation: { yaw: 0 },
   },
   prop_gate: {
@@ -271,16 +279,16 @@ export const SHIPS: ShipConfig[] = [
     modelKey: 'ship_morph',
     badgeIcon: './ui/icons/badge_morph.png',
     factionTag: '瓦尔基里特装',
-    nameZh: '苍穹超音速截击机',
+    nameZh: '苍穹可变翼截击舰',
     codeName: 'A-103',
-    roleTag: '全动掠翼 · 极速穿甲',
+    roleTag: '可变掠翼 · 极速穿甲',
     loreDesc:
-      '瓦尔基里特装局秘密研制的高机动超音速空优截击机，配备串列气泡座舱、可收放三点式起落架与全动副翼尾舵。双联磁轨炮具备原生穿甲贯穿能力，过载时可齐射蜂群追踪导弹清场。',
+      '瓦尔基里特装局定制研发的新一代可变掠翼空优截击舰，采用 15 骨骼联动机构实现后掠三角翼变形、翼尖折翼稳定舵、开启式座舱与背脊蜂群导弹舱。双联磁轨炮具备原生穿甲贯穿效能，过载时可齐射蜂群追踪导弹清场。',
     specTelemetry: {
       wingspan: '14.8 m',
-      propulsion: '双进气矢量加力涡扇',
+      propulsion: '双联矢量等离子加力引擎',
       output: '5,650 MW',
-      armorClass: '钛碳隐身蒙皮',
+      armorClass: '钛银碳纤维复合装甲',
     },
     accentColor: '#ff4757',
     accentHex: 0xff4757,

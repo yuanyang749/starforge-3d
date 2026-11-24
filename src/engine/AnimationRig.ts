@@ -166,68 +166,34 @@ export class AnimationRig {
         }
       }
     } else if (this.key === 'ship_morph') {
-      // Tandem supersonic interceptor with 9 clips:
-      // canopy-open (0=closed -> dur=open), bay-open (0=closed -> dur=open),
-      // gear-open (0=deployed down -> dur=retracted up inside hull),
-      // aileron-roll / elevator-tilt / rudder-steer (0.5*dur=neutral, +/-0.25*dur=extremes).
-      // Only bind the canonical forward clip per articulated subsystem so channels never fight.
+      // Custom 15-bone skeletal Valkyrie A-103:
+      // - hangar_showcase loops all 14 movable bones continuously in Hangar preview
+      // - combat uses 4 strictly disjoint bone-group clips (wing_sweep, canopy_bay, control_roll, control_pitch)
       this.morphLaunchElapsed = 0;
-      const canopy = this.actions.get('canopy-open');
-      const bay = this.actions.get('bay-open');
-      const gear = this.actions.get('gear-open');
-      const aileron = this.actions.get('aileron-roll');
-      const elevator = this.actions.get('elevator-tilt');
-      const rudder = this.actions.get('rudder-steer');
-
-      for (const a of [canopy, bay, gear]) {
-        if (!a) continue;
-        a.reset();
-        a.timeScale = 1;
-        a.paused = true;
-        a.play();
-      }
-
-      const setMorphGearVisible = (visible: boolean) => {
-        for (const gn of ['gear-main-right', 'gear-main-left', 'gear-nose']) {
-          const gNode = this.nodes.get(gn);
-          if (gNode) gNode.visible = visible;
-        }
-      };
+      const showcase = this.actions.get('hangar_showcase');
+      const wingSweep = this.actions.get('wing_sweep');
+      const canopyBay = this.actions.get('canopy_bay');
+      const ctrlRoll = this.actions.get('control_roll');
+      const ctrlPitch = this.actions.get('control_pitch');
 
       if (mode === 'hangar') {
-        if (canopy) canopy.time = 0;
-        if (bay) bay.time = 0;
-        if (gear) gear.time = gear.getClip().duration * 0.42; // Tucked cleanly inside belly bay
-        setMorphGearVisible(false);
-        if (aileron) {
-          aileron.reset().setLoop(THREE.LoopRepeat, Infinity);
-          aileron.timeScale = 1.15;
-          aileron.play();
-        }
-        if (elevator) {
-          elevator.reset().setLoop(THREE.LoopRepeat, Infinity);
-          elevator.timeScale = 0.95;
-          elevator.play();
-        }
-        if (rudder) {
-          rudder.reset().setLoop(THREE.LoopRepeat, Infinity);
-          rudder.timeScale = 0.9;
-          rudder.play();
+        if (showcase) {
+          showcase.reset().setLoop(THREE.LoopRepeat, Infinity);
+          showcase.timeScale = 1.0;
+          showcase.play();
         }
       } else {
-        // Combat launch: seal canopy, retract landing gear & close bays cleanly during launch surge
-        if (canopy) canopy.time = canopy.getClip().duration * 0.45;
-        if (bay) bay.time = bay.getClip().duration * 0.65;
-        if (gear) gear.time = gear.getClip().duration * 0.2;
-        setMorphGearVisible(true);
-        for (const a of [aileron, elevator, rudder]) {
+        for (const a of [wingSweep, canopyBay, ctrlRoll, ctrlPitch]) {
           if (!a) continue;
           a.reset();
           a.timeScale = 1;
           a.paused = true;
-          a.time = a.getClip().duration * 0.5;
           a.play();
         }
+        if (wingSweep) wingSweep.time = wingSweep.getClip().duration * 0.15;
+        if (canopyBay) canopyBay.time = canopyBay.getClip().duration * 0.35;
+        if (ctrlRoll) ctrlRoll.time = ctrlRoll.getClip().duration * 0.5;
+        if (ctrlPitch) ctrlPitch.time = ctrlPitch.getClip().duration * 0.5;
       }
     } else if (this.key === 'ship_aero') {
       for (const action of this.actions.values()) {
@@ -317,64 +283,34 @@ export class AnimationRig {
 
   update(input: RigControlInput): void {
     const safeDt = Number.isFinite(input.dt) && input.dt > 0 ? input.dt : 0;
-    const { elapsed, vx = 0, vy = 0 } = input;
+    const { vx = 0, vy = 0 } = input;
     this.bossFirePulse = Math.max(0, this.bossFirePulse - safeDt * 4.5);
     this.carrierLaunchPulse = Math.max(0, this.carrierLaunchPulse - safeDt * 1.4);
 
     if (this.key === 'ship_morph') {
-      const canopy = this.actions.get('canopy-open');
-      const bay = this.actions.get('bay-open');
-      const gear = this.actions.get('gear-open');
-      const aileron = this.actions.get('aileron-roll');
-      const elevator = this.actions.get('elevator-tilt');
-      const rudder = this.actions.get('rudder-steer');
-
-      const setMorphGearVisible = (visible: boolean) => {
-        for (const gn of ['gear-main-right', 'gear-main-left', 'gear-nose']) {
-          const gNode = this.nodes.get(gn);
-          if (gNode) gNode.visible = visible;
-        }
-      };
-
       if (this.mode === 'hangar') {
-        // Coordinated 8.5s pre-flight inspection cycle: canopy opens, bays open before gear deploys,
-        // then gear retracts cleanly inside belly bays without ever protruding above the upper wing skin.
-        const phase = (elapsed % 8.5) / 8.5;
-        const smooth = (t: number) => t * t * (3 - 2 * t);
-        const ramp = (a: number, b: number, c: number, d: number): number => {
-          if (phase < a || phase > d) return 0;
-          if (phase < b) return smooth((phase - a) / Math.max(0.001, b - a));
-          if (phase <= c) return 1;
-          return smooth(1 - (phase - c) / Math.max(0.001, d - c));
-        };
-        const canopyOpenFrac = ramp(0.06, 0.28, 0.56, 0.78);
-        const bayOpenFrac = ramp(0.14, 0.28, 0.72, 0.86);
-        const gearDeployFrac = ramp(0.26, 0.44, 0.56, 0.72);
-
-        if (canopy) canopy.time = canopy.getClip().duration * canopyOpenFrac;
-        if (bay) bay.time = bay.getClip().duration * bayOpenFrac;
-        // Clamp upward travel at 0.42*dur and hide inside belly bay once stowed so struts never poke through wings
-        if (gear) gear.time = gear.getClip().duration * (0.42 * (1 - gearDeployFrac));
-        setMorphGearVisible(gearDeployFrac > 0.08);
         this.mixer.update(safeDt);
       } else {
-        // Combat mode: retract gear/bays/canopy smoothly during initial launch countdown, then stay sealed
         this.morphLaunchElapsed = Math.min(2.0, this.morphLaunchElapsed + safeDt);
-        const sealT = THREE.MathUtils.clamp(this.morphLaunchElapsed / 0.85, 0, 1);
-        const ease = 1 - Math.pow(1 - sealT, 3);
-        const baySealT = THREE.MathUtils.clamp((this.morphLaunchElapsed - 0.35) / 0.65, 0, 1);
-        const bayEase = 1 - Math.pow(1 - baySealT, 3);
+        const launchT = THREE.MathUtils.clamp(this.morphLaunchElapsed / 0.9, 0, 1);
+        const ease = 1 - Math.pow(1 - launchT, 3);
+        const sealT = THREE.MathUtils.clamp(this.morphLaunchElapsed / 0.75, 0, 1);
+        const sealEase = 1 - Math.pow(1 - sealT, 3);
 
-        if (canopy) canopy.time = canopy.getClip().duration * 0.45 * (1 - ease);
-        if (gear) gear.time = gear.getClip().duration * (0.15 + 0.27 * ease);
-        setMorphGearVisible(sealT < 0.78);
-        if (bay) bay.time = bay.getClip().duration * 0.65 * (1 - bayEase);
+        const wingSweep = this.actions.get('wing_sweep');
+        const canopyBay = this.actions.get('canopy_bay');
+        const ctrlRoll = this.actions.get('control_roll');
+        const ctrlPitch = this.actions.get('control_pitch');
+
+        const speedSweep = THREE.MathUtils.clamp(Math.abs(vx) / 20, 0, 1) * 0.14;
+        const sweepFrac = THREE.MathUtils.clamp(0.15 + 0.71 * ease + speedSweep, 0, 1);
+        if (wingSweep) wingSweep.time = wingSweep.getClip().duration * sweepFrac;
+        if (canopyBay) canopyBay.time = canopyBay.getClip().duration * 0.35 * (1 - sealEase);
 
         const rollNorm = THREE.MathUtils.clamp(vx / 18, -1, 1);
         const pitchNorm = THREE.MathUtils.clamp(vy / 18, -1, 1);
-        if (aileron) aileron.time = aileron.getClip().duration * (0.5 + rollNorm * 0.25);
-        if (elevator) elevator.time = elevator.getClip().duration * (0.5 - pitchNorm * 0.25);
-        if (rudder) rudder.time = rudder.getClip().duration * (0.5 + rollNorm * 0.25);
+        if (ctrlRoll) ctrlRoll.time = ctrlRoll.getClip().duration * (0.5 + rollNorm * 0.45);
+        if (ctrlPitch) ctrlPitch.time = ctrlPitch.getClip().duration * (0.5 + pitchNorm * 0.45);
         this.mixer.update(0);
       }
     } else if (this.key === 'ship_opus' && this.mode === 'combat') {

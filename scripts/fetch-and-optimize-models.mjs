@@ -22,10 +22,7 @@ const MODELS = [
     key: 'ship_opus',
     url: 'https://huggingface.co/datasets/scenario-labs/3d-collection/resolve/main/assets/scenario_asset_tRFAY31piDXddUGPKBe7zVyR/output.glb',
   },
-  {
-    key: 'ship_morph',
-    url: 'https://cdn.3dassets.dev/assets/32594/v1/model.glb',
-  },
+  // Note: ship_morph.glb (A-103 Valkyrie) is custom sculpted & skeletally rigged via scripts/build-valkyrie-ship.py
   {
     key: 'ship_aero',
     url: 'https://huggingface.co/datasets/scenario-labs/3d-collection/resolve/main/assets/ebf4cd5d64512d0f/24684a129421fdb1.glb',
@@ -61,10 +58,6 @@ const MODELS = [
   {
     key: 'ally_biplane',
     url: 'https://huggingface.co/datasets/scenario-labs/3d-collection/resolve/main/assets/5eaa67ddddd8f062/a048863bdf9fc58e.glb',
-  },
-  {
-    key: 'prop_city_tile',
-    url: 'https://huggingface.co/datasets/scenario-labs/3d-collection/resolve/main/assets/scenario_asset_5LU7oZ7W2VHAvPMF1oTEBcZg/output.glb',
   },
   {
     key: 'prop_gate',

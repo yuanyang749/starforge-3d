@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 
 export type EnvMode = 'boot' | 'hangar' | 'combat';
@@ -951,6 +950,19 @@ export class EnvironmentSystem {
   private dreadnoughtRibInst!: THREE.InstancedMesh;
   private readonly ribs: RibState[] = [];
 
+  private hangarVistaMesh!: THREE.Mesh;
+  private hangarVistaMat!: THREE.MeshBasicMaterial;
+  private hangarDeckMat!: THREE.MeshPhysicalMaterial;
+  private hangarCeilingMat!: THREE.MeshBasicMaterial;
+  private hangarBulkheadNearMat!: THREE.MeshBasicMaterial;
+  private hangarBulkheadFarMat!: THREE.MeshBasicMaterial;
+  private readonly hangarParallaxGroup = new THREE.Group();
+
+  private hangarVideoEl: HTMLVideoElement | null = null;
+  private hangarVideoTex: THREE.VideoTexture | null = null;
+  private hangarVideoReady = false;
+  private hangarVideoUnlockHandler: (() => void) | null = null;
+
   private readonly dustParticles: DustParticle[] = [];
   private readonly dummy = new THREE.Object3D();
 
@@ -1095,10 +1107,95 @@ export class EnvironmentSystem {
     this.syncVisibility();
   }
 
+  private buildAerospaceIblScene(): {
+    iblScene: THREE.Scene;
+    cleanup: () => void;
+  } {
+    const iblScene = new THREE.Scene();
+    const disposables: Array<{ dispose: () => void }> = [];
+
+    // High-contrast deep cosmic zenith / cool horizon / dark hangar nadir gradient dome
+    const domeGeo = new THREE.SphereGeometry(40, 24, 16);
+    const posAttr = domeGeo.attributes.position;
+    const colors = new Float32Array(posAttr.count * 3);
+    const zenithCol = new THREE.Color(0x050b18);
+    const horizonCol = new THREE.Color(0x132744);
+    const nadirCol = new THREE.Color(0x091324);
+    const tmpCol = new THREE.Color();
+
+    for (let i = 0; i < posAttr.count; i++) {
+      const ny = posAttr.getY(i) / 40;
+      if (ny >= 0) {
+        const t = Math.pow(ny, 0.72);
+        tmpCol.copy(horizonCol).lerp(zenithCol, t);
+      } else {
+        const t = Math.pow(-ny, 0.65);
+        tmpCol.copy(horizonCol).lerp(nadirCol, t);
+      }
+      colors[i * 3] = tmpCol.r;
+      colors[i * 3 + 1] = tmpCol.g;
+      colors[i * 3 + 2] = tmpCol.b;
+    }
+    domeGeo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+    const domeMat = new THREE.MeshBasicMaterial({
+      vertexColors: true,
+      side: THREE.BackSide,
+      toneMapped: false,
+    });
+    const domeMesh = new THREE.Mesh(domeGeo, domeMat);
+    iblScene.add(domeMesh);
+    disposables.push(domeGeo, domeMat);
+
+    const addStrip = (
+      w: number,
+      h: number,
+      x: number,
+      y: number,
+      z: number,
+      rgb: [number, number, number]
+    ): void => {
+      const geo = new THREE.PlaneGeometry(w, h);
+      const col = new THREE.Color().setRGB(rgb[0], rgb[1], rgb[2]);
+      const mat = new THREE.MeshBasicMaterial({
+        color: col,
+        side: THREE.DoubleSide,
+        toneMapped: false,
+      });
+      const m = new THREE.Mesh(geo, mat);
+      m.position.set(x, y, z);
+      m.lookAt(0, 0, 0);
+      iblScene.add(m);
+      disposables.push(geo, mat);
+    };
+
+    // Overhead primary solar studio strip + flanking dark baffles for razor-sharp specular contrast
+    addStrip(18, 2.4, 0, 14, 6, [5.5, 5.2, 4.6]);
+    addStrip(19, 1.4, 0, 13.6, 2.4, [0.02, 0.03, 0.05]);
+    addStrip(19, 1.4, 0, 13.6, 9.6, [0.02, 0.03, 0.05]);
+
+    // Port cool cyan orbital rim bar & Starboard warm amber kicker bar
+    addStrip(16, 1.8, -14, 4, -6, [1.2, 4.2, 5.2]);
+    addStrip(16, 1.2, -13.6, 6.2, -6, [0.02, 0.03, 0.05]);
+    addStrip(14, 1.6, 14, 2, -4, [4.4, 2.6, 0.9]);
+    addStrip(14, 1.2, 13.6, 4.0, -4, [0.02, 0.03, 0.05]);
+
+    // Forward pale ice-blue horizon band for fuselage & cockpit visor reflections
+    addStrip(24, 2.2, 0, 1.5, -18, [2.2, 3.2, 4.0]);
+
+    return {
+      iblScene,
+      cleanup: () => {
+        for (const d of disposables) {
+          d.dispose();
+        }
+      },
+    };
+  }
+
   initEnvironment(loadedTextures?: ReadonlyMap<string, THREE.Texture>): void {
     if (this.disposed) return;
 
-    // Assign PBR IBL reflections once via PMREMGenerator + RoomEnvironment
+    // Assign zero-blur high-contrast Aerospace HDRI reflections once via PMREMGenerator
     if (!this.initialized) {
       this.initialized = true;
       try {
@@ -1106,11 +1203,11 @@ export class EnvironmentSystem {
         if (gl && typeof THREE.PMREMGenerator === 'function') {
           const pmrem = new THREE.PMREMGenerator(this.renderer);
           pmrem.compileEquirectangularShader?.();
-          const roomEnv = new RoomEnvironment();
-          this.envRenderTarget = pmrem.fromScene(roomEnv, 0.04);
+          const { iblScene, cleanup } = this.buildAerospaceIblScene();
+          this.envRenderTarget = pmrem.fromScene(iblScene, 0.0);
           this.scene.environment = this.envRenderTarget.texture;
-          this.scene.environmentIntensity = 1.2;
-          roomEnv.dispose();
+          this.scene.environmentIntensity = 1.35;
+          cleanup();
           pmrem.dispose();
         }
       } catch {
@@ -1127,12 +1224,52 @@ export class EnvironmentSystem {
       }
     }
 
+    // Bind 2K PBR Hangar landing deck & Codex transparent architectural matte layers
+    const hangarPoster = loadedTextures?.get('hangar') ?? this.fallbackTextures.hangar;
+    if (!this.hangarVideoReady) {
+      this.hangarVistaMat.map = hangarPoster;
+      this.hangarVistaMat.needsUpdate = true;
+    }
+
+    const deckAlbedo = loadedTextures?.get('hangar_deck_albedo');
+    const deckNormal = loadedTextures?.get('hangar_deck_normal');
+    const deckRoughness = loadedTextures?.get('hangar_deck_roughness');
+    const deckEmissive = loadedTextures?.get('hangar_deck_emissive');
+    for (const dt of [deckAlbedo, deckNormal, deckRoughness, deckEmissive]) {
+      if (dt) {
+        dt.wrapS = THREE.MirroredRepeatWrapping;
+        dt.wrapT = THREE.MirroredRepeatWrapping;
+        dt.needsUpdate = true;
+      }
+    }
+    if (deckAlbedo) this.hangarDeckMat.map = deckAlbedo;
+    if (deckNormal) this.hangarDeckMat.normalMap = deckNormal;
+    if (deckRoughness) this.hangarDeckMat.roughnessMap = deckRoughness;
+    if (deckEmissive) this.hangarDeckMat.emissiveMap = deckEmissive;
+    this.hangarDeckMat.needsUpdate = true;
+
+    const ceilingTex = loadedTextures?.get('hangar_ceiling');
+    if (ceilingTex) {
+      this.hangarCeilingMat.map = ceilingTex;
+      this.hangarCeilingMat.needsUpdate = true;
+    }
+    const bulkheadTex = loadedTextures?.get('hangar_bulkhead');
+    if (bulkheadTex) {
+      this.hangarBulkheadNearMat.map = bulkheadTex;
+      this.hangarBulkheadNearMat.needsUpdate = true;
+      this.hangarBulkheadFarMat.map = bulkheadTex;
+      this.hangarBulkheadFarMat.needsUpdate = true;
+    }
+
+    this.initHangarVideo();
+
     const activeTex = this.getVistaTexture(this.targetVistaKey);
     this.cycloramaMat.uniforms.uTexA.value = activeTex;
     this.cycloramaMat.uniforms.uTexB.value = activeTex;
     this.cycloramaMat.uniforms.uTexMix.value = 1.0;
     this.currentVistaKey = this.targetVistaKey;
     this.vistaBlend = 1.0;
+    this.syncHangarVideoPlayback();
   }
 
   setMode(mode: EnvMode): void {
@@ -1185,6 +1322,12 @@ export class EnvironmentSystem {
       beamMat.uniforms.uTime.value = elapsed;
     }
 
+    if (this.mode === 'hangar' || this.mode === 'boot') {
+      this.hangarParallaxGroup.position.x = Math.sin(elapsed * 0.34) * 0.14;
+      this.hangarParallaxGroup.position.y = Math.cos(elapsed * 0.25) * 0.04;
+      this.hangarVistaMesh.position.x = Math.sin(elapsed * 0.16) * 0.22;
+    }
+
     if (this.mode === 'combat') {
       if (this.currentAct === 1) {
         this.updateAct1(safeDt, elapsed, speed);
@@ -1230,6 +1373,8 @@ export class EnvironmentSystem {
     });
 
     this.envRoot.removeFromParent();
+
+    this.disposeHangarVideo();
 
     for (const g of geometries) g.dispose();
     for (const m of materials) m.dispose();
@@ -1323,10 +1468,12 @@ export class EnvironmentSystem {
   private syncVisibility(): void {
     const isHangar = this.mode === 'hangar' || this.mode === 'boot';
     this.hangarGroup.visible = isHangar;
+    this.cyclorama.visible = !isHangar;
     this.act1Group.visible = this.mode === 'combat' && this.currentAct === 1;
     this.act2Group.visible = this.mode === 'combat' && this.currentAct === 2;
     this.act3Group.visible = this.mode === 'combat' && this.currentAct === 3;
     this.dustInst.visible = this.mode === 'combat';
+    this.syncHangarVideoPlayback();
   }
 
   private createVolumetricBeamMaterial(
@@ -1352,131 +1499,266 @@ export class EnvironmentSystem {
     return mat;
   }
 
+  private initHangarVideo(): void {
+    if (typeof document === 'undefined' || this.hangarVideoEl) return;
+
+    const video = document.createElement('video');
+    video.src = './env/hangar_vista_loop.mp4';
+    video.muted = true;
+    video.defaultMuted = true;
+    video.loop = true;
+    video.playsInline = true;
+    video.setAttribute('playsinline', '');
+    video.setAttribute('webkit-playsinline', '');
+    video.preload = 'auto';
+    video.crossOrigin = 'anonymous';
+    this.hangarVideoEl = video;
+
+    const activateVideoTexture = () => {
+      if (this.disposed || this.hangarVideoReady || !this.hangarVideoEl) return;
+      if (video.videoWidth <= 0 || video.readyState < 2) return;
+      const vtex = new THREE.VideoTexture(video);
+      vtex.colorSpace = THREE.SRGBColorSpace;
+      vtex.minFilter = THREE.LinearFilter;
+      vtex.magFilter = THREE.LinearFilter;
+      vtex.generateMipmaps = false;
+      this.hangarVideoTex = vtex;
+      this.hangarVistaMat.map = vtex;
+      this.hangarVistaMat.needsUpdate = true;
+      this.hangarVideoReady = true;
+    };
+
+    video.addEventListener('loadeddata', activateVideoTexture);
+    video.addEventListener('canplay', activateVideoTexture);
+
+    if (typeof window !== 'undefined') {
+      const unlockVideo = () => {
+        if (this.disposed) return;
+        this.syncHangarVideoPlayback();
+      };
+      this.hangarVideoUnlockHandler = unlockVideo;
+      window.addEventListener('pointerdown', unlockVideo, { passive: true });
+      window.addEventListener('keydown', unlockVideo, { passive: true });
+    }
+  }
+
+  private syncHangarVideoPlayback(): void {
+    const video = this.hangarVideoEl;
+    if (!video || this.disposed) return;
+    const shouldPlay = this.mode === 'hangar' || this.mode === 'boot';
+    if (shouldPlay) {
+      if (video.paused) {
+        const playPromise = video.play();
+        if (playPromise && typeof playPromise.catch === 'function') {
+          playPromise.catch(() => {});
+        }
+      }
+    } else if (!video.paused) {
+      video.pause();
+    }
+  }
+
+  private disposeHangarVideo(): void {
+    if (typeof window !== 'undefined' && this.hangarVideoUnlockHandler) {
+      window.removeEventListener('pointerdown', this.hangarVideoUnlockHandler);
+      window.removeEventListener('keydown', this.hangarVideoUnlockHandler);
+      this.hangarVideoUnlockHandler = null;
+    }
+    if (this.hangarVideoEl) {
+      this.hangarVideoEl.pause();
+      this.hangarVideoEl.removeAttribute('src');
+      try {
+        this.hangarVideoEl.load();
+      } catch {
+        // Ignore in mocked DOM tests
+      }
+      this.hangarVideoEl = null;
+    }
+    if (this.hangarVideoTex) {
+      this.hangarVideoTex.dispose();
+      this.hangarVideoTex = null;
+    }
+    this.hangarVideoReady = false;
+  }
+
+  private remapPlaneUvs(
+    geo: THREE.PlaneGeometry,
+    uMin: number,
+    uMax: number,
+    vMin: number,
+    vMax: number
+  ): void {
+    const uv = geo.attributes.uv;
+    if (!uv) return;
+    for (let i = 0; i < uv.count; i++) {
+      const u = uv.getX(i);
+      const v = uv.getY(i);
+      uv.setXY(i, THREE.MathUtils.lerp(uMin, uMax, u), THREE.MathUtils.lerp(vMin, vMax, v));
+    }
+    uv.needsUpdate = true;
+  }
+
   private buildHangarBay(): void {
-    // Main illuminated orbital bay landing deck (y = -1.72)
-    const deckGeo = new THREE.BoxGeometry(36, 0.24, 24);
-    const deckMat = new THREE.MeshStandardMaterial({
-      color: 0x1d2d44,
+    this.hangarGroup.add(this.hangarParallaxGroup);
+
+    // 1. Gently concave 16:9 Cinema Orbital Vista Backdrop (looping Omni/Veo video + crisp 2K WebP poster fallback)
+    const vistaGeo = new THREE.PlaneGeometry(48, 27, 24, 1);
+    const vistaPos = vistaGeo.attributes.position;
+    for (let i = 0; i < vistaPos.count; i++) {
+      const x = vistaPos.getX(i);
+      const curveZ = (x * x) / 135; // Subtle cylindrical concave wrap toward the bay viewer
+      vistaPos.setZ(i, curveZ);
+    }
+    vistaPos.needsUpdate = true;
+    this.hangarVistaMat = new THREE.MeshBasicMaterial({
+      color: 0xd8e6f5,
+      map: this.fallbackTextures.hangar,
+      fog: false,
+      depthWrite: false,
+      toneMapped: true,
+    });
+    this.hangarVistaMesh = new THREE.Mesh(vistaGeo, this.hangarVistaMat);
+    this.hangarVistaMesh.name = 'HangarOrbitalVistaScreen';
+    this.hangarVistaMesh.position.set(0, -2.15, -38.0);
+    this.hangarVistaMesh.renderOrder = -85;
+    this.hangarGroup.add(this.hangarVistaMesh);
+    this.warmupTargets.push(this.hangarVistaMesh);
+
+    // 2. 2K PBR Sculpted Hangar Landing Deck (y = -1.72, catches real-time 2K ship shadow & Aerospace HDRI)
+    this.hangarDeckMat = new THREE.MeshPhysicalMaterial({
+      color: 0xffffff,
       metalness: 0.72,
-      roughness: 0.3,
-      emissive: 0x0b223d,
+      roughness: 0.9,
+      clearcoat: 0.48,
+      clearcoatRoughness: 0.22,
+      envMapIntensity: 1.4,
+      normalScale: new THREE.Vector2(1.2, 1.2),
+      emissive: new THREE.Color(0x9befff),
+      emissiveIntensity: 1.45,
+    });
+
+    const centerDeckGeo = new THREE.PlaneGeometry(13.2, 13.2, 1, 1);
+    centerDeckGeo.rotateX(-Math.PI * 0.5);
+    const centerDeckMesh = new THREE.Mesh(centerDeckGeo, this.hangarDeckMat);
+    centerDeckMesh.name = 'HangarLandingDeckCenter';
+    centerDeckMesh.position.set(0, -1.72, 0);
+    centerDeckMesh.receiveShadow = true;
+
+    const fwdApronGeo = new THREE.PlaneGeometry(13.2, 10.0, 1, 1);
+    fwdApronGeo.rotateX(-Math.PI * 0.5);
+    this.remapPlaneUvs(fwdApronGeo, 0.0, 1.0, 0.8, 0.995);
+    const fwdApronMesh = new THREE.Mesh(fwdApronGeo, this.hangarDeckMat);
+    fwdApronMesh.name = 'HangarLandingDeckForward';
+    fwdApronMesh.position.set(0, -1.721, -11.6);
+    fwdApronMesh.receiveShadow = true;
+
+    const sideWingGeoL = new THREE.PlaneGeometry(14.0, 23.2, 1, 1);
+    sideWingGeoL.rotateX(-Math.PI * 0.5);
+    this.remapPlaneUvs(sideWingGeoL, 0.02, 0.42, 0.02, 0.76);
+    const sideWingL = new THREE.Mesh(sideWingGeoL, this.hangarDeckMat);
+    sideWingL.position.set(-13.6, -1.722, -5.0);
+    sideWingL.receiveShadow = true;
+
+    const sideWingGeoR = sideWingGeoL.clone();
+    const sideWingR = new THREE.Mesh(sideWingGeoR, this.hangarDeckMat);
+    sideWingR.position.set(13.6, -1.722, -5.0);
+    sideWingR.receiveShadow = true;
+
+    this.hangarGroup.add(centerDeckMesh, fwdApronMesh, sideWingL, sideWingR);
+    this.warmupTargets.push(centerDeckMesh);
+
+    // 3. Observation Bay Forward Metallic Lip, Seam Blast Deflector & Atmospheric Shield Rail
+    const curbMat = new THREE.MeshPhysicalMaterial({
+      color: 0x24344d,
+      metalness: 0.86,
+      roughness: 0.24,
+      clearcoat: 0.5,
+      emissive: 0x0b2944,
       emissiveIntensity: 0.35,
     });
-    const deckMesh = new THREE.Mesh(deckGeo, deckMat);
-    deckMesh.position.set(0, -1.84, -4.5);
-    this.hangarGroup.add(deckMesh);
-    this.warmupTargets.push(deckMesh);
-
-    // Subtle glowing deck plate tiles & cyan/amber landing strip markings at y = -1.71
-    const cyanStripMat = new THREE.MeshBasicMaterial({
-      color: 0x22d3ee,
-      transparent: true,
-      opacity: 0.85,
-    });
-    const amberStripMat = new THREE.MeshBasicMaterial({
-      color: 0xffb347,
-      transparent: true,
-      opacity: 0.88,
-    });
-
-    const guideGeo = new THREE.BoxGeometry(0.18, 0.02, 18);
+    const blastDeflector = new THREE.Mesh(new THREE.BoxGeometry(13.4, 0.055, 0.32), curbMat);
+    blastDeflector.position.set(0, -1.7, -6.62);
+    blastDeflector.receiveShadow = true;
+    const ledFlushGeo = new THREE.BoxGeometry(4.2, 0.02, 0.05);
+    const ledFlushMat = new THREE.MeshBasicMaterial({ color: 0x22e8ff, transparent: true, opacity: 0.85 });
     for (const side of [-1, 1]) {
-      const strip = new THREE.Mesh(guideGeo, cyanStripMat);
-      strip.position.set(side * 3.4, -1.71, -5.5);
+      const strip = new THREE.Mesh(ledFlushGeo, ledFlushMat);
+      strip.position.set(side * 4.4, -1.668, -6.62);
       this.hangarGroup.add(strip);
-
-      const outerStrip = new THREE.Mesh(guideGeo, amberStripMat);
-      outerStrip.position.set(side * 6.8, -1.71, -5.5);
-      this.hangarGroup.add(outerStrip);
     }
 
-    // Threshold runway chevrons leading forward toward the observation opening
-    const chevronGeo = new THREE.BoxGeometry(1.4, 0.02, 0.16);
-    for (let i = 0; i < 6; i++) {
-      const z = -4.2 - i * 2.0;
-      for (const side of [-1, 1]) {
-        const chev = new THREE.Mesh(chevronGeo, i % 2 === 0 ? amberStripMat : cyanStripMat);
-        chev.position.set(side * 1.15, -1.71, z);
-        chev.rotation.y = side * 0.42;
-        this.hangarGroup.add(chev);
-      }
-    }
+    const curbMesh = new THREE.Mesh(new THREE.BoxGeometry(38, 0.22, 0.48), curbMat);
+    curbMesh.position.set(0, -1.62, -16.55);
+    const curbShieldStrip = new THREE.Mesh(
+      new THREE.BoxGeometry(36, 0.045, 0.08),
+      new THREE.MeshBasicMaterial({ color: 0x38e8ff, transparent: true, opacity: 0.9 })
+    );
+    curbShieldStrip.position.set(0, -1.49, -16.55);
+    this.hangarGroup.add(blastDeflector, curbMesh, curbShieldStrip);
 
-    // Observation bay forward safety curb (keeps planet horizon unobstructed above y = -1.45)
-    const curbGeo = new THREE.BoxGeometry(36, 0.28, 0.55);
-    const curbMat = new THREE.MeshStandardMaterial({
-      color: 0x2a3f5f,
-      metalness: 0.82,
-      roughness: 0.24,
-      emissive: 0x0e3352,
-      emissiveIntensity: 0.4,
+    // 4. Layered 2K Codex Transparent Architectural Matte Paintings (True 3D depth parallax framing the bay)
+    this.hangarCeilingMat = new THREE.MeshBasicMaterial({
+      color: 0xe6f1ff,
+      transparent: true,
+      alphaTest: 0.02,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      fog: false,
+      toneMapped: true,
     });
-    const curbMesh = new THREE.Mesh(curbGeo, curbMat);
-    curbMesh.position.set(0, -1.58, -16.4);
-    const curbLight = new THREE.Mesh(new THREE.BoxGeometry(34, 0.06, 0.12), cyanStripMat);
-    curbLight.position.set(0, -1.42, -16.4);
-    this.hangarGroup.add(curbMesh, curbLight);
+    const ceilingMesh = new THREE.Mesh(new THREE.PlaneGeometry(18.6, 10.46, 1, 1), this.hangarCeilingMat);
+    ceilingMesh.name = 'HangarOverheadGantryMatte';
+    ceilingMesh.position.set(0.2, 0.55, -14.8);
+    ceilingMesh.renderOrder = 4;
+    this.hangarParallaxGroup.add(ceilingMesh);
+    this.warmupTargets.push(ceilingMesh);
 
-    // 4 arched starport gantry ribs framing the turntable
-    const gantryMat = new THREE.MeshStandardMaterial({
-      color: 0x243650,
-      metalness: 0.8,
-      roughness: 0.28,
-      emissive: 0x0f2542,
-      emissiveIntensity: 0.25,
+    this.hangarBulkheadNearMat = new THREE.MeshBasicMaterial({
+      color: 0xebf3ff,
+      transparent: true,
+      alphaTest: 0.02,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      fog: false,
+      toneMapped: true,
     });
-    const pillarGeo = new THREE.BoxGeometry(0.65, 6.8, 0.9);
-    const collarGeo = new THREE.BoxGeometry(2.6, 0.55, 0.85);
-    const topCrossGeo = new THREE.BoxGeometry(11.6, 0.48, 0.85);
-    const overheadLightGeo = new THREE.BoxGeometry(9.6, 0.1, 0.26);
+    this.hangarBulkheadFarMat = new THREE.MeshBasicMaterial({
+      color: 0xbcd3ee,
+      transparent: true,
+      alphaTest: 0.02,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+      fog: false,
+      toneMapped: true,
+    });
 
-    const gantryZs = [-1.5, -6.0, -10.5, -15.0];
-    for (let idx = 0; idx < gantryZs.length; idx++) {
-      const z = gantryZs[idx];
-      const rib = new THREE.Group();
-      rib.position.z = z;
+    const bulkheadGeoNear = new THREE.PlaneGeometry(6.6, 8.8, 1, 1);
+    const bulkheadGeoFar = new THREE.PlaneGeometry(8.1, 10.8, 1, 1);
+    for (const side of [-1, 1]) {
+      const nearWall = new THREE.Mesh(bulkheadGeoNear, this.hangarBulkheadNearMat);
+      nearWall.position.set(side < 0 ? -6.75 : 6.2, 2.68, -11.4);
+      nearWall.scale.x = side < 0 ? 1 : -1;
+      nearWall.rotation.y = side < 0 ? 0.1 : -0.1;
+      nearWall.renderOrder = 2;
 
-      for (const side of [-1, 1]) {
-        const pillar = new THREE.Mesh(pillarGeo, gantryMat);
-        pillar.position.set(side * 7.8, 1.55, 0);
-        pillar.rotation.z = side * 0.1;
+      const farWall = new THREE.Mesh(bulkheadGeoFar, this.hangarBulkheadFarMat);
+      farWall.position.set(side < 0 ? -9.6 : 9.1, 3.68, -15.6);
+      farWall.scale.x = side < 0 ? 1 : -1;
+      farWall.rotation.y = side < 0 ? 0.06 : -0.06;
+      farWall.renderOrder = 1;
 
-        const shoulder = new THREE.Mesh(collarGeo, gantryMat);
-        shoulder.position.set(side * 6.3, 4.95, 0);
-        shoulder.rotation.z = side * 0.34;
-
-        const sideStrip = new THREE.Mesh(
-          new THREE.BoxGeometry(0.08, 4.4, 0.14),
-          idx % 2 === 0 ? cyanStripMat : amberStripMat
-        );
-        sideStrip.position.set(side * 7.45, 1.4, 0.32);
-        sideStrip.rotation.z = side * 0.1;
-
-        rib.add(pillar, shoulder, sideStrip);
-      }
-
-      const topBeam = new THREE.Mesh(topCrossGeo, gantryMat);
-      topBeam.position.set(0, 5.45, 0);
-      const topLight = new THREE.Mesh(
-        overheadLightGeo,
-        idx % 2 === 0 ? cyanStripMat : amberStripMat
-      );
-      topLight.position.set(0, 5.18, 0);
-      rib.add(topBeam, topLight);
-      this.hangarGroup.add(rib);
+      this.hangarParallaxGroup.add(nearWall, farWall);
     }
 
-    // Soft additive volumetric bay spotlights framing the turntable (0, 0, 0)
-    const spotGeo = new THREE.CylinderGeometry(0.22, 2.35, 7.6, 18, 1, true);
-    spotGeo.translate(0, -3.8, 0);
-    const spotConfigs: Array<{ x: number; y: number; z: number; color: number }> = [
-      { x: -4.4, y: 4.5, z: -1.5, color: 0x38bdf8 },
-      { x: 4.4, y: 4.5, z: -1.5, color: 0xffc66d },
-      { x: -5.2, y: 4.8, z: -7.5, color: 0x22d3ee },
-      { x: 5.2, y: 4.8, z: -7.5, color: 0xffb347 },
+    // 5. Soft Volumetric Bay Sunlight Shafts streaming from overhead gantry onto turntable (0, -0.8, 0)
+    const spotGeo = new THREE.CylinderGeometry(0.26, 2.55, 7.8, 18, 1, true);
+    spotGeo.translate(0, -3.9, 0);
+    const spotConfigs: Array<{ x: number; y: number; z: number; color: number; opacity: number }> = [
+      { x: -4.2, y: 4.4, z: -2.2, color: 0xffd28a, opacity: 0.14 },
+      { x: 4.2, y: 4.4, z: -2.2, color: 0x38e2ff, opacity: 0.14 },
     ];
     for (const cfg of spotConfigs) {
-      const mat = this.createVolumetricBeamMaterial(cfg.color, 0.24, false);
+      const mat = this.createVolumetricBeamMaterial(cfg.color, cfg.opacity, false);
       const beam = new THREE.Mesh(spotGeo, mat);
       beam.position.set(cfg.x, cfg.y, cfg.z);
       beam.lookAt(0, -1.2, 0);
@@ -1538,7 +1820,7 @@ export class EnvironmentSystem {
       this.act1Group.add(rail);
     }
 
-    // 3. Side Structural Terraces (x = ±25.5, y = -10.2) directly supporting prop_city_tile (at y = -9.5)
+    // 3. Side Structural Terraces (x = ±25.5, y = -10.2) flanking the orbital highway corridor
     const terraceGeo = new THREE.BoxGeometry(22.5, 1.4, 285);
     this.terraceDeckMat = new THREE.ShaderMaterial({
       uniforms: {

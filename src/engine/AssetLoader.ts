@@ -38,7 +38,7 @@ export interface PooledModelInstance {
   baseEmissiveIntensities: number[];
 }
 
-const BATCH_WHITELIST = new Set<ModelKey>(['prop_city_tile', 'enemy_foldwing', 'ship_astra']);
+const BATCH_WHITELIST = new Set<ModelKey>(['pickup_repair', 'pickup_energy', 'enemy_foldwing', 'ship_astra']);
 
 const DYNAMIC_NODE_KEYWORDS = [
   'rotor_',
@@ -106,12 +106,57 @@ const UI_PRELOAD_URLS = [
   './ui/frames/hud_boss_frame.webp',
 ];
 
-const ENV_TEXTURE_SPECS: ReadonlyArray<{
-  key: 'hangar' | 'act1' | 'act2' | 'act3';
+interface EnvTextureSpec {
+  key: string;
   url: string;
   fallbackHex: number;
-}> = [
+  mipmaps?: boolean;
+  linear?: boolean;
+  transparentFallback?: boolean;
+}
+
+const ENV_TEXTURE_SPECS: ReadonlyArray<EnvTextureSpec> = [
   { key: 'hangar', url: './env/sky_hangar_dock.webp', fallbackHex: 0x164e63 },
+  {
+    key: 'hangar_ceiling',
+    url: './env/hangar_ceiling_gantry.webp',
+    fallbackHex: 0x000000,
+    mipmaps: true,
+    transparentFallback: true,
+  },
+  {
+    key: 'hangar_bulkhead',
+    url: './env/hangar_side_bulkhead.webp',
+    fallbackHex: 0x000000,
+    mipmaps: true,
+    transparentFallback: true,
+  },
+  {
+    key: 'hangar_deck_albedo',
+    url: './env/hangar_deck_albedo.webp',
+    fallbackHex: 0x1d2d44,
+    mipmaps: true,
+  },
+  {
+    key: 'hangar_deck_normal',
+    url: './env/hangar_deck_normal.webp',
+    fallbackHex: 0x8080ff,
+    mipmaps: true,
+    linear: true,
+  },
+  {
+    key: 'hangar_deck_roughness',
+    url: './env/hangar_deck_roughness.webp',
+    fallbackHex: 0x666666,
+    mipmaps: true,
+    linear: true,
+  },
+  {
+    key: 'hangar_deck_emissive',
+    url: './env/hangar_deck_emissive.webp',
+    fallbackHex: 0x000000,
+    mipmaps: true,
+  },
   { key: 'act1', url: './env/sky_act1_metropolis.webp', fallbackHex: 0x0d2847 },
   { key: 'act2', url: './env/sky_act2_nebula.webp', fallbackHex: 0x2e1f6b },
   { key: 'act3', url: './env/sky_act3_citadel.webp', fallbackHex: 0x5c1922 },
@@ -350,145 +395,265 @@ function tintEnemyFoldwing(root: THREE.Object3D): void {
   });
 }
 
+function replaceWithPhysicalClearcoat(
+  oldMat: THREE.MeshStandardMaterial,
+  opts: {
+    color?: number;
+    metalness?: number;
+    roughness?: number;
+    clearcoat?: number;
+    clearcoatRoughness?: number;
+    reflectivity?: number;
+    envMapIntensity?: number;
+    emissive?: number;
+    emissiveIntensity?: number;
+  }
+): THREE.MeshPhysicalMaterial {
+  const phys = new THREE.MeshPhysicalMaterial({
+    name: oldMat.name,
+    color: opts.color !== undefined ? new THREE.Color(opts.color) : oldMat.color.clone(),
+    metalness: opts.metalness ?? oldMat.metalness,
+    roughness: opts.roughness ?? oldMat.roughness,
+    clearcoat: opts.clearcoat ?? 0.85,
+    clearcoatRoughness: opts.clearcoatRoughness ?? 0.06,
+    reflectivity: opts.reflectivity ?? 0.9,
+    envMapIntensity: opts.envMapIntensity ?? oldMat.envMapIntensity,
+    emissive: opts.emissive !== undefined ? new THREE.Color(opts.emissive) : oldMat.emissive.clone(),
+    emissiveIntensity: opts.emissiveIntensity ?? oldMat.emissiveIntensity,
+    transparent: oldMat.transparent,
+    opacity: oldMat.opacity,
+    side: oldMat.side,
+    vertexColors: oldMat.vertexColors,
+  });
+  return phys;
+}
+
 function enhanceShipMorph(root: THREE.Object3D): void {
-  const seen = new Set<THREE.Material>();
+  const replaced = new Map<THREE.Material, THREE.Material>();
   root.traverse((obj) => {
     const mesh = obj as THREE.Mesh;
     if (!mesh.isMesh || !mesh.material) return;
-    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    for (const mat of mats) {
-      if (seen.has(mat)) continue;
-      seen.add(mat);
-      if (!(mat instanceof THREE.MeshStandardMaterial)) continue;
+    const upgradeOne = (src: THREE.Material): THREE.Material => {
+      const existing = replaced.get(src);
+      if (existing) return existing;
+      if (!(src instanceof THREE.MeshStandardMaterial)) {
+        replaced.set(src, src);
+        return src;
+      }
 
-      switch (mat.name) {
-        case 'steel':
-          // Main swept wings, airframe & control surfaces: stealth obsidian gunmetal
-          mat.color.setHex(0x283346);
-          mat.metalness = 0.42;
-          mat.roughness = 0.36;
-          mat.envMapIntensity = 0.92;
-          mat.emissive.setHex(0x07101e);
-          mat.emissiveIntensity = 0.2;
+      let out: THREE.Material = src;
+      switch (src.name) {
+        case 'Mat_ValkyriePearl':
+          out = replaceWithPhysicalClearcoat(src, {
+            color: 0x9aaec4,
+            metalness: 0.62,
+            roughness: 0.16,
+            clearcoat: 0.95,
+            clearcoatRoughness: 0.05,
+            reflectivity: 0.95,
+            envMapIntensity: 1.45,
+          });
           break;
-        case 'shell':
-          // Twin intake fairings & dorsal spine: Valkyrie Crimson tactical livery
-          mat.color.setHex(0xd62839);
-          mat.metalness = 0.32;
-          mat.roughness = 0.3;
-          mat.envMapIntensity = 1.0;
-          mat.emissive.setHex(0x4c0914);
-          mat.emissiveIntensity = 0.3;
+        case 'Mat_StealthCarbon':
+          out = replaceWithPhysicalClearcoat(src, {
+            color: 0x1a2230,
+            metalness: 0.84,
+            roughness: 0.2,
+            clearcoat: 0.65,
+            clearcoatRoughness: 0.08,
+            envMapIntensity: 1.35,
+          });
           break;
-        case 'trim':
-          // Canopy arch & nose stripe: vivid scarlet crimson accent
-          mat.color.setHex(0xff3b54);
-          mat.metalness = 0.34;
-          mat.roughness = 0.26;
-          mat.envMapIntensity = 1.05;
-          mat.emissive.setHex(0x700c1e);
-          mat.emissiveIntensity = 0.48;
+        case 'Mat_ValkyrieCrimson':
+          out = replaceWithPhysicalClearcoat(src, {
+            color: 0xd91c32,
+            metalness: 0.58,
+            roughness: 0.15,
+            clearcoat: 1.0,
+            clearcoatRoughness: 0.04,
+            emissiveIntensity: 0.22,
+            envMapIntensity: 1.45,
+          });
           break;
-        case 'alloy':
-          // Wingtip pods, intake lips & landing gear struts: satin brushed titanium
-          mat.color.setHex(0x9fb2c8);
-          mat.metalness = 0.76;
-          mat.roughness = 0.24;
-          mat.envMapIntensity = 1.18;
+        case 'Mat_BrushedAlloy':
+          out = replaceWithPhysicalClearcoat(src, {
+            color: 0x8fa0b5,
+            metalness: 0.92,
+            roughness: 0.14,
+            clearcoat: 0.45,
+            clearcoatRoughness: 0.08,
+            envMapIntensity: 1.65,
+          });
           break;
-        case 'dark':
-          // Intake interiors, tires & exhaust ducts
-          mat.color.setHex(0x161d2b);
-          mat.metalness = 0.3;
-          mat.roughness = 0.52;
+        case 'Mat_CanopyGlass':
+          out = replaceWithPhysicalClearcoat(src, {
+            color: 0x072038,
+            metalness: 0.15,
+            roughness: 0.04,
+            clearcoat: 1.0,
+            clearcoatRoughness: 0.02,
+            emissiveIntensity: 0.48,
+            envMapIntensity: 1.75,
+          });
           break;
-        case 'glass':
-          // Tandem bubble canopy: deep smoked cyan fighter glass
-          mat.color.setHex(0x0f314d);
-          mat.metalness = 0.32;
-          mat.roughness = 0.08;
-          mat.opacity = 0.84;
-          mat.transparent = true;
-          mat.envMapIntensity = 1.1;
-          mat.emissive.setHex(0x0b3959);
-          mat.emissiveIntensity = 0.52;
+        case 'Mat_ThrusterPlasma':
+          src.emissiveIntensity = 2.2;
+          src.needsUpdate = true;
           break;
-        case 'instr':
-          // Glowing holographic cyan cockpit instrumentation
-          mat.color.setHex(0x7ef7ff);
-          mat.emissive.setHex(0x00f0ff);
-          mat.emissiveIntensity = 2.4;
-          break;
-        case 'navRed':
-        case 'navGreen':
-        case 'navWhite':
-          mat.emissiveIntensity = Math.max(mat.emissiveIntensity, 2.5);
+        case 'Mat_HoloCyan':
+          src.emissiveIntensity = 2.0;
+          src.needsUpdate = true;
           break;
         default:
           break;
       }
-      mat.needsUpdate = true;
+      if (out !== src) src.dispose();
+      replaced.set(src, out);
+      return out;
+    };
+
+    if (Array.isArray(mesh.material)) {
+      mesh.material = mesh.material.map(upgradeOne);
+    } else {
+      mesh.material = upgradeOne(mesh.material);
     }
   });
 }
 
-function enhancePropCityTile(root: THREE.Object3D): void {
-  const seen = new Set<THREE.Material>();
-  const skyLiftColor = new THREE.Color(0x90b8d8);
+function enhancePickupModel(root: THREE.Object3D): void {
+  const replaced = new Map<THREE.Material, THREE.Material>();
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.material) return;
+    const upgradeOne = (src: THREE.Material): THREE.Material => {
+      const existing = replaced.get(src);
+      if (existing) return existing;
+      if (!(src instanceof THREE.MeshStandardMaterial)) {
+        replaced.set(src, src);
+        return src;
+      }
+
+      let out: THREE.Material = src;
+      const hasOwnEmissive = src.emissive.r + src.emissive.g + src.emissive.b > 0.05;
+      if (hasOwnEmissive) {
+        src.envMapIntensity = Math.max(src.envMapIntensity, 1.35);
+        src.emissiveIntensity = 2.1;
+        src.needsUpdate = true;
+      } else {
+        switch (src.name) {
+          case 'Mat_TitaniumWhite':
+            out = replaceWithPhysicalClearcoat(src, {
+              color: 0xc2d2e3,
+              metalness: 0.64,
+              roughness: 0.15,
+              clearcoat: 0.95,
+              clearcoatRoughness: 0.05,
+              envMapIntensity: 1.55,
+            });
+            break;
+          case 'Mat_GunmetalDark':
+          case 'Mat_ObsidianChassis':
+            out = replaceWithPhysicalClearcoat(src, {
+              metalness: 0.88,
+              roughness: 0.18,
+              clearcoat: 0.72,
+              clearcoatRoughness: 0.07,
+              envMapIntensity: 1.55,
+            });
+            break;
+          case 'Mat_GoldTrim':
+            out = replaceWithPhysicalClearcoat(src, {
+              color: 0xf4c048,
+              metalness: 0.95,
+              roughness: 0.12,
+              clearcoat: 0.85,
+              clearcoatRoughness: 0.05,
+              envMapIntensity: 1.85,
+            });
+            break;
+          default:
+            out = replaceWithPhysicalClearcoat(src, {
+              metalness: Math.max(src.metalness, 0.7),
+              roughness: Math.min(src.roughness, 0.18),
+              clearcoat: 0.75,
+              clearcoatRoughness: 0.07,
+              envMapIntensity: 1.5,
+            });
+            break;
+        }
+      }
+      if (out !== src) src.dispose();
+      replaced.set(src, out);
+      return out;
+    };
+
+    if (Array.isArray(mesh.material)) {
+      mesh.material = mesh.material.map(upgradeOne);
+    } else {
+      mesh.material = upgradeOne(mesh.material);
+    }
+  });
+}
+
+function applyTextureSharpness(root: THREE.Object3D, maxAnisotropy: number): void {
+  const seenTex = new Set<THREE.Texture>();
+  const touch = (tex: THREE.Texture | null | undefined) => {
+    if (!tex || seenTex.has(tex)) return;
+    seenTex.add(tex);
+    tex.anisotropy = maxAnisotropy;
+    tex.needsUpdate = true;
+  };
   root.traverse((obj) => {
     const mesh = obj as THREE.Mesh;
     if (!mesh.isMesh || !mesh.material) return;
     const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
     for (const mat of mats) {
-      if (seen.has(mat)) continue;
-      seen.add(mat);
-      if (!(mat instanceof THREE.MeshStandardMaterial)) continue;
-
-      const hasOwnEmissive = mat.emissive.r + mat.emissive.g + mat.emissive.b > 0.01;
-      if (hasOwnEmissive || mat.name.includes('Light')) {
-        mat.emissiveIntensity = Math.max(mat.emissiveIntensity * 1.18, 3.2);
-        mat.envMapIntensity = Math.max(mat.envMapIntensity, 1.45);
-      } else {
-        const liftFactor = mat.name === 'M_HullDark' ? 0.24 : 0.14;
-        mat.color.lerp(skyLiftColor, liftFactor);
-        mat.envMapIntensity = Math.max(mat.envMapIntensity, 1.75);
-        mat.metalness = Math.min(mat.metalness, 0.72);
-        mat.roughness = Math.min(mat.roughness, 0.78);
-        // Subtle sky-bounce floor keeps structural undersides readable without hitting bloom threshold.
-        mat.emissive.setHex(0x102842);
-        mat.emissiveIntensity = 0.26;
+      if (mat instanceof THREE.MeshStandardMaterial) {
+        touch(mat.map);
+        touch(mat.normalMap);
+        touch(mat.roughnessMap);
+        touch(mat.metalnessMap);
+        touch(mat.emissiveMap);
+        touch(mat.aoMap);
       }
-      mat.needsUpdate = true;
     }
   });
 }
 
-function configureEnvTexture(tex: THREE.Texture): THREE.Texture {
-  tex.colorSpace = THREE.SRGBColorSpace;
+function configureEnvTexture(
+  tex: THREE.Texture,
+  opts?: Pick<EnvTextureSpec, 'mipmaps' | 'linear'>
+): THREE.Texture {
+  const isData = tex instanceof THREE.DataTexture;
+  const useMipmaps = Boolean(opts?.mipmaps) && !isData;
+  tex.colorSpace = opts?.linear ? THREE.NoColorSpace : THREE.SRGBColorSpace;
   tex.magFilter = THREE.LinearFilter;
-  tex.minFilter = THREE.LinearFilter;
+  tex.minFilter = useMipmaps ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
   tex.wrapS = THREE.ClampToEdgeWrapping;
   tex.wrapT = THREE.ClampToEdgeWrapping;
-  tex.generateMipmaps = false;
+  tex.generateMipmaps = useMipmaps;
   tex.needsUpdate = true;
   return tex;
 }
 
-function createFallbackEnvTexture(hex: number): THREE.DataTexture {
-  const c = new THREE.Color(hex).convertLinearToSRGB();
+function createFallbackEnvTexture(
+  hex: number,
+  opts?: Pick<EnvTextureSpec, 'linear' | 'transparentFallback'>
+): THREE.DataTexture {
+  const c = opts?.linear ? new THREE.Color(hex) : new THREE.Color(hex).convertLinearToSRGB();
   const data = new Uint8Array([
     Math.round(THREE.MathUtils.clamp(c.r, 0, 1) * 255),
     Math.round(THREE.MathUtils.clamp(c.g, 0, 1) * 255),
     Math.round(THREE.MathUtils.clamp(c.b, 0, 1) * 255),
-    255,
+    opts?.transparentFallback ? 0 : 255,
   ]);
   const tex = new THREE.DataTexture(data, 1, 1, THREE.RGBAFormat);
-  return configureEnvTexture(tex) as THREE.DataTexture;
+  return configureEnvTexture(tex, opts) as THREE.DataTexture;
 }
 
-function loadEnvTexture(url: string, fallbackHex: number): Promise<THREE.Texture> {
+function loadEnvTexture(spec: EnvTextureSpec): Promise<THREE.Texture> {
   if (typeof Image === 'undefined') {
-    return Promise.resolve(createFallbackEnvTexture(fallbackHex));
+    return Promise.resolve(createFallbackEnvTexture(spec.fallbackHex, spec));
   }
   return new Promise<THREE.Texture>((resolve) => {
     const img = new Image();
@@ -496,20 +661,20 @@ function loadEnvTexture(url: string, fallbackHex: number): Promise<THREE.Texture
     const finishFallback = () => {
       if (settled) return;
       settled = true;
-      resolve(createFallbackEnvTexture(fallbackHex));
+      resolve(createFallbackEnvTexture(spec.fallbackHex, spec));
     };
     img.onload = () => {
       if (settled) return;
       settled = true;
       if (!img.naturalWidth || !img.naturalHeight) {
-        resolve(createFallbackEnvTexture(fallbackHex));
+        resolve(createFallbackEnvTexture(spec.fallbackHex, spec));
         return;
       }
-      resolve(configureEnvTexture(new THREE.Texture(img)));
+      resolve(configureEnvTexture(new THREE.Texture(img), spec));
     };
     img.onerror = finishFallback;
     try {
-      img.src = url;
+      img.src = spec.url;
     } catch {
       finishFallback();
     }
@@ -619,7 +784,7 @@ export class AssetLoader {
 
     const envPromise = Promise.all(
       ENV_TEXTURE_SPECS.map(async (spec) => {
-        const tex = await loadEnvTexture(spec.url, spec.fallbackHex);
+        const tex = await loadEnvTexture(spec);
         this.envTextures.set(spec.key, tex);
       })
     );
@@ -639,8 +804,8 @@ export class AssetLoader {
         tintEnemyFoldwing(rawScene);
       } else if (key === 'ship_morph') {
         enhanceShipMorph(rawScene);
-      } else if (key === 'prop_city_tile') {
-        enhancePropCityTile(rawScene);
+      } else if (key === 'pickup_repair' || key === 'pickup_energy') {
+        enhancePickupModel(rawScene);
       }
 
       // Prevent skeletal-animated meshes from culling prematurely when bones leave bind-pose bounds
@@ -747,9 +912,19 @@ export class AssetLoader {
       enemy_rover: 3,
       enemy_foldwing: 5,
       ally_biplane: 2,
-      prop_city_tile: 12,
+      pickup_repair: 12,
+      pickup_energy: 12,
       prop_gate: 2,
     };
+
+    const maxAniso = Math.min(16, renderer.capabilities?.getMaxAnisotropy?.() || 4);
+    for (const proto of this.prototypes.values()) {
+      applyTextureSharpness(proto.prototype, maxAniso);
+    }
+    for (const envTex of this.envTextures.values()) {
+      envTex.anisotropy = maxAniso;
+      envTex.needsUpdate = true;
+    }
 
     const warmupGroup = new THREE.Group();
     const allKeys = Object.keys(poolPlan) as ModelKey[];
