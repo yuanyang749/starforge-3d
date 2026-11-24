@@ -72,11 +72,113 @@ export interface ActiveBoss {
 
 export interface BoostRing {
   group: THREE.Group;
+  outerChassis: THREE.Group;
+  innerHolo: THREE.Group;
+  ringMesh: THREE.Mesh;
+  tunnelMesh: THREE.Mesh;
+  ringMat: THREE.ShaderMaterial;
+  tunnelMat: THREE.ShaderMaterial;
   active: boolean;
   triggered: boolean;
+  triggerAge: number;
+  baseScale: number;
   pos: THREE.Vector3;
   radius: number;
 }
+
+const BOOST_RING_VERT = /* glsl */ `
+  varying vec2 vLocalPos;
+  void main() {
+    vLocalPos = position.xy;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const BOOST_RING_FRAG = /* glsl */ `
+  uniform float uTime;
+  uniform float uProximity;
+  uniform float uTrigger;
+  uniform float uFade;
+  varying vec2 vLocalPos;
+
+  void main() {
+    float r = length(vLocalPos);
+    float ang = r > 1e-4 ? atan(vLocalPos.y, vLocalPos.x) : 0.0;
+    float t = clamp((r - 1.98) / 1.10, 0.0, 1.0);
+
+    // High-contrast dark obsidian edge bands so the ring stays razor-sharp over bright clouds
+    float outerRimMask = smoothstep(0.76, 0.90, t) * (1.0 - smoothstep(0.95, 1.0, t));
+    float innerRimMask = smoothstep(0.02, 0.08, t) * (1.0 - smoothstep(0.14, 0.22, t));
+    float contrastSilhouette = max(outerRimMask * 0.92, innerRimMask * 0.72);
+
+    // Sweeping 6-segment primary accelerator arc (rotates with uTime + surges on trigger)
+    float arcBand = smoothstep(0.28, 0.44, t) * (1.0 - smoothstep(0.68, 0.82, t));
+    float sweepWave = clamp(0.5 + 0.5 * cos(ang * 6.0 - uTime * (3.6 + uTrigger * 12.0)), 0.0, 1.0);
+    float arcGlow = arcBand * (0.35 + 0.65 * pow(max(1e-4, sweepWave), 1.6));
+
+    // 36 fine radial telemetry degree ticks near inner perimeter
+    float tickBand = smoothstep(0.14, 0.20, t) * (1.0 - smoothstep(0.32, 0.38, t));
+    float tickPattern = smoothstep(0.55, 0.92, cos(ang * 36.0 + uTime * 1.1));
+    float ticks = tickBand * tickPattern * 0.85;
+
+    // Inward-pulling accelerator slipstream ripples
+    float ripplePhase = sin(r * 22.0 + uTime * 8.5);
+    float ripples = smoothstep(0.35, 0.95, ripplePhase) * (1.0 - smoothstep(0.0, 0.85, abs(t - 0.42) * 1.8));
+
+    vec3 darkRimCol = vec3(0.02, 0.06, 0.14);
+    vec3 cyanCol = mix(vec3(0.08, 0.90, 1.0), vec3(0.65, 1.0, 0.94), clamp(uProximity * 0.45 + uTrigger * 0.55, 0.0, 1.0));
+    vec3 amberTickCol = mix(vec3(1.0, 0.72, 0.22), vec3(0.45, 1.0, 0.88), clamp(uTrigger, 0.0, 1.0));
+
+    float energySum = arcGlow * (1.15 + uProximity * 0.55 + uTrigger * 0.95) + ripples * 0.65;
+    vec3 rgb = mix(darkRimCol, cyanCol, clamp(energySum, 0.0, 1.0));
+    rgb = mix(rgb, amberTickCol, clamp(ticks * 0.9, 0.0, 1.0));
+    rgb += vec3(0.35, 0.95, 1.0) * clamp(uTrigger, 0.0, 1.0) * arcBand * 0.85;
+    rgb = clamp(rgb, 0.0, 2.5);
+
+    float alpha = clamp(max(contrastSilhouette * 0.88, clamp(arcGlow + ticks + ripples * 0.65, 0.0, 1.0)), 0.0, 0.96);
+    alpha *= clamp(uFade, 0.0, 1.0);
+    if (alpha < 0.01) discard;
+    gl_FragColor = vec4(rgb, alpha);
+  }
+`;
+
+const BOOST_TUNNEL_VERT = /* glsl */ `
+  varying vec2 vUv;
+  void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  }
+`;
+
+const BOOST_TUNNEL_FRAG = /* glsl */ `
+  uniform float uTime;
+  uniform float uProximity;
+  uniform float uTrigger;
+  uniform float uFade;
+  varying vec2 vUv;
+
+  void main() {
+    // Feather both longitudinal Z ends seamlessly to 0 with strictly positive pow() base
+    float uvY = clamp(vUv.y, 0.0, 1.0);
+    float sinAxial = max(1e-4, sin(uvY * 3.14159265));
+    float axialFade = pow(sinAxial, 1.35) * smoothstep(0.0, 0.08, uvY) * smoothstep(1.0, 0.92, uvY);
+
+    // Forward-streaming slipstream streaks + chevron rings flowing into the aperture
+    float streaks = clamp(0.5 + 0.5 * cos(vUv.x * 75.39822 + sin(uvY * 6.28318 - uTime * 2.5)), 0.0, 1.0);
+    streaks = pow(max(1e-4, streaks), 3.0);
+
+    float chevPhase = fract(uvY * 2.4 + uTime * (2.6 + uTrigger * 5.0));
+    float pulseRing = smoothstep(0.0, 0.22, chevPhase) * (1.0 - smoothstep(0.22, 0.65, chevPhase));
+
+    float energy = (0.14 + streaks * 0.42 + pulseRing * (0.48 + uProximity * 0.35)) * axialFade;
+    vec3 col = mix(vec3(0.06, 0.88, 1.0), vec3(0.68, 1.0, 0.88), clamp(uTrigger * 0.7 + pulseRing * 0.25, 0.0, 1.0));
+    col = clamp(col * (1.0 + clamp(uTrigger, 0.0, 1.0) * 0.8), 0.0, 2.5);
+
+    float alpha = clamp(energy * (0.36 + uProximity * 0.24 + uTrigger * 0.38) * clamp(uFade, 0.0, 1.0), 0.0, 0.92);
+    if (alpha < 0.005) discard;
+    gl_FragColor = vec4(col, alpha);
+  }
+`;
 
 interface CorridorProp {
   instance: PooledModelInstance;
@@ -154,6 +256,7 @@ export class WaveDirector {
   private spawnTimer = 0;
   private boostRingTimer = 6.0;
   private gateSpawnCooldown = 14.0;
+  private envElapsed = 0;
   private spawnedInWave = 0;
   private targetSpawnsInWave = 0;
   private nextEnemyId = 1;
@@ -171,32 +274,126 @@ export class WaveDirector {
     this.scene = scene;
     this.loader = loader;
     this.envGroup.name = 'CorridorEnvironment';
+    this.envGroup.visible = false;
     scene.add(this.envGroup);
 
-    // Pooled holographic boost rings (3 rings)
-    const ringGeo = new THREE.TorusGeometry(2.85, 0.14, 12, 32);
-    const innerGeo = new THREE.TorusGeometry(2.35, 0.05, 8, 28);
+    // Pooled AAA segmented aerospace Boost Rings (3 slots)
+    const arcGeo = new THREE.TorusGeometry(3.16, 0.145, 10, 14, Math.PI / 3 - 0.18);
+    const pylonBodyGeo = new THREE.BoxGeometry(0.46, 0.34, 0.88);
+    const pylonFinGeo = new THREE.BoxGeometry(0.32, 0.1, 1.18);
+    const emitterLensGeo = new THREE.BoxGeometry(0.16, 0.22, 0.46);
+    const chevronGeo = new THREE.ConeGeometry(0.2, 0.5, 3);
+    const holoRingGeo = new THREE.RingGeometry(1.98, 3.08, 72, 1);
+    const tunnelGeo = new THREE.CylinderGeometry(2.86, 2.28, 3.6, 48, 1, true);
+    tunnelGeo.rotateX(Math.PI * 0.5);
+
+    const chassisMat = new THREE.MeshPhysicalMaterial({
+      color: 0x16243a,
+      metalness: 0.9,
+      roughness: 0.22,
+      clearcoat: 0.72,
+      clearcoatRoughness: 0.16,
+      emissive: 0x062036,
+      emissiveIntensity: 0.35,
+    });
+    const emitterMat = new THREE.MeshStandardMaterial({
+      color: 0x22f0ff,
+      emissive: 0x1ef4ff,
+      emissiveIntensity: 2.1,
+      metalness: 0.2,
+      roughness: 0.15,
+    });
+    const chevronMat = new THREE.MeshStandardMaterial({
+      color: 0xffc14d,
+      emissive: 0xff9d2e,
+      emissiveIntensity: 1.45,
+      metalness: 0.35,
+      roughness: 0.25,
+    });
+
     for (let i = 0; i < 3; i++) {
       const group = new THREE.Group();
-      const outerMat = new THREE.MeshBasicMaterial({
-        color: 0x00f0ff,
+      group.name = `BoostRingSlot_${i}`;
+      const outerChassis = new THREE.Group();
+      const innerHolo = new THREE.Group();
+
+      for (let k = 0; k < 6; k++) {
+        const theta = k * (Math.PI / 3);
+
+        // Curved segmented titanium hull arc
+        const arc = new THREE.Mesh(arcGeo, chassisMat);
+        arc.rotation.z = theta + 0.09;
+        outerChassis.add(arc);
+
+        // Radial capacitor pylon with inward plasma emitter lens
+        const pylon = new THREE.Group();
+        pylon.position.set(Math.cos(theta) * 3.22, Math.sin(theta) * 3.22, 0);
+        pylon.rotation.z = theta;
+
+        const housing = new THREE.Mesh(pylonBodyGeo, chassisMat);
+        const fin = new THREE.Mesh(pylonFinGeo, chassisMat);
+        fin.position.set(0.18, 0, 0);
+        const lens = new THREE.Mesh(emitterLensGeo, emitterMat);
+        lens.position.set(-0.22, 0, 0);
+        pylon.add(housing, fin, lens);
+        outerChassis.add(pylon);
+
+        // Counter-rotating amber guide chevrons pointing straight inward toward center aperture
+        const chev = new THREE.Mesh(chevronGeo, chevronMat);
+        chev.position.set(Math.cos(theta) * 2.66, Math.sin(theta) * 2.66, 0.06);
+        chev.rotation.z = theta + Math.PI * 0.5;
+        chev.scale.set(1.0, 1.0, 0.35);
+        innerHolo.add(chev);
+      }
+
+      const ringMat = new THREE.ShaderMaterial({
+        uniforms: {
+          uTime: { value: 0 },
+          uProximity: { value: 0 },
+          uTrigger: { value: 0 },
+          uFade: { value: 1 },
+        },
+        vertexShader: BOOST_RING_VERT,
+        fragmentShader: BOOST_RING_FRAG,
         transparent: true,
-        opacity: 0.85,
-        blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+        depthWrite: false,
       });
-      const innerMat = new THREE.MeshBasicMaterial({
-        color: 0xffb347,
+      const ringMesh = new THREE.Mesh(holoRingGeo, ringMat);
+      ringMesh.renderOrder = 2;
+
+      const tunnelMat = new THREE.ShaderMaterial({
+        uniforms: {
+          uTime: { value: 0 },
+          uProximity: { value: 0 },
+          uTrigger: { value: 0 },
+          uFade: { value: 1 },
+        },
+        vertexShader: BOOST_TUNNEL_VERT,
+        fragmentShader: BOOST_TUNNEL_FRAG,
         transparent: true,
-        opacity: 0.9,
         blending: THREE.AdditiveBlending,
+        side: THREE.DoubleSide,
+        depthWrite: false,
       });
-      group.add(new THREE.Mesh(ringGeo, outerMat), new THREE.Mesh(innerGeo, innerMat));
+      const tunnelMesh = new THREE.Mesh(tunnelGeo, tunnelMat);
+      tunnelMesh.renderOrder = 1;
+
+      group.add(outerChassis, innerHolo, ringMesh, tunnelMesh);
       group.visible = false;
       this.envGroup.add(group);
       this.boostRings.push({
         group,
+        outerChassis,
+        innerHolo,
+        ringMesh,
+        tunnelMesh,
+        ringMat,
+        tunnelMat,
         active: false,
         triggered: false,
+        triggerAge: -1,
+        baseScale: 1.0,
         pos: new THREE.Vector3(0, 0, -200),
         radius: 3.4,
       });
@@ -205,6 +402,7 @@ export class WaveDirector {
 
   setCombatActive(active: boolean): void {
     this.combatActive = active;
+    this.envGroup.visible = active;
   }
 
   clearCorridorProps(): void {
@@ -229,6 +427,9 @@ export class WaveDirector {
 
   clearCombatEntities(): void {
     this.combatActive = false;
+    this.phaseState = 'idle';
+    this.boostRingTimer = 5.5;
+    this.envGroup.visible = false;
     for (const e of this.activeEnemies) {
       this.loader.release(e.instance);
     }
@@ -242,6 +443,8 @@ export class WaveDirector {
     for (const r of this.boostRings) {
       r.active = false;
       r.triggered = false;
+      r.triggerAge = -1;
+      r.group.scale.setScalar(1.0);
       r.group.visible = false;
     }
 
@@ -250,6 +453,34 @@ export class WaveDirector {
 
   getBoostRings(): BoostRing[] {
     return this.boostRings;
+  }
+
+  getWarmupObjects(): THREE.Object3D[] {
+    const slot0 = this.boostRings[0];
+    if (!slot0) return [];
+    return [slot0.ringMesh, slot0.tunnelMesh];
+  }
+
+  triggerBoostRing(ring: BoostRing): void {
+    ring.triggered = true;
+    ring.triggerAge = 0;
+  }
+
+  forceSpawnBoostRing(x = 0, y = 0, z = -18): void {
+    const slot = this.boostRings[0];
+    if (!slot) return;
+    slot.active = true;
+    slot.triggered = false;
+    slot.triggerAge = -1;
+    slot.baseScale = 1.0;
+    slot.pos.set(x, y, z);
+    slot.group.position.copy(slot.pos);
+    slot.group.scale.setScalar(1.0);
+    slot.ringMat.uniforms.uTrigger.value = 0;
+    slot.ringMat.uniforms.uFade.value = 1;
+    slot.tunnelMat.uniforms.uTrigger.value = 0;
+    slot.tunnelMat.uniforms.uFade.value = 1;
+    slot.group.visible = true;
   }
 
   getAct(): number {
@@ -272,6 +503,7 @@ export class WaveDirector {
     this.clearCombatEntities();
 
     this.combatActive = true;
+    this.envGroup.visible = true;
     this.currentAct = 1;
     this.waveInAct = 1;
     this.endlessMode = false;
@@ -287,6 +519,7 @@ export class WaveDirector {
     this.clearCombatEntities();
 
     this.combatActive = true;
+    this.envGroup.visible = true;
     this.endlessMode = true;
     this.endlessWave = 1;
     this.currentAct = 2;
@@ -301,6 +534,7 @@ export class WaveDirector {
   forceSpawnBoss(act: 1 | 2 | 3): WaveEvent {
     this.clearCombatEntities();
     this.combatActive = true;
+    this.envGroup.visible = true;
     this.currentAct = act;
     this.waveInAct = 3;
     if (act >= 2) {
@@ -491,6 +725,7 @@ export class WaveDirector {
 
   updateEnvironment(dt: number, speedMultiplier: number): void {
     const scrollSpeed = 36 * speedMultiplier;
+    this.envElapsed += dt;
 
     // Smoothly transition atmosphere per Act with crisp low-density cosmic haze
     this.currentFogColor.lerp(this.targetFogColor, dt * 1.6);
@@ -533,8 +768,11 @@ export class WaveDirector {
       }
     }
 
-    // Boost rings spawning and scrolling
-    if (this.phaseState === 'spawning_wave' || this.phaseState === 'awaiting_clear') {
+    // Boost rings spawning and scrolling (strictly in active combat waves)
+    if (
+      this.combatActive &&
+      (this.phaseState === 'spawning_wave' || this.phaseState === 'awaiting_clear')
+    ) {
       this.boostRingTimer -= dt;
       if (this.boostRingTimer <= 0) {
         this.boostRingTimer = 7.2 + Math.random() * 3.5;
@@ -546,11 +784,46 @@ export class WaveDirector {
       if (!ring.active) continue;
       ring.pos.z += scrollSpeed * 0.92 * dt;
       ring.group.position.copy(ring.pos);
-      ring.group.rotation.z += dt * 2.2;
-      if (ring.pos.z > 22) {
-        ring.active = false;
-        ring.triggered = false;
-        ring.group.visible = false;
+
+      const proximity = THREE.MathUtils.clamp((ring.pos.z + 65) / 60, 0, 1);
+      ring.ringMat.uniforms.uTime.value = this.envElapsed;
+      ring.ringMat.uniforms.uProximity.value = proximity;
+      ring.tunnelMat.uniforms.uTime.value = this.envElapsed;
+      ring.tunnelMat.uniforms.uProximity.value = proximity;
+
+      if (ring.triggered && ring.triggerAge >= 0) {
+        ring.triggerAge += dt;
+        const p = THREE.MathUtils.clamp(ring.triggerAge / 0.42, 0, 1);
+        ring.group.scale.setScalar(ring.baseScale * (1.0 + Math.pow(p, 0.55) * 1.55));
+        ring.outerChassis.rotation.z += dt * 1.8;
+        ring.innerHolo.rotation.z -= dt * 9.0;
+        const fade = 1.0 - p;
+        ring.ringMat.uniforms.uTrigger.value = 1.0;
+        ring.ringMat.uniforms.uFade.value = fade;
+        ring.tunnelMat.uniforms.uTrigger.value = 1.0;
+        ring.tunnelMat.uniforms.uFade.value = fade;
+        if (p >= 1.0 || ring.pos.z > 24) {
+          ring.active = false;
+          ring.triggered = false;
+          ring.triggerAge = -1;
+          ring.group.scale.setScalar(1.0);
+          ring.group.visible = false;
+        }
+      } else {
+        ring.group.scale.setScalar(ring.baseScale);
+        ring.outerChassis.rotation.z += dt * 0.72;
+        ring.innerHolo.rotation.z -= dt * 1.85;
+        ring.ringMat.uniforms.uTrigger.value = 0.0;
+        ring.ringMat.uniforms.uFade.value = 1.0;
+        ring.tunnelMat.uniforms.uTrigger.value = 0.0;
+        ring.tunnelMat.uniforms.uFade.value = 1.0;
+        if (ring.pos.z > 22) {
+          ring.active = false;
+          ring.triggered = false;
+          ring.triggerAge = -1;
+          ring.group.scale.setScalar(1.0);
+          ring.group.visible = false;
+        }
       }
     }
   }
@@ -641,8 +914,15 @@ export class WaveDirector {
     if (!slot) return;
     slot.active = true;
     slot.triggered = false;
+    slot.triggerAge = -1;
+    slot.baseScale = 1.0;
     slot.pos.set((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 7, -145);
     slot.group.position.copy(slot.pos);
+    slot.group.scale.setScalar(1.0);
+    slot.ringMat.uniforms.uTrigger.value = 0;
+    slot.ringMat.uniforms.uFade.value = 1;
+    slot.tunnelMat.uniforms.uTrigger.value = 0;
+    slot.tunnelMat.uniforms.uFade.value = 1;
     slot.group.visible = true;
   }
 

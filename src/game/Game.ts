@@ -141,6 +141,8 @@ export interface StarforgeQaApi {
   setGraphicsPreset(preset: GraphicsPreset): void;
   spawnGateNow(z?: number, mode?: 'closed' | 'opening' | 'open'): void;
   spawnPickupNow(kind: 'repair' | 'energy', x?: number, y?: number, z?: number): void;
+  spawnBoostRingNow(x?: number, y?: number, z?: number): void;
+  triggerPickupFeedbackDemo?(): void;
   setPlayerHp(hp: number): void;
 }
 
@@ -193,12 +195,36 @@ interface WingmanUnit {
   pos: THREE.Vector3;
 }
 
+type FloatingTextKind =
+  | 'normal'
+  | 'crit'
+  | 'part'
+  | 'heal'
+  | 'score'
+  | 'pickup-repair'
+  | 'pickup-energy'
+  | 'pickup-boost';
+
+type PickupToastKind = 'repair' | 'energy' | 'boost' | 'full_repair';
+
 interface FloatingText {
   el: HTMLDivElement;
   worldPos: THREE.Vector3;
   age: number;
   maxAge: number;
+  holdRatio: number;
   vy: number;
+}
+
+interface ActivePickupToast {
+  kind: PickupToastKind;
+  count: number;
+  age: number;
+  maxAge: number;
+  leaving: boolean;
+  el: HTMLDivElement;
+  barEl: HTMLDivElement;
+  countEl: HTMLSpanElement;
 }
 
 const MAX_PLAYER_BULLETS = 240;
@@ -306,6 +332,8 @@ export class Game {
   private comboTimer = 0;
   private runDurationSec = 0;
   private autoFire = true;
+  private showHudLegend = true;
+  private settingsOpenedFromPause = false;
   private pointerDown = false;
   private pointerAimNDC = new THREE.Vector2(0, 0);
   private readonly keys = new Set<string>();
@@ -316,6 +344,11 @@ export class Game {
   private readonly enemyBullets: EnemyBullet[] = [];
   private readonly pickups: PickupItem[] = [];
   private readonly floatingTexts: FloatingText[] = [];
+  private readonly pickupToasts: ActivePickupToast[] = [];
+  private lastPickupCalloutTime = -10;
+  private pickupStaggerSlot = 0;
+  private healPulseTimer: number | null = null;
+  private energyPulseTimer: number | null = null;
 
   // DOM Elements
   private readonly els: Record<string, HTMLElement>;
@@ -323,9 +356,11 @@ export class Game {
     upgrade: HTMLDialogElement;
     pause: HTMLDialogElement;
     result: HTMLDialogElement;
+    settings: HTMLDialogElement;
+    guide: HTMLDialogElement;
   };
 
-  private bannerTimer = 0;
+  private waveCalloutTimer = 0;
   private playerDying = false;
   private playerDeathTimer = 0;
   private playerDeathSecondaryBurstDone = false;
@@ -385,7 +420,13 @@ export class Game {
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
-    this.sound = new SoundEngine(this.save.isMuted());
+    this.sound = new SoundEngine(
+      this.save.isMuted(),
+      this.save.getBgmVolume(),
+      this.save.getSfxVolume()
+    );
+    this.autoFire = this.save.isAutoFire();
+    this.showHudLegend = this.save.isHudLegendVisible();
     this.graphicsPreset = this.save.getGraphicsPreset();
     document.body.dataset.screen = this.state;
 
@@ -585,6 +626,8 @@ export class Game {
       'boot-enter-btn',
       'hangar-ui',
       'hangar-career-stats',
+      'hangar-guide-btn',
+      'hangar-settings-btn',
       'hangar-mute-btn',
       'hangar-ship-list',
       'hangar-ship-badge',
@@ -607,6 +650,7 @@ export class Game {
       'launch-countdown',
       'launch-countdown-num',
       'floating-numbers',
+      'pickup-toast-feed',
       'hud-ship-badge',
       'hud-ship-name',
       'hud-ship-code',
@@ -622,7 +666,13 @@ export class Game {
       'hud-mute-btn',
       'hud-autofire-btn',
       'hud-pause-btn',
-      'hud-banner',
+      'wave-callout',
+      'wave-callout-sector',
+      'wave-callout-title',
+      'wave-callout-fraction',
+      'wave-callout-steps',
+      'wave-callout-sub',
+      'hud-controls-legend',
       'boss-hud',
       'boss-hud-name',
       'boss-hud-threat-badge',
@@ -644,12 +694,27 @@ export class Game {
       'result-subtitle',
       'result-stats-grid',
       'result-endless-btn',
+      'settings-mute-toggle',
+      'settings-bgm-slider',
+      'settings-bgm-val',
+      'settings-sfx-slider',
+      'settings-sfx-val',
+      'settings-hw-summary',
+      'settings-gfx-list',
+      'settings-autofire-toggle',
+      'settings-legend-toggle',
+      'guide-tab-controls',
+      'guide-tab-combat',
+      'guide-panel-controls',
+      'guide-panel-combat',
     ]);
 
     this.dialogs = {
       upgrade: this.requireEl<HTMLDialogElement>('upgrade-dialog'),
       pause: this.requireEl<HTMLDialogElement>('pause-dialog'),
       result: this.requireEl<HTMLDialogElement>('result-dialog'),
+      settings: this.requireEl<HTMLDialogElement>('settings-dialog'),
+      guide: this.requireEl<HTMLDialogElement>('guide-dialog'),
     };
 
     this.syncHardwarePanelStaticInfo();
@@ -1064,6 +1129,8 @@ export class Game {
       this.lastBufSummary = bufSummary;
       this.els['gfx-hw-buf'].textContent = bufSummary;
     }
+
+    this.syncSettingsGfxUi();
   }
 
   async init(): Promise<void> {
@@ -1071,6 +1138,8 @@ export class Game {
     this.updateFpsHudDom(true);
     this.startRenderLoop();
     this.updateMuteButtons();
+    this.updateAutoFireButton();
+    this.syncHudLegendVisibility();
 
     const appendBootLog = (message: string, isReady = false): void => {
       const row = document.createElement('div');
@@ -1103,6 +1172,7 @@ export class Game {
     const extraWarmup: THREE.Object3D[] = [
       ...this.vfx.getWarmupObjects(),
       ...this.envSystem.getWarmupObjects(),
+      ...this.waves.getWarmupObjects(),
       ...this.projectileVisuals.getWarmupObjects(),
     ];
 
@@ -1173,12 +1243,17 @@ export class Game {
     }
   }
 
-  private closeAllDialogs(): void {
+  private closeAllDialogs(resetPauseReturn = true): void {
     this.clearPauseEscGuard();
+    if (resetPauseReturn) {
+      this.settingsOpenedFromPause = false;
+    }
     if (this.gfxMenuOpen) this.setGfxMenuOpen(false);
     if (this.dialogs.upgrade.open) this.dialogs.upgrade.close();
     if (this.dialogs.pause.open) this.dialogs.pause.close();
     if (this.dialogs.result.open) this.dialogs.result.close();
+    if (this.dialogs.settings.open) this.dialogs.settings.close();
+    if (this.dialogs.guide.open) this.dialogs.guide.close();
   }
 
   private bindEvents(): void {
@@ -1247,11 +1322,78 @@ export class Game {
       this.startSortie();
     });
 
+    this.els['hangar-guide-btn'].addEventListener('click', () => this.openGuideDialog());
+    this.els['hangar-settings-btn'].addEventListener('click', () => this.openSettingsDialog());
     this.els['hangar-mute-btn'].addEventListener('click', () => this.toggleMute());
     this.els['hud-mute-btn'].addEventListener('click', () => this.toggleMute());
 
+    this.els['settings-mute-toggle'].addEventListener('click', () => {
+      this.toggleMute();
+      this.sound.playUiClick();
+    });
+
+    const bgmSlider = this.els['settings-bgm-slider'] as HTMLInputElement;
+    bgmSlider.addEventListener('input', () => {
+      const vol = Number(bgmSlider.value) / 100;
+      this.sound.unlock();
+      this.sound.setBgmVolume(vol);
+      this.save.setBgmVolume(vol);
+      this.syncSettingsDialogUi();
+    });
+
+    const sfxSlider = this.els['settings-sfx-slider'] as HTMLInputElement;
+    sfxSlider.addEventListener('input', () => {
+      const vol = Number(sfxSlider.value) / 100;
+      this.sound.unlock();
+      this.sound.setSfxVolume(vol);
+      this.save.setSfxVolume(vol);
+      this.syncSettingsDialogUi();
+    });
+    sfxSlider.addEventListener('change', () => {
+      this.sound.playUiClick();
+    });
+
+    this.els['settings-gfx-list'].addEventListener('click', (e) => {
+      const btn = (e.target as Element | null)?.closest<HTMLButtonElement>('.settings-gfx-btn');
+      if (!btn) return;
+      const preset = btn.dataset.settingsGfxPreset as GraphicsPreset | undefined;
+      if (!preset || !GRAPHICS_PRESET_ORDER.includes(preset)) return;
+      this.sound.unlock();
+      this.sound.playUiClick();
+      this.setGraphicsPreset(preset);
+    });
+
+    this.els['settings-autofire-toggle'].addEventListener('click', () => {
+      this.autoFire = !this.autoFire;
+      this.save.setAutoFire(this.autoFire);
+      this.updateAutoFireButton();
+      this.sound.unlock();
+      this.sound.playUiClick();
+    });
+
+    this.els['settings-legend-toggle'].addEventListener('click', () => {
+      this.showHudLegend = !this.showHudLegend;
+      this.save.setHudLegendVisible(this.showHudLegend);
+      this.syncHudLegendVisibility();
+      this.syncSettingsDialogUi();
+      this.sound.unlock();
+      this.sound.playUiClick();
+    });
+
+    this.els['guide-tab-controls'].addEventListener('click', () => {
+      this.setGuideTab('controls');
+      this.sound.unlock();
+      this.sound.playUiClick();
+    });
+    this.els['guide-tab-combat'].addEventListener('click', () => {
+      this.setGuideTab('combat');
+      this.sound.unlock();
+      this.sound.playUiClick();
+    });
+
     this.els['hud-autofire-btn'].addEventListener('click', () => {
       this.autoFire = !this.autoFire;
+      this.save.setAutoFire(this.autoFire);
       this.updateAutoFireButton();
       this.sound.playUiClick();
     });
@@ -1340,6 +1482,7 @@ export class Game {
           this.tryUltimate();
         } else if (code === 'KeyF') {
           this.autoFire = !this.autoFire;
+          this.save.setAutoFire(this.autoFire);
           this.updateAutoFireButton();
         } else if (code === 'Escape') {
           e.preventDefault();
@@ -1387,7 +1530,9 @@ export class Game {
       const val = this.dialogs.pause.returnValue;
       this.dialogs.pause.returnValue = '';
       if (this.state !== 'paused') return;
-      if (val === 'hangar') {
+      if (val === 'settings') {
+        this.openSettingsDialog(true);
+      } else if (val === 'hangar') {
         this.enterHangar();
       } else if (val === 'restart') {
         this.startSortie();
@@ -1410,6 +1555,42 @@ export class Game {
         this.enterHangar();
       }
     });
+
+    this.dialogs.settings.addEventListener('close', () => {
+      this.dialogs.settings.returnValue = '';
+      this.sound.playUiClick();
+      if (this.settingsOpenedFromPause && this.state === 'paused') {
+        this.settingsOpenedFromPause = false;
+        this.armPauseEscGuard();
+        if (!this.dialogs.pause.open) {
+          this.dialogs.pause.showModal();
+        }
+        this.promoteFpsHudToTopLayer();
+      } else {
+        this.settingsOpenedFromPause = false;
+      }
+    });
+
+    this.dialogs.guide.addEventListener('close', () => {
+      this.dialogs.guide.returnValue = '';
+      this.sound.playUiClick();
+    });
+
+    if (!('closedBy' in HTMLDialogElement.prototype)) {
+      const outside = (e: PointerEvent, dialog: HTMLDialogElement): boolean => {
+        const r = dialog.getBoundingClientRect();
+        return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+      };
+      for (const dialog of document.querySelectorAll<HTMLDialogElement>('dialog[closedby="any"]')) {
+        let pressedOutside = false;
+        dialog.addEventListener('pointerdown', (e) => {
+          pressedOutside = outside(e, dialog);
+        });
+        dialog.addEventListener('pointerup', (e) => {
+          if (pressedOutside && outside(e, dialog)) dialog.close();
+        });
+      }
+    }
   }
 
   private toggleMute(): void {
@@ -1517,38 +1698,142 @@ export class Game {
   }
 
   private updateMuteButtons(): void {
-    const label = this.sound.isMuted() ? '音效: 关 [M]' : '音效: 开 [M]';
-    const hangarSpan = this.els['hangar-mute-btn'].querySelector('span:last-child');
+    const muted = this.sound.isMuted();
+    const label = muted ? '音效: 关 [M]' : '音效: 开 [M]';
+    const shortLabel = muted ? '音效关' : '音效开';
+    const hangarBtn = this.els['hangar-mute-btn'];
+    hangarBtn.classList.toggle('is-muted', muted);
+    hangarBtn.setAttribute('aria-label', label);
+    const hangarSpan = hangarBtn.querySelector('.topbar-btn-label') ?? hangarBtn.querySelector('span:last-child');
     if (hangarSpan) {
-      hangarSpan.textContent = label;
+      hangarSpan.textContent = shortLabel;
     } else {
-      this.els['hangar-mute-btn'].textContent = label;
+      hangarBtn.textContent = shortLabel;
     }
+    const hudBtn = this.els['hud-mute-btn'];
+    hudBtn.classList.toggle('is-muted', muted);
+    hudBtn.setAttribute('aria-label', label);
     const hudLabel =
-      this.els['hud-mute-btn'].querySelector('.btn-hud-label') ??
-      this.els['hud-mute-btn'].querySelector('span:last-child');
+      hudBtn.querySelector('.btn-hud-label') ??
+      hudBtn.querySelector('span:last-child');
     if (hudLabel) {
-      hudLabel.textContent = label;
+      hudLabel.textContent = shortLabel;
     } else {
-      this.els['hud-mute-btn'].textContent = label;
+      hudBtn.textContent = shortLabel;
     }
+    this.syncSettingsDialogUi();
   }
 
   private updateAutoFireButton(): void {
     const label = this.autoFire ? '开火: 自动 [F]' : '开火: 手动 [F]';
-    const textEl = this.els['hud-autofire-btn'].querySelector('.btn-hud-label');
+    const hudBtn = this.els['hud-autofire-btn'];
+    hudBtn.setAttribute('aria-label', label);
+    const textEl = hudBtn.querySelector('.btn-hud-label');
     if (textEl) {
-      textEl.textContent = label;
+      textEl.textContent = this.autoFire ? '自动' : '手动';
     } else {
-      this.els['hud-autofire-btn'].textContent = label;
+      hudBtn.textContent = label;
     }
-    this.els['hud-autofire-btn'].classList.toggle('is-active', this.autoFire);
+    hudBtn.classList.toggle('is-active', this.autoFire);
+    this.syncSettingsDialogUi();
+  }
+
+  private syncHudLegendVisibility(): void {
+    if (!this.els) return;
+    this.els['hud-controls-legend'].hidden = !this.showHudLegend;
+  }
+
+  private syncSettingsGfxUi(): void {
+    if (!this.els) return;
+    this.els['settings-gfx-list']
+      .querySelectorAll<HTMLButtonElement>('.settings-gfx-btn')
+      .forEach((btn) => {
+        btn.setAttribute(
+          'aria-pressed',
+          btn.dataset.settingsGfxPreset === this.graphicsPreset ? 'true' : 'false'
+        );
+      });
+    const hwName = this.hardwareProfile?.gpuName ?? 'GPU 就绪';
+    this.els['settings-hw-summary'].textContent = `${hwName} · ${this.internalWidth}×${this.internalHeight} · ${this.useBloom ? '泛光开' : '泛光关'}`;
+  }
+
+  private syncSettingsDialogUi(): void {
+    if (!this.els) return;
+    const muted = this.sound.isMuted();
+    const muteToggle = this.els['settings-mute-toggle'];
+    muteToggle.setAttribute('aria-pressed', muted ? 'true' : 'false');
+    muteToggle.classList.toggle('is-muted-state', muted);
+    muteToggle.classList.toggle('is-on', !muted);
+    const muteLabel = muteToggle.querySelector('span:last-child');
+    if (muteLabel) muteLabel.textContent = muted ? '静音已启用' : '声音已开启';
+
+    const bgmPct = Math.round(this.sound.getBgmVolume() * 100);
+    const sfxPct = Math.round(this.sound.getSfxVolume() * 100);
+    (this.els['settings-bgm-slider'] as HTMLInputElement).value = String(bgmPct);
+    this.els['settings-bgm-val'].textContent = `${bgmPct}%`;
+    (this.els['settings-sfx-slider'] as HTMLInputElement).value = String(sfxPct);
+    this.els['settings-sfx-val'].textContent = `${sfxPct}%`;
+
+    const autoBtn = this.els['settings-autofire-toggle'];
+    autoBtn.setAttribute('aria-pressed', this.autoFire ? 'true' : 'false');
+    autoBtn.classList.toggle('is-on', this.autoFire);
+    const autoLabel = autoBtn.querySelector('span:last-child');
+    if (autoLabel) autoLabel.textContent = this.autoFire ? '自动连射 ON' : '手动点射 OFF';
+
+    const legendBtn = this.els['settings-legend-toggle'];
+    legendBtn.setAttribute('aria-pressed', this.showHudLegend ? 'true' : 'false');
+    legendBtn.classList.toggle('is-on', this.showHudLegend);
+    const legendLabel = legendBtn.querySelector('span:last-child');
+    if (legendLabel) legendLabel.textContent = this.showHudLegend ? '显示 ON' : '隐藏 OFF';
+
+    this.syncSettingsGfxUi();
+  }
+
+  private setGuideTab(tab: 'controls' | 'combat'): void {
+    const isControls = tab === 'controls';
+    const tabControls = this.els['guide-tab-controls'];
+    const tabCombat = this.els['guide-tab-combat'];
+    tabControls.classList.toggle('is-active', isControls);
+    tabControls.setAttribute('aria-selected', isControls ? 'true' : 'false');
+    tabCombat.classList.toggle('is-active', !isControls);
+    tabCombat.setAttribute('aria-selected', !isControls ? 'true' : 'false');
+    this.els['guide-panel-controls'].hidden = !isControls;
+    this.els['guide-panel-combat'].hidden = isControls;
+  }
+
+  private openSettingsDialog(fromPause = false): void {
+    this.closeAllDialogs(!fromPause);
+    this.settingsOpenedFromPause = fromPause;
+    this.clearInputState();
+    this.sound.unlock();
+    this.sound.playHudDeploy();
+    this.syncSettingsDialogUi();
+    this.dialogs.settings.returnValue = '';
+    if (!this.dialogs.settings.open) {
+      this.dialogs.settings.showModal();
+    }
+    if (fromPause) {
+      this.promoteFpsHudToTopLayer();
+    }
+  }
+
+  private openGuideDialog(): void {
+    this.closeAllDialogs();
+    this.clearInputState();
+    this.sound.unlock();
+    this.sound.playHudDeploy();
+    this.setGuideTab('controls');
+    this.dialogs.guide.returnValue = '';
+    if (!this.dialogs.guide.open) {
+      this.dialogs.guide.showModal();
+    }
   }
 
   // ==================== HANGAR ====================
 
   private enterHangar(): void {
     this.clearLaunchCountdown(false);
+    this.hideWaveCallout();
     this.playerDying = false;
     this.playerDeathTimer = 0;
     this.playerDeathSecondaryBurstDone = false;
@@ -1809,6 +2094,7 @@ export class Game {
     this.els['hangar-ui'].hidden = true;
     this.els['hud-ui'].hidden = false;
     this.els['boss-hud'].hidden = true;
+    this.hideWaveCallout();
 
     const ship = SHIPS[this.selectedShipIndex];
     this.activeShip = ship;
@@ -1896,8 +2182,7 @@ export class Game {
     this.launchCountdownStage = -1;
     this.launchCountdownCombatUnlocked = false;
     this.waves.setCombatActive(false);
-    this.els['hud-banner'].classList.remove('is-visible');
-    this.bannerTimer = 0;
+    this.hideWaveCallout();
     this.applyLaunchCountdownStage(3);
   }
 
@@ -1998,6 +2283,21 @@ export class Game {
       ft.el.remove();
     }
     this.floatingTexts.length = 0;
+
+    for (const toast of this.pickupToasts) {
+      toast.el.remove();
+    }
+    this.pickupToasts.length = 0;
+    this.els['hud-cluster-tl']?.classList.remove('is-heal-pulse');
+    this.els['hud-ult-card']?.classList.remove('is-energy-pulse');
+    if (this.healPulseTimer !== null) {
+      window.clearTimeout(this.healPulseTimer);
+      this.healPulseTimer = null;
+    }
+    if (this.energyPulseTimer !== null) {
+      window.clearTimeout(this.energyPulseTimer);
+      this.energyPulseTimer = null;
+    }
   }
 
   private spawnWingmanUnit(): void {
@@ -2063,7 +2363,14 @@ export class Game {
 
     if (id === 'astra') {
       this.ultimateActiveTimer = 2.5;
-      this.showBanner('轨道离子过载光束 · ION OVERDRIVE');
+      this.showWaveCallout({
+        sector: '终极过载 · ULTIMATE',
+        title: '轨道离子过载光束',
+        fraction: 'ION OVERDRIVE',
+        sub: '贯穿主炮全功率输出 · 灼烧路径目标',
+        isEndless: true,
+        durationSec: 1.75,
+      });
     } else if (id === 'opus') {
       this.playerHp = Math.min(this.playerMaxHp, this.playerHp + 30);
       this.invulnTimer = Math.max(this.invulnTimer, 1.5);
@@ -2090,7 +2397,14 @@ export class Game {
         0x00f0ff,
         1.5
       );
-      this.showBanner('电磁护盾新星 · 弹幕转化!');
+      this.showWaveCallout({
+        sector: '终极过载 · ULTIMATE',
+        title: '电磁护盾新星',
+        fraction: 'AEGIS NOVA',
+        sub: '护盾回复 +30 · 敌方弹幕全面转化',
+        isEndless: true,
+        durationSec: 1.75,
+      });
     } else if (id === 'morph') {
       for (let i = 0; i < 18; i++) {
         const angle = (i / 18) * Math.PI * 2;
@@ -2112,10 +2426,24 @@ export class Game {
           this.projectileVisuals.spawnMuzzleFlash(launchPos, vel, 0xff4757, 0.9);
         }
       }
-      this.showBanner('幻影齐射风暴 · 18X MISSILE SALVO');
+      this.showWaveCallout({
+        sector: '终极过载 · ULTIMATE',
+        title: '幻影齐射风暴',
+        fraction: '18X SALVO',
+        sub: '18 枚制导追踪导弹全向齐射',
+        isEndless: true,
+        durationSec: 1.75,
+      });
     } else {
       this.ultimateActiveTimer = 4.0;
-      this.showBanner('棱镜时空缓速场 · CHRONO PRISM');
+      this.showWaveCallout({
+        sector: '终极过载 · ULTIMATE',
+        title: '棱镜时空缓速场',
+        fraction: 'CHRONO PRISM',
+        sub: '敌群与弹幕进入 4 秒时空减速',
+        isEndless: true,
+        durationSec: 1.75,
+      });
     }
   }
 
@@ -2139,6 +2467,7 @@ export class Game {
 
   private openUpgradeDialog(): void {
     this.closeAllDialogs();
+    this.hideWaveCallout();
     this.clearInputState();
     this.setScreenState('upgrade');
     this.sound.setMuffled(true);
@@ -2226,6 +2555,7 @@ export class Game {
 
   private showResultDialog(victory: boolean): void {
     this.clearLaunchCountdown(false);
+    this.hideWaveCallout();
     this.closeAllDialogs();
     this.clearInputState();
     this.setScreenState('result');
@@ -2302,11 +2632,23 @@ export class Game {
       const track: BgmTrackId = ev.act === 1 ? 'act1' : ev.act === 2 ? 'act2' : 'act3';
       this.sound.setBgmTrack(track);
       const theme = ACT_THEMES[Math.min(ACT_THEMES.length - 1, Math.max(0, ev.act - 1))];
-      this.showBanner(`${theme.titleZh} · WAVE ${ev.waveInAct}`);
+      this.showWaveCallout({
+        sector: theme.titleZh,
+        title: `第 ${ev.waveInAct} 波`,
+        fraction: `WAVE ${ev.waveInAct} / 3`,
+        sub: ev.waveInAct === 1 ? '先遣敌机编队突入航道' : '高威胁增援编队压境',
+        waveStep: ev.waveInAct === 2 ? 2 : 1,
+      });
     } else if (ev.type === 'endless_wave') {
       this.envSystem.setAct(ev.act, false);
       this.sound.setBgmTrack('act3');
-      this.showBanner(`无尽深空 · ENDLESS WAVE ${ev.endlessWave}`);
+      this.showWaveCallout({
+        sector: '无尽深空 · ENDLESS',
+        title: `第 ${ev.endlessWave} 波`,
+        fraction: `WAVE ${String(ev.endlessWave).padStart(2, '0')}`,
+        sub: '敌群火力持续强化 · 全力突破极限',
+        isEndless: true,
+      });
     } else if (ev.type === 'upgrade_prompt') {
       this.openUpgradeDialog();
     } else if (ev.type === 'boss_intro' && ev.bossConfig) {
@@ -2314,7 +2656,14 @@ export class Game {
       this.sound.playBossWarning();
       this.sound.setBgmTrack('boss', 0.9);
       this.showBossHud(ev.bossConfig);
-      this.showBanner(`⚠ 警报: ${ev.bossConfig.nameZh} 降临!`);
+      this.showWaveCallout({
+        sector: `ACT ${ev.act} · 最终拦截阶段`,
+        title: '第 3 波 · 首领降临',
+        fraction: 'BOSS 3 / 3',
+        sub: `${ev.bossConfig.nameZh} · ${ev.bossConfig.threatTag}`,
+        waveStep: 3,
+        isBoss: true,
+      });
     } else if (ev.type === 'campaign_victory') {
       this.showResultDialog(true);
     }
@@ -2350,11 +2699,46 @@ export class Game {
       .join('');
   }
 
-  private showBanner(text: string): void {
-    this.els['hud-banner'].textContent = text;
-    this.els['hud-banner'].classList.toggle('is-alert', text.includes('警报'));
-    this.els['hud-banner'].classList.add('is-visible');
-    this.bannerTimer = 2.7;
+  private hideWaveCallout(): void {
+    this.waveCalloutTimer = 0;
+    this.els['wave-callout']?.classList.remove('is-visible');
+  }
+
+  private showWaveCallout(opts: {
+    sector: string;
+    title: string;
+    fraction: string;
+    sub: string;
+    waveStep?: 1 | 2 | 3;
+    isBoss?: boolean;
+    isEndless?: boolean;
+    durationSec?: number;
+  }): void {
+    const root = this.els['wave-callout'];
+    if (!root) return;
+    this.els['wave-callout-sector'].textContent = opts.sector;
+    this.els['wave-callout-title'].textContent = opts.title;
+    this.els['wave-callout-fraction'].textContent = opts.fraction;
+    this.els['wave-callout-sub'].textContent = opts.sub;
+    root.classList.toggle('is-boss', Boolean(opts.isBoss));
+    root.classList.toggle('is-endless', Boolean(opts.isEndless));
+
+    if (!opts.isEndless && opts.waveStep) {
+      const targetStep = opts.waveStep;
+      this.els['wave-callout-steps']
+        .querySelectorAll<HTMLElement>('[data-wave-step]')
+        .forEach((node) => {
+          const stepNum = Number(node.dataset.waveStep || '1');
+          node.classList.toggle('is-done', stepNum < targetStep);
+          node.classList.toggle('is-current', stepNum === targetStep);
+          node.classList.toggle('is-upcoming', stepNum > targetStep);
+        });
+    }
+
+    root.classList.remove('is-visible');
+    void root.offsetWidth;
+    root.classList.add('is-visible');
+    this.waveCalloutTimer = opts.durationSec ?? 2.45;
   }
 
   private flashDamageVignette(kind: 'damage' | 'heal' | 'boost'): void {
@@ -2365,21 +2749,186 @@ export class Game {
     }, 260);
   }
 
+  private pulseHudReaction(kind: PickupToastKind): void {
+    if (kind === 'repair' || kind === 'full_repair' || kind === 'boost') {
+      const hpCard = this.els['hud-cluster-tl'];
+      hpCard?.classList.add('is-heal-pulse');
+      if (this.healPulseTimer !== null) window.clearTimeout(this.healPulseTimer);
+      this.healPulseTimer = window.setTimeout(() => {
+        hpCard?.classList.remove('is-heal-pulse');
+        this.healPulseTimer = null;
+      }, 450);
+    }
+    if (kind === 'energy' || kind === 'boost') {
+      const ultCard = this.els['hud-ult-card'];
+      ultCard?.classList.add('is-energy-pulse');
+      if (this.energyPulseTimer !== null) window.clearTimeout(this.energyPulseTimer);
+      this.energyPulseTimer = window.setTimeout(() => {
+        ultCard?.classList.remove('is-energy-pulse');
+        this.energyPulseTimer = null;
+      }, 450);
+    }
+  }
+
+  private showPickupToast(
+    kind: PickupToastKind,
+    valueText: string,
+    titleZh: string,
+    subEn: string,
+    iconUrl: string
+  ): void {
+    // Suppress notifications while modal dialogs capture focus
+    if (
+      this.dialogs.upgrade.open ||
+      this.dialogs.pause.open ||
+      this.dialogs.result.open ||
+      this.dialogs.settings.open ||
+      this.dialogs.guide.open
+    ) {
+      return;
+    }
+
+    this.pulseHudReaction(kind);
+
+    const existing = this.pickupToasts.find((t) => !t.leaving && t.kind === kind && t.age < 1.6);
+    if (existing) {
+      existing.count += 1;
+      existing.age = 0;
+      existing.countEl.textContent = `×${existing.count}`;
+      existing.countEl.hidden = false;
+      existing.barEl.style.transform = 'scaleX(1)';
+      return;
+    }
+
+    const feed = this.els['pickup-toast-feed'];
+    if (!feed) return;
+
+    while (this.pickupToasts.length >= 3) {
+      const oldest = this.pickupToasts.shift();
+      oldest?.el.remove();
+    }
+
+    const card = document.createElement('div');
+    card.className = `pickup-toast is-${kind}`;
+
+    const icon = document.createElement('img');
+    icon.className = 'pickup-toast-icon';
+    icon.src = iconUrl;
+    icon.alt = '';
+    icon.width = 34;
+    icon.height = 34;
+
+    const body = document.createElement('div');
+    body.className = 'pickup-toast-body';
+
+    const head = document.createElement('div');
+    head.className = 'pickup-toast-head';
+
+    const valSpan = document.createElement('span');
+    valSpan.className = 'pickup-toast-val';
+    valSpan.textContent = valueText;
+
+    const titleSpan = document.createElement('span');
+    titleSpan.className = 'pickup-toast-title';
+    titleSpan.textContent = titleZh;
+
+    head.append(valSpan, titleSpan);
+
+    const subSpan = document.createElement('span');
+    subSpan.className = 'pickup-toast-sub';
+    subSpan.textContent = subEn;
+
+    body.append(head, subSpan);
+
+    const countSpan = document.createElement('span');
+    countSpan.className = 'pickup-toast-count';
+    countSpan.hidden = true;
+    countSpan.textContent = '×1';
+
+    const barEl = document.createElement('div');
+    barEl.className = 'pickup-toast-bar';
+
+    card.append(icon, body, countSpan, barEl);
+    feed.appendChild(card);
+
+    this.pickupToasts.push({
+      kind,
+      count: 1,
+      age: 0,
+      maxAge: 2.35,
+      leaving: false,
+      el: card,
+      barEl,
+      countEl: countSpan,
+    });
+  }
+
   private spawnFloatingText(
     worldPos: THREE.Vector3,
     text: string,
-    kind: 'normal' | 'crit' | 'part' | 'heal' | 'score'
+    kind: FloatingTextKind,
+    iconUrl?: string
   ): void {
+    const isPickupKind =
+      kind === 'pickup-repair' || kind === 'pickup-energy' || kind === 'pickup-boost' || kind === 'heal';
+
+    const pos = worldPos.clone();
+    if (isPickupKind) {
+      if (this.globalElapsed - this.lastPickupCalloutTime < 0.95) {
+        this.pickupStaggerSlot = (this.pickupStaggerSlot + 1) % 3;
+      } else {
+        this.pickupStaggerSlot = 0;
+      }
+      this.lastPickupCalloutTime = this.globalElapsed;
+      pos.y += 1.35 + this.pickupStaggerSlot * 0.9;
+    }
+
     const el = document.createElement('div');
     el.className = `float-num is-${kind}`;
-    el.textContent = text;
+
+    const inner = document.createElement('span');
+    inner.className = 'float-num-inner';
+
+    if (iconUrl) {
+      const icon = document.createElement('img');
+      icon.className = 'float-num-icon';
+      icon.src = iconUrl;
+      icon.alt = '';
+      inner.appendChild(icon);
+    }
+
+    const label = document.createElement('span');
+    label.className = 'float-num-label';
+    label.textContent = text;
+    inner.appendChild(label);
+    el.appendChild(inner);
+
     this.els['floating-numbers'].appendChild(el);
+
+    let maxAge = 0.72;
+    let vy = 52;
+    let holdRatio = 0.35;
+    if (isPickupKind) {
+      maxAge = 1.45;
+      vy = 34;
+      holdRatio = 0.66;
+    } else if (kind === 'part') {
+      maxAge = 1.45;
+      vy = 30;
+      holdRatio = 0.65;
+    } else if (kind === 'crit') {
+      maxAge = 0.92;
+      vy = 56;
+      holdRatio = 0.45;
+    }
+
     this.floatingTexts.push({
       el,
-      worldPos: worldPos.clone(),
+      worldPos: pos,
       age: 0,
-      maxAge: kind === 'part' ? 1.15 : 0.72,
-      vy: kind === 'part' ? 38 : 52,
+      maxAge,
+      holdRatio,
+      vy,
     });
   }
 
@@ -2494,7 +3043,14 @@ export class Game {
         this.hangarShipInstance.root.position.y = Math.sin(this.globalElapsed * 2.1) * 0.08 - 0.15;
         this.hangarShipRig.update({ dt: rawDt, elapsed: this.globalElapsed });
       }
-      this.camera.position.lerp(this.tmpCamTarget.set(0.4, 1.45, 5.1), rawDt * 6);
+      this.camera.position.lerp(
+        this.tmpCamTarget.set(
+          0.4 + Math.sin(this.globalElapsed * 0.32) * 0.12,
+          1.45 + Math.cos(this.globalElapsed * 0.24) * 0.035,
+          5.1
+        ),
+        rawDt * 6
+      );
       this.camera.lookAt(0, -0.15, 0);
       this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, 50, rawDt * 5);
       this.camera.updateProjectionMatrix();
@@ -2518,10 +3074,10 @@ export class Game {
     }
 
     this.runDurationSec += rawDt;
-    if (this.bannerTimer > 0) {
-      this.bannerTimer -= rawDt;
-      if (this.bannerTimer <= 0) {
-        this.els['hud-banner'].classList.remove('is-visible');
+    if (this.waveCalloutTimer > 0) {
+      this.waveCalloutTimer -= rawDt;
+      if (this.waveCalloutTimer <= 0) {
+        this.els['wave-callout'].classList.remove('is-visible');
       }
     }
 
@@ -2583,8 +3139,9 @@ export class Game {
         const dx = ring.pos.x - this.playerPos.x;
         const dy = ring.pos.y - this.playerPos.y;
         if (dx * dx + dy * dy < ring.radius * ring.radius) {
-          ring.triggered = true;
-          ring.group.visible = false;
+          this.waves.triggerBoostRing(ring);
+          this.vfx.spawnSparks(this.playerPos, 20, 0x22f0ff, 22);
+          this.vfx.spawnSparks(this.playerPos, 10, 0xffbe3b, 18);
           this.boostFovTimer = 0.9;
           this.playerHp = Math.min(this.playerMaxHp, this.playerHp + 10);
           this.addUltimateCharge(15);
@@ -2592,7 +3149,19 @@ export class Game {
           this.comboTimer = 3.5;
           this.sound.playPickup();
           this.flashDamageVignette('boost');
-          this.spawnFloatingText(this.playerPos, '+10 护盾 · 加速!', 'heal');
+          this.spawnFloatingText(
+            this.playerPos,
+            '+10 护盾 · 穿环加速',
+            'pickup-boost',
+            './ui/icons/icon_thruster.png'
+          );
+          this.showPickupToast(
+            'boost',
+            '+10 护盾',
+            '穿环加速 · 能量+15%',
+            'SLIPSTREAM OVERBOOST',
+            './ui/icons/icon_thruster.png'
+          );
         }
       }
     }
@@ -3126,7 +3695,19 @@ export class Game {
         this.playerHp = this.playerMaxHp;
         if (missingHp > 0) {
           this.flashDamageVignette('heal');
-          this.spawnFloatingText(this.playerPos, '通关修复 · 护盾全满', 'heal');
+          this.spawnFloatingText(
+            this.playerPos,
+            '通关整备 · 护盾全满',
+            'pickup-repair',
+            './ui/icons/icon_shield.png'
+          );
+          this.showPickupToast(
+            'full_repair',
+            'MAX',
+            '通关修复 · 护盾全满',
+            'FULL ARMOR RESTORATION',
+            './ui/icons/icon_shield.png'
+          );
         }
         this.updateHud();
         return this.waves.onBossDefeated();
@@ -3637,7 +4218,15 @@ export class Game {
     this.sound.playShieldHit();
     this.sound.playExplosion('boss');
     this.flashDamageVignette('damage');
-    this.showBanner('⚠ 警报: 撞击闸门装甲 · 机体爆炸解体');
+    this.showWaveCallout({
+      sector: '⚠ 致命撞击警报',
+      title: '撞击闸门装甲',
+      fraction: 'HULL BREACH',
+      sub: '机体高速撞毁解体 · 跃迁闸门拦截',
+      isBoss: true,
+      isEndless: true,
+      durationSec: 2.0,
+    });
     this.updateHud();
   }
 
@@ -3744,10 +4333,34 @@ export class Game {
         if (pk.kind === 'repair') {
           this.playerHp = Math.min(this.playerMaxHp, this.playerHp + 22);
           this.flashDamageVignette('heal');
-          this.spawnFloatingText(this.playerPos, '+22 装甲修复', 'heal');
+          this.spawnFloatingText(
+            this.playerPos,
+            '+22 装甲修复',
+            'pickup-repair',
+            './ui/icons/icon_pickup_repair.png'
+          );
+          this.showPickupToast(
+            'repair',
+            '+22',
+            '装甲修复',
+            'HULL INTEGRITY RESTORED',
+            './ui/icons/icon_pickup_repair.png'
+          );
         } else {
           this.addUltimateCharge(25);
-          this.spawnFloatingText(this.playerPos, '+25 超频能量', 'score');
+          this.spawnFloatingText(
+            this.playerPos,
+            '+25% 超频能量',
+            'pickup-energy',
+            './ui/icons/icon_pickup_energy.png'
+          );
+          this.showPickupToast(
+            'energy',
+            '+25%',
+            '超频能量',
+            'OVERDRIVE CAPACITOR CHARGED',
+            './ui/icons/icon_pickup_energy.png'
+          );
         }
         this.releasePickup(pk);
         this.pickups.splice(i, 1);
@@ -3833,9 +4446,30 @@ export class Game {
       }
       const px = (this.tmpVec3.x * 0.5 + 0.5) * window.innerWidth;
       const py = (-this.tmpVec3.y * 0.5 + 0.5) * window.innerHeight - ft.age * ft.vy;
-      const alpha = 1 - Math.pow(ft.age / ft.maxAge, 2);
+      const lifeRatio = ft.age / ft.maxAge;
+      const fadeRatio =
+        lifeRatio <= ft.holdRatio
+          ? 0
+          : (lifeRatio - ft.holdRatio) / Math.max(0.01, 1 - ft.holdRatio);
+      const alpha = 1 - fadeRatio * fadeRatio;
       ft.el.style.transform = `translate3d(${px}px, ${py}px, 0) translate(-50%, -50%)`;
       ft.el.style.opacity = alpha.toFixed(2);
+    }
+
+    // Update left-mid tactical pickup acquisition toast feed countdown bars
+    for (let i = this.pickupToasts.length - 1; i >= 0; i--) {
+      const toast = this.pickupToasts[i];
+      toast.age += rawDt;
+      const rem = Math.max(0, 1 - toast.age / toast.maxAge);
+      toast.barEl.style.transform = `scaleX(${rem.toFixed(3)})`;
+      if (!toast.leaving && toast.age >= toast.maxAge - 0.24) {
+        toast.leaving = true;
+        toast.el.classList.add('is-leaving');
+      }
+      if (toast.age >= toast.maxAge) {
+        toast.el.remove();
+        this.pickupToasts.splice(i, 1);
+      }
     }
   }
 
@@ -4149,6 +4783,63 @@ export class Game {
         if (this.state !== 'playing') return;
         this.clearLaunchCountdown(false);
         this.spawnPickup(kind, new THREE.Vector3(x, y, z), new THREE.Vector3(0, 0, 1.5));
+      },
+
+      spawnBoostRingNow: (x = 0, y = 0, z = -16): void => {
+        if (this.state !== 'playing') return;
+        this.clearLaunchCountdown(false);
+        this.waves.setCombatActive(true);
+        this.waves.forceSpawnBoostRing(x, y, z);
+        this.waves.updateEnvironment(0, 1.0);
+      },
+
+      triggerPickupFeedbackDemo: (): void => {
+        if (this.state !== 'playing') return;
+        this.clearLaunchCountdown(false);
+        this.spawnFloatingText(
+          this.playerPos.clone().add(new THREE.Vector3(-2.6, 0.2, -3)),
+          '1840!',
+          'crit'
+        );
+        this.spawnFloatingText(
+          this.playerPos,
+          '+22 装甲修复',
+          'pickup-repair',
+          './ui/icons/icon_pickup_repair.png'
+        );
+        this.showPickupToast(
+          'repair',
+          '+22',
+          '装甲修复',
+          'HULL INTEGRITY RESTORED',
+          './ui/icons/icon_pickup_repair.png'
+        );
+        this.spawnFloatingText(
+          this.playerPos,
+          '+25% 超频能量',
+          'pickup-energy',
+          './ui/icons/icon_pickup_energy.png'
+        );
+        this.showPickupToast(
+          'energy',
+          '+25%',
+          '超频能量',
+          'OVERDRIVE CAPACITOR CHARGED',
+          './ui/icons/icon_pickup_energy.png'
+        );
+        this.spawnFloatingText(
+          this.playerPos,
+          '+10 护盾 · 穿环加速',
+          'pickup-boost',
+          './ui/icons/icon_thruster.png'
+        );
+        this.showPickupToast(
+          'boost',
+          '+10 护盾',
+          '穿环加速 · 能量+15%',
+          'SLIPSTREAM OVERBOOST',
+          './ui/icons/icon_thruster.png'
+        );
       },
 
       setPlayerHp: (hp: number): void => {

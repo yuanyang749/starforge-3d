@@ -201,18 +201,122 @@
     <!-- 2. 3D Shipyard Hangar -->
     <section id="hangar-ui" class="hangar-ui" hidden aria-label="星舰 3D 机库">
       <header class="hangar-topbar">
-        <div class="topbar-brand">
-          <img src="./ui/logo_emblem.png" class="topbar-logo" alt="" width="1536" height="1024" />
-          <div>
-            <div class="topbar-kicker">天盾轨道司令部 · 07 号星港泊位</div>
-            <div class="topbar-heading">星穹战翼 · 轨道整备机库</div>
+        <div class="topbar-left">
+          <div class="topbar-telemetry-chip">
+            <span class="topbar-bay-tag"><i class="dock-dot is-emerald"></i>07 号泊位</span>
+            <span class="topbar-chip-sep" aria-hidden="true"></span>
+            <span id="hangar-career-stats" class="career-pill">总击坠 0 · 出击 0 次</span>
           </div>
         </div>
+
+        <div class="topbar-center-crest">
+          <img
+            src="./ui/frames/hangar_header_crest.webp"
+            class="topbar-crest-bg"
+            alt=""
+            aria-hidden="true"
+            width="1120"
+            height="266"
+          />
+          <div class="topbar-crest-inner">
+            <img
+              src="./ui/logo_emblem.png"
+              class="topbar-logo"
+              alt="星穹战翼"
+              width="1536"
+              height="1024"
+            />
+            <div class="topbar-title-stack">
+              <div class="topbar-heading">星穹战翼 · 破晓远征</div>
+              <div class="topbar-kicker">STARFORGE · 天盾轨道星港机库</div>
+            </div>
+          </div>
+        </div>
+
         <div class="topbar-right">
-          <span id="hangar-career-stats" class="career-pill">累计击坠 0 · 出击 0 次</span>
-          <button id="hangar-mute-btn" type="button" class="btn-ghost" data-spotlight>
+          <button
+            id="hangar-guide-btn"
+            type="button"
+            class="topbar-action-btn"
+            data-spotlight
+            aria-label="打开新手战术引导"
+            title="新手战术引导"
+          >
+            <img
+              src="./ui/frames/btn_tactical_frame.webp"
+              class="topbar-btn-frame"
+              alt=""
+              aria-hidden="true"
+              width="512"
+              height="218"
+            />
             <span class="ui-spotlight" aria-hidden="true"></span>
-            <span>音效: 开 [M]</span>
+            <img
+              src="./ui/icons/icon_guide.webp"
+              class="topbar-btn-icon"
+              alt=""
+              aria-hidden="true"
+              width="256"
+              height="256"
+            />
+            <span class="topbar-btn-label">引导</span>
+          </button>
+
+          <button
+            id="hangar-settings-btn"
+            type="button"
+            class="topbar-action-btn"
+            data-spotlight
+            aria-label="打开系统设置"
+            title="系统与画质设置"
+          >
+            <img
+              src="./ui/frames/btn_tactical_frame.webp"
+              class="topbar-btn-frame"
+              alt=""
+              aria-hidden="true"
+              width="512"
+              height="218"
+            />
+            <span class="ui-spotlight" aria-hidden="true"></span>
+            <img
+              src="./ui/icons/icon_settings.webp"
+              class="topbar-btn-icon"
+              alt=""
+              aria-hidden="true"
+              width="256"
+              height="256"
+            />
+            <span class="topbar-btn-label">设置</span>
+          </button>
+
+          <button
+            id="hangar-mute-btn"
+            type="button"
+            class="topbar-action-btn is-audio-btn"
+            data-spotlight
+            aria-label="音效: 开 [M]"
+            title="音效开关 [M]"
+          >
+            <img
+              src="./ui/frames/btn_tactical_frame.webp"
+              class="topbar-btn-frame"
+              alt=""
+              aria-hidden="true"
+              width="512"
+              height="218"
+            />
+            <span class="ui-spotlight" aria-hidden="true"></span>
+            <img
+              src="./ui/icons/icon_audio.webp"
+              class="topbar-btn-icon"
+              alt=""
+              aria-hidden="true"
+              width="256"
+              height="256"
+            />
+            <span class="topbar-audio-dot" aria-hidden="true"></span>
+            <span class="topbar-btn-label">音效开</span>
           </button>
         </div>
       </header>
@@ -396,72 +500,218 @@
         </div>
       </div>
 
-      <!-- Top Left: Hull & Upgrades -->
-      <div id="hud-cluster-tl" class="hud-cluster-tl" data-spotlight>
-        <img
-          src="./ui/frames/hud_status_frame.webp"
-          class="ui-frame-bg"
-          alt=""
-          aria-hidden="true"
-          width="680"
-          height="240"
-        />
-        <span class="ui-spotlight" aria-hidden="true"></span>
-        <div class="hud-panel-inner">
-          <div class="hud-ship-header">
-            <div class="hud-badge-socket">
-              <img id="hud-ship-badge" src="./ui/icons/badge_astra.png" alt="" width="256" height="256" />
-            </div>
-            <div class="hud-ship-titles">
-              <div class="hud-ship-title-row">
-                <span id="hud-ship-name" class="hud-ship-name">日曜四旋翼穿梭机</span>
-                <span id="hud-ship-code" class="hud-ship-code">X-01</span>
-              </div>
-              <div class="hud-hp-meta">
-                <span>SHIELD</span>
-                <strong id="hud-hp-text">100 / 100</strong>
-              </div>
-            </div>
+      <!-- Center-Screen Cinematic Wave Progress Callout -->
+      <div id="wave-callout" class="wave-callout" aria-live="polite" aria-hidden="true">
+        <div id="wave-callout-sector" class="wave-callout-sector">ACT 1 · 轨道城峡谷</div>
+        <div class="wave-callout-title-row">
+          <img
+            src="./ui/frames/hud_banner_wing.webp"
+            class="wave-callout-wing is-left is-normal"
+            alt=""
+            aria-hidden="true"
+            width="320"
+            height="192"
+          />
+          <img
+            src="./ui/frames/hud_banner_wing_alert.webp"
+            class="wave-callout-wing is-left is-alert-art"
+            alt=""
+            aria-hidden="true"
+            width="320"
+            height="182"
+          />
+          <div class="wave-callout-main">
+            <strong id="wave-callout-title" class="wave-callout-title">第 1 波</strong>
+            <span id="wave-callout-fraction" class="wave-callout-fraction">WAVE 1 / 3</span>
           </div>
-          <div class="hud-bar-track">
-            <div id="hud-hp-ghost" class="hud-bar-ghost"></div>
-            <div id="hud-hp-fill" class="hud-bar-fill is-cyan"></div>
-          </div>
-          <div id="hud-combo-box" class="hud-combo-box">
-            <span class="combo-label">COMBO</span>
-            <strong id="hud-combo-val">x1.0</strong>
-            <div class="combo-timer-track"><div id="hud-combo-bar" class="combo-timer-bar"></div></div>
-          </div>
-          <div id="hud-chip-strip" class="hud-chip-strip"></div>
+          <img
+            src="./ui/frames/hud_banner_wing.webp"
+            class="wave-callout-wing is-right is-normal"
+            alt=""
+            aria-hidden="true"
+            width="320"
+            height="192"
+          />
+          <img
+            src="./ui/frames/hud_banner_wing_alert.webp"
+            class="wave-callout-wing is-right is-alert-art"
+            alt=""
+            aria-hidden="true"
+            width="320"
+            height="182"
+          />
         </div>
+        <div id="wave-callout-steps" class="wave-callout-steps" aria-hidden="true">
+          <span class="wave-step-node is-current" data-wave-step="1">第 1 波</span>
+          <i class="wave-step-line"></i>
+          <span class="wave-step-node is-upcoming" data-wave-step="2">第 2 波</span>
+          <i class="wave-step-line"></i>
+          <span class="wave-step-node is-upcoming" data-wave-step="3">首领波</span>
+        </div>
+        <div id="wave-callout-sub" class="wave-callout-sub">先遣敌机编队突入航道</div>
       </div>
 
-      <!-- Top Center: Act, Score, Quick Toggles & Boss Telemetry -->
+      <!-- Top Left: Hull, Upgrades & Live Pickup Stack -->
+      <div class="hud-left-stack">
+        <div id="hud-cluster-tl" class="hud-cluster-tl" data-spotlight>
+          <img
+            src="./ui/frames/hud_status_frame.webp"
+            class="ui-frame-bg"
+            alt=""
+            aria-hidden="true"
+            width="680"
+            height="240"
+          />
+          <span class="ui-spotlight" aria-hidden="true"></span>
+          <div class="hud-panel-inner">
+            <div class="hud-ship-header">
+              <div class="hud-badge-socket">
+                <img id="hud-ship-badge" src="./ui/icons/badge_astra.png" alt="" width="256" height="256" />
+              </div>
+              <div class="hud-ship-titles">
+                <div class="hud-ship-title-row">
+                  <span id="hud-ship-name" class="hud-ship-name">日曜四旋翼穿梭机</span>
+                  <span id="hud-ship-code" class="hud-ship-code">X-01</span>
+                </div>
+                <div class="hud-hp-meta">
+                  <span>SHIELD</span>
+                  <strong id="hud-hp-text">100 / 100</strong>
+                </div>
+              </div>
+            </div>
+            <div class="hud-bar-track">
+              <div id="hud-hp-ghost" class="hud-bar-ghost"></div>
+              <div id="hud-hp-fill" class="hud-bar-fill is-cyan"></div>
+            </div>
+            <div id="hud-combo-box" class="hud-combo-box">
+              <span class="combo-label">COMBO</span>
+              <strong id="hud-combo-val">x1.0</strong>
+              <div class="combo-timer-track"><div id="hud-combo-bar" class="combo-timer-bar"></div></div>
+            </div>
+            <div id="hud-chip-strip" class="hud-chip-strip"></div>
+          </div>
+        </div>
+
+        <div
+          id="pickup-toast-feed"
+          class="pickup-toast-feed"
+          role="region"
+          aria-label="补给与增益获取提示"
+          aria-live="polite"
+          aria-atomic="false"
+        ></div>
+      </div>
+
+      <!-- Top Right: Quick Combat Controls (Left of #fps-hud) -->
+      <div class="hud-cluster-tr" aria-label="战斗快捷控制">
+        <button
+          id="hud-autofire-btn"
+          type="button"
+          class="topbar-action-btn is-hud-btn is-active"
+          data-spotlight
+          aria-label="开火: 自动 [F]"
+          title="切换主炮自动连射 [F]"
+        >
+          <img
+            src="./ui/frames/btn_tactical_frame.webp"
+            class="topbar-btn-frame"
+            alt=""
+            aria-hidden="true"
+            width="512"
+            height="218"
+          />
+          <span class="ui-spotlight" aria-hidden="true"></span>
+          <img
+            src="./ui/icons/icon_autofire.webp"
+            class="topbar-btn-icon"
+            alt=""
+            aria-hidden="true"
+            width="256"
+            height="256"
+          />
+          <span class="topbar-audio-dot" aria-hidden="true"></span>
+          <span class="btn-hud-label">自动</span>
+        </button>
+
+        <button
+          id="hud-mute-btn"
+          type="button"
+          class="topbar-action-btn is-hud-btn is-audio-btn"
+          data-spotlight
+          aria-label="音效: 开 [M]"
+          title="音效开关 [M]"
+        >
+          <img
+            src="./ui/frames/btn_tactical_frame.webp"
+            class="topbar-btn-frame"
+            alt=""
+            aria-hidden="true"
+            width="512"
+            height="218"
+          />
+          <span class="ui-spotlight" aria-hidden="true"></span>
+          <img
+            src="./ui/icons/icon_audio.webp"
+            class="topbar-btn-icon"
+            alt=""
+            aria-hidden="true"
+            width="256"
+            height="256"
+          />
+          <span class="topbar-audio-dot" aria-hidden="true"></span>
+          <span class="btn-hud-label">音效开</span>
+        </button>
+
+        <button
+          id="hud-pause-btn"
+          type="button"
+          class="topbar-action-btn is-hud-btn"
+          data-spotlight
+          aria-label="暂停 [ESC]"
+          title="战术暂停 [ESC]"
+        >
+          <img
+            src="./ui/frames/btn_tactical_frame.webp"
+            class="topbar-btn-frame"
+            alt=""
+            aria-hidden="true"
+            width="512"
+            height="218"
+          />
+          <span class="ui-spotlight" aria-hidden="true"></span>
+          <img
+            src="./ui/icons/icon_pause.webp"
+            class="topbar-btn-icon"
+            alt=""
+            aria-hidden="true"
+            width="256"
+            height="256"
+          />
+          <span class="btn-hud-label">暂停</span>
+        </button>
+      </div>
+
+      <!-- Top Center: Compact Winged Telemetry Plaque, Boss HUD & Winged Banner -->
       <div class="hud-cluster-tc">
         <div class="hud-top-telemetry">
-          <span class="hud-sector-group">
-            <i class="hud-live-dot" aria-hidden="true"></i>
-            <span id="hud-act-label" class="hud-act-pill">ACT 1 · WAVE 1/3</span>
-          </span>
-          <span class="hud-telemetry-sep" aria-hidden="true"></span>
-          <span class="hud-score-wrap">
-            <span class="hud-score-label">SCORE</span>
-            <strong id="hud-score-value">0</strong>
-          </span>
-          <span class="hud-telemetry-sep" aria-hidden="true"></span>
-          <div class="hud-quick-controls">
-            <button id="hud-autofire-btn" type="button" class="btn-hud-sm is-active" data-spotlight>
-              <span class="ui-spotlight" aria-hidden="true"></span>
-              <span class="btn-hud-label">开火: 自动 [F]</span>
-            </button>
-            <button id="hud-mute-btn" type="button" class="btn-hud-sm" data-spotlight>
-              <span class="ui-spotlight" aria-hidden="true"></span>
-              <span class="btn-hud-label">音效: 开 [M]</span>
-            </button>
-            <button id="hud-pause-btn" type="button" class="btn-hud-sm" data-spotlight>
-              <span class="ui-spotlight" aria-hidden="true"></span>
-              <span class="btn-hud-label">暂停 [ESC]</span>
-            </button>
+          <img
+            src="./ui/frames/hud_telemetry_crest.webp"
+            class="hud-telemetry-bg"
+            alt=""
+            aria-hidden="true"
+            width="960"
+            height="111"
+          />
+          <div class="hud-telemetry-inner">
+            <span class="hud-sector-group">
+              <i class="hud-live-dot" aria-hidden="true"></i>
+              <span id="hud-act-label" class="hud-act-pill">ACT 1 · WAVE 1/3</span>
+            </span>
+            <span class="hud-telemetry-sep" aria-hidden="true"></span>
+            <span class="hud-score-wrap">
+              <span class="hud-score-label">SCORE</span>
+              <strong id="hud-score-value">0</strong>
+            </span>
           </div>
         </div>
 
@@ -498,12 +748,10 @@
             </div>
           </div>
         </div>
-
-        <div id="hud-banner" class="hud-banner" role="status">ACT I · 轨道城峡谷</div>
       </div>
 
-      <!-- Bottom Left: Flight Hints -->
-      <div class="hud-controls-legend">
+      <!-- Bottom Left: Lightweight Frosted Flight Hints -->
+      <div id="hud-controls-legend" class="hud-controls-legend">
         <span>机动 <kbd>鼠标</kbd><kbd>WASD</kbd></span>
         <span>翻滚弹反 <kbd>右键</kbd><kbd>SHIFT</kbd></span>
         <span>终极过载 <kbd>SPACE</kbd><kbd>Q</kbd></span>
@@ -600,7 +848,7 @@
     </dialog>
 
     <dialog id="pause-dialog" closedby="closerequest" aria-labelledby="pause-dialog-title">
-      <div class="dialog-shell compact-shell framed-shell" data-spotlight>
+      <div class="dialog-shell pause-shell framed-shell" data-spotlight>
         <img
           src="./ui/frames/modal_frame_sci_fi.webp"
           class="ui-frame-bg"
@@ -611,8 +859,26 @@
         />
         <span class="ui-spotlight" aria-hidden="true"></span>
         <div class="dialog-inner">
-          <div class="dialog-kicker">星舰指令终端</div>
-          <h2 id="pause-dialog-title">战术系统挂起 · TACTICAL PAUSE</h2>
+          <div class="dialog-top-bar">
+            <div class="dialog-header">
+              <img
+                src="./ui/icons/icon_pause.webp"
+                class="dialog-header-icon"
+                alt=""
+                aria-hidden="true"
+                width="256"
+                height="256"
+              />
+              <div>
+                <div class="dialog-kicker">星舰指令终端 · TACTICAL STANDBY</div>
+                <h2 id="pause-dialog-title">战术系统挂起 · TACTICAL PAUSE</h2>
+              </div>
+            </div>
+            <span class="pause-state-badge" aria-hidden="true">
+              <i class="dock-dot is-amber"></i>
+              <span>挂起中</span>
+            </span>
+          </div>
           <div class="pause-controls-box">
             <div><strong>移动 / 瞄准：</strong>鼠标指针跟随 或 WASD / 方向键</div>
             <div><strong>主炮开火：</strong>默认自动连射，按 [F] 切换手动（左键点射）</div>
@@ -620,13 +886,65 @@
             <div><strong>过载大招：</strong>[Space] 或 [Q]（蓄满 100% 释放各战机专属终极技）</div>
             <div><strong>Boss 破部位：</strong>优先瞄准 Boss 血条下方标注的肩炮 / 巨钳 / 主炮，击碎后永久削弱弹幕</div>
           </div>
-          <form method="dialog" class="dialog-actions">
-            <button value="resume" class="btn-primary-launch" data-spotlight autofocus>
+          <form method="dialog" class="pause-actions-grid">
+            <button value="resume" class="pause-btn-hero" data-spotlight autofocus>
               <span class="ui-spotlight" aria-hidden="true"></span>
-              <span>继续作战 (RESUME)</span>
+              <span class="pause-hero-left">
+                <span class="pause-hero-play" aria-hidden="true">
+                  <svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor">
+                    <path d="M7 5.2v13.6L19 12 7 5.2z" />
+                  </svg>
+                </span>
+                <span class="pause-hero-copy">
+                  <span class="pause-hero-title">继续作战</span>
+                  <span class="pause-hero-sub">RESUME SORTIE</span>
+                </span>
+              </span>
+              <span class="pause-hero-right" aria-hidden="true">
+                <kbd class="pause-keycap">ESC</kbd>
+                <span class="pause-hero-arrow">»</span>
+              </span>
             </button>
-            <button value="restart" class="btn-ghost" data-spotlight>重新出击 (RESTART)</button>
-            <button value="hangar" class="btn-ghost" data-spotlight>返回 3D 机库 (HANGAR)</button>
+
+            <button value="settings" class="pause-btn-tile is-cyan" data-spotlight>
+              <span class="ui-spotlight" aria-hidden="true"></span>
+              <span class="pause-tile-icon-wrap" aria-hidden="true">
+                <img src="./ui/icons/icon_settings.webp" class="pause-tile-img" alt="" width="256" height="256" />
+              </span>
+              <span class="pause-tile-copy">
+                <span class="pause-tile-title">系统设置</span>
+                <span class="pause-tile-sub">SYSTEM CONFIG</span>
+              </span>
+            </button>
+
+            <button value="restart" class="pause-btn-tile is-amber" data-spotlight>
+              <span class="ui-spotlight is-amber" aria-hidden="true"></span>
+              <span class="pause-tile-icon-wrap" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M3 12a9 9 0 1 0 3-6.7L3 8" />
+                  <path d="M3 3v5h5" />
+                </svg>
+              </span>
+              <span class="pause-tile-copy">
+                <span class="pause-tile-title">重新出击</span>
+                <span class="pause-tile-sub">RESTART RUN</span>
+              </span>
+            </button>
+
+            <button value="hangar" class="pause-btn-tile is-danger" data-spotlight>
+              <span class="ui-spotlight" aria-hidden="true"></span>
+              <span class="pause-tile-icon-wrap" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                  <polyline points="14 17 9 12 14 7" />
+                  <line x1="9" y1="12" x2="21" y2="12" />
+                </svg>
+              </span>
+              <span class="pause-tile-copy">
+                <span class="pause-tile-title">返回机库</span>
+                <span class="pause-tile-sub">HANGAR BAY</span>
+              </span>
+            </button>
           </form>
         </div>
       </div>
@@ -666,6 +984,327 @@
             </button>
             <button id="result-hangar-btn" value="hangar" class="btn-ghost" data-spotlight>
               返回 3D 机库 (HANGAR)
+            </button>
+          </form>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="settings-dialog" closedby="any" aria-labelledby="settings-dialog-title">
+      <div class="dialog-shell settings-shell framed-shell" data-spotlight>
+        <img
+          src="./ui/frames/modal_frame_sci_fi.webp"
+          class="ui-frame-bg"
+          alt=""
+          aria-hidden="true"
+          width="960"
+          height="640"
+        />
+        <span class="ui-spotlight" aria-hidden="true"></span>
+        <div class="dialog-inner">
+          <div class="dialog-top-bar">
+            <div class="dialog-header">
+              <img
+                src="./ui/icons/icon_settings.webp"
+                class="dialog-header-icon"
+                alt=""
+                aria-hidden="true"
+                width="256"
+                height="256"
+              />
+              <div>
+                <div class="dialog-kicker">天盾轨道司令部 · 舰载核心参数</div>
+                <h2 id="settings-dialog-title">系统与战术设置 · SYSTEM CONFIG</h2>
+              </div>
+            </div>
+            <form method="dialog">
+              <button value="close" class="dialog-close-x" aria-label="关闭设置面板">✕</button>
+            </form>
+          </div>
+
+          <div class="settings-grid">
+            <section class="settings-card" aria-label="声学与音频配置">
+              <div class="settings-card-head">
+                <span class="settings-card-tag">AUDIO MATRIX</span>
+                <h3>声学与配乐终端</h3>
+              </div>
+
+              <div class="settings-row">
+                <div class="settings-row-meta">
+                  <strong>全局声道输出</strong>
+                  <span>快捷键 [M] 随时切换机库与战区声音</span>
+                </div>
+                <button
+                  id="settings-mute-toggle"
+                  type="button"
+                  class="settings-toggle-btn"
+                  aria-pressed="false"
+                  data-spotlight
+                >
+                  <span class="ui-spotlight" aria-hidden="true"></span>
+                  <span>声音已开启</span>
+                </button>
+              </div>
+
+              <div class="settings-slider-row">
+                <div class="settings-slider-label">
+                  <label for="settings-bgm-slider">背景战区配乐 (BGM)</label>
+                  <output id="settings-bgm-val" for="settings-bgm-slider">100%</output>
+                </div>
+                <input
+                  id="settings-bgm-slider"
+                  class="sci-slider"
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="5"
+                  value="100"
+                />
+              </div>
+
+              <div class="settings-slider-row">
+                <div class="settings-slider-label">
+                  <label for="settings-sfx-slider">武器与战术音效 (SFX)</label>
+                  <output id="settings-sfx-val" for="settings-sfx-slider">100%</output>
+                </div>
+                <input
+                  id="settings-sfx-slider"
+                  class="sci-slider"
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="5"
+                  value="100"
+                />
+              </div>
+            </section>
+
+            <section class="settings-card" aria-label="画质与火控偏好">
+              <div class="settings-card-head">
+                <span class="settings-card-tag">OPTICS &amp; FIRE CONTROL</span>
+                <h3>图形管线与火控模式</h3>
+              </div>
+
+              <div id="settings-hw-summary" class="settings-hw-pill">检测中 · 自动渲染管线</div>
+
+              <div class="settings-gfx-block">
+                <span class="settings-sub-label">渲染分辨率档位 · 快捷键 [G]</span>
+                <div id="settings-gfx-list" class="settings-gfx-pills" role="group" aria-label="渲染分辨率档位">
+                  <button type="button" class="settings-gfx-btn" data-settings-gfx-preset="auto" aria-pressed="true">
+                    智能推荐
+                  </button>
+                  <button type="button" class="settings-gfx-btn" data-settings-gfx-preset="720p" aria-pressed="false">
+                    720P 流畅
+                  </button>
+                  <button type="button" class="settings-gfx-btn" data-settings-gfx-preset="1080p" aria-pressed="false">
+                    1080P 高清
+                  </button>
+                  <button type="button" class="settings-gfx-btn" data-settings-gfx-preset="1440p" aria-pressed="false">
+                    2K 超清
+                  </button>
+                  <button type="button" class="settings-gfx-btn" data-settings-gfx-preset="native" aria-pressed="false">
+                    4K 原生
+                  </button>
+                </div>
+              </div>
+
+              <div class="settings-row">
+                <div class="settings-row-meta">
+                  <strong>默认主炮自动连射</strong>
+                  <span>出击后按 [F] 可实时切换自动或左键手动点射</span>
+                </div>
+                <button
+                  id="settings-autofire-toggle"
+                  type="button"
+                  class="settings-toggle-btn is-on"
+                  aria-pressed="true"
+                  data-spotlight
+                >
+                  <span class="ui-spotlight" aria-hidden="true"></span>
+                  <span>自动连射 ON</span>
+                </button>
+              </div>
+
+              <div class="settings-row">
+                <div class="settings-row-meta">
+                  <strong>战斗左下键位提示</strong>
+                  <span>熟手飞行员可关闭以保持纯享战区视野</span>
+                </div>
+                <button
+                  id="settings-legend-toggle"
+                  type="button"
+                  class="settings-toggle-btn is-on"
+                  aria-pressed="true"
+                  data-spotlight
+                >
+                  <span class="ui-spotlight" aria-hidden="true"></span>
+                  <span>显示 ON</span>
+                </button>
+              </div>
+
+              <div class="settings-hotkey-strip">
+                <span class="hotkey-chip"><kbd>M</kbd> 静音</span>
+                <span class="hotkey-chip"><kbd>G</kbd> 切画质</span>
+                <span class="hotkey-chip"><kbd>F</kbd> 自动火控</span>
+                <span class="hotkey-chip"><kbd>ESC</kbd> 暂停</span>
+              </div>
+            </section>
+          </div>
+
+          <form method="dialog" class="dialog-actions">
+            <button value="close" class="btn-primary-launch" data-spotlight autofocus>
+              <span class="ui-spotlight" aria-hidden="true"></span>
+              <span>保存并返回 (CONFIRM)</span>
+            </button>
+          </form>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="guide-dialog" closedby="any" aria-labelledby="guide-dialog-title">
+      <div class="dialog-shell guide-shell framed-shell" data-spotlight>
+        <img
+          src="./ui/frames/modal_frame_sci_fi.webp"
+          class="ui-frame-bg"
+          alt=""
+          aria-hidden="true"
+          width="960"
+          height="640"
+        />
+        <span class="ui-spotlight" aria-hidden="true"></span>
+        <div class="dialog-inner">
+          <div class="dialog-top-bar">
+            <div class="dialog-header">
+              <img
+                src="./ui/icons/icon_guide.webp"
+                class="dialog-header-icon"
+                alt=""
+                aria-hidden="true"
+                width="256"
+                height="256"
+              />
+              <div>
+                <div class="dialog-kicker">天盾轨道学院 · 新兵出击简报</div>
+                <h2 id="guide-dialog-title">新手战术引导 · PILOT BRIEFING</h2>
+              </div>
+            </div>
+            <form method="dialog">
+              <button value="close" class="dialog-close-x" aria-label="关闭新手引导">✕</button>
+            </form>
+          </div>
+
+          <div class="guide-tabs" role="tablist" aria-label="新手引导分页">
+            <button
+              id="guide-tab-controls"
+              type="button"
+              role="tab"
+              class="guide-tab-btn is-active"
+              aria-selected="true"
+              aria-controls="guide-panel-controls"
+              data-guide-tab="controls"
+            >
+              核心操控与技能
+            </button>
+            <button
+              id="guide-tab-combat"
+              type="button"
+              role="tab"
+              class="guide-tab-btn"
+              aria-selected="false"
+              aria-controls="guide-panel-combat"
+              data-guide-tab="combat"
+            >
+              补给强化与首领战
+            </button>
+          </div>
+
+          <div
+            id="guide-panel-controls"
+            class="guide-panel"
+            role="tabpanel"
+            aria-labelledby="guide-tab-controls"
+          >
+            <div class="guide-cards-grid">
+              <article class="guide-card">
+                <img src="./ui/icons/icon_thruster.png" class="guide-card-icon" alt="" width="256" height="256" />
+                <div class="guide-card-body">
+                  <div class="guide-card-title">机动飞行与主炮火控</div>
+                  <p>移动<strong>鼠标指针</strong>或使用 <kbd>WASD</kbd> / <kbd>方向键</kbd> 精确闪避弹幕；默认开启全自动主炮连射，按 <kbd>F</kbd> 可切换左键点射。</p>
+                </div>
+              </article>
+
+              <article class="guide-card">
+                <img src="./ui/icons/icon_barrel_roll.png" class="guide-card-icon" alt="" width="256" height="256" />
+                <div class="guide-card-body">
+                  <div class="guide-card-title">战术翻滚弹反 · BARREL ROLL</div>
+                  <p>按 <strong>鼠标右键</strong> 或 <kbd>SHIFT</kbd> 发动桶滚机动，获得 <strong>0.46s 无敌判定</strong> 并可将贴身敌方弹幕反制转化为盟军追踪导弹。</p>
+                </div>
+              </article>
+
+              <article class="guide-card">
+                <img src="./ui/icons/icon_ultimate.png" class="guide-card-icon" alt="" width="256" height="256" />
+                <div class="guide-card-body">
+                  <div class="guide-card-title">终极过载大招 · ULTIMATE</div>
+                  <p>击破敌机与拾取能量核心可快速充能；达到 <strong>100%</strong> 后按 <kbd>SPACE</kbd> 或 <kbd>Q</kbd> 释放每架战机独有的终极战场清屏技能。</p>
+                </div>
+              </article>
+
+              <article class="guide-card">
+                <img src="./ui/icons/icon_overcharge.png" class="guide-card-icon" alt="" width="256" height="256" />
+                <div class="guide-card-body">
+                  <div class="guide-card-title">战术芯片武装构筑</div>
+                  <p>击败每幕波次旗舰后会触发火控整备协议，可从 3 张芯片中选择叠加强化：按 <kbd>1</kbd> <kbd>2</kbd> <kbd>3</kbd> 或鼠标直接装配升级。</p>
+                </div>
+              </article>
+            </div>
+          </div>
+
+          <div
+            id="guide-panel-combat"
+            class="guide-panel"
+            role="tabpanel"
+            aria-labelledby="guide-tab-combat"
+            hidden
+          >
+            <div class="guide-cards-grid">
+              <article class="guide-card">
+                <img src="./ui/icons/icon_pickup_repair.png" class="guide-card-icon" alt="" width="256" height="256" />
+                <div class="guide-card-body">
+                  <div class="guide-card-title">纳米修复与充能掉落</div>
+                  <p>战场绿色<strong>纳米维修包</strong>回复 <strong>+22 护盾</strong>，琥珀<strong>聚变核心</strong>提供 <strong>+25% 终极能量</strong>；成功击破 Boss 还将自动全额整备恢复。</p>
+                </div>
+              </article>
+
+              <article class="guide-card">
+                <img src="./ui/icons/icon_prism.png" class="guide-card-icon" alt="" width="256" height="256" />
+                <div class="guide-card-body">
+                  <div class="guide-card-title">跃迁加速充能环 · BOOST RING</div>
+                  <p>战区航道偶有部署高速能源加速环：主动穿环可触发短暂<strong>推进冲刺视野</strong>并立即获得 <strong>+10 偏转护盾</strong> 与能量脉冲。</p>
+                </div>
+              </article>
+
+              <article class="guide-card">
+                <img src="./ui/icons/icon_shield.png" class="guide-card-icon" alt="" width="256" height="256" />
+                <div class="guide-card-body">
+                  <div class="guide-card-title">第二/三幕星际闸门警示</div>
+                  <p>高空城市与行星环航段会出现合拢的装甲闸门：注意观察绿色/青色透光通行孔洞及时走位穿越，避免高速正面撞毁战机。</p>
+                </div>
+              </article>
+
+              <article class="guide-card">
+                <img src="./ui/icons/badge_boss_alert.png" class="guide-card-icon" alt="" width="256" height="256" />
+                <div class="guide-card-body">
+                  <div class="guide-card-title">Boss 部位破坏优先级</div>
+                  <p>首领战上方会标出肩炮、巨钳与核心副炮独立耐久条；优先击碎外挂部位可永久削减弹幕密度并创造高倍暴击窗口。</p>
+                </div>
+              </article>
+            </div>
+          </div>
+
+          <form method="dialog" class="dialog-actions">
+            <button value="close" class="btn-primary-launch" data-spotlight autofocus>
+              <span class="ui-spotlight" aria-hidden="true"></span>
+              <span>我已掌握 · 返回机库 (READY)</span>
             </button>
           </form>
         </div>

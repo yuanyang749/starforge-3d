@@ -62,6 +62,8 @@ const BGM_TRACK_GAIN: Record<BgmTrackId, number> = {
   boss: 1.16,
 };
 const MASTER_GAIN_LEVEL = 0.92;
+const SFX_BASE_GAIN = 0.68;
+const BGM_BASE_GAIN = 0.92;
 const AUDIO_ASSET_VER = 'v6.1';
 
 interface ActiveBgmPlayback {
@@ -82,6 +84,8 @@ export class SoundEngine {
   private noiseBuffer: AudioBuffer | null = null;
 
   private muted = false;
+  private bgmVolume = 1.0;
+  private sfxVolume = 1.0;
   private muffled = false;
   private desiredBgmTrack: BgmTrackId | null = null;
   private activeBgmPlayback: ActiveBgmPlayback | null = null;
@@ -98,8 +102,10 @@ export class SoundEngine {
   private lastHitAt = -1;
   private lastHoverAt = -1;
 
-  constructor(initialMuted = false) {
+  constructor(initialMuted = false, initialBgmVol = 1.0, initialSfxVol = 1.0) {
     this.muted = initialMuted;
+    this.bgmVolume = Math.max(0, Math.min(1, Number.isFinite(initialBgmVol) ? initialBgmVol : 1.0));
+    this.sfxVolume = Math.max(0, Math.min(1, Number.isFinite(initialSfxVol) ? initialSfxVol : 1.0));
   }
 
   private resetAudioGraph(): void {
@@ -164,12 +170,12 @@ export class SoundEngine {
       this.sfxCompressor = sfxCompressor;
 
       const sfxGain = ctx.createGain();
-      sfxGain.gain.value = 0.68;
+      sfxGain.gain.value = SFX_BASE_GAIN * this.sfxVolume;
       sfxGain.connect(sfxCompressor);
       this.sfxGain = sfxGain;
 
       const bgmGain = ctx.createGain();
-      bgmGain.gain.value = 0.92;
+      bgmGain.gain.value = BGM_BASE_GAIN * this.bgmVolume;
       bgmGain.connect(masterLimiter);
       this.bgmGain = bgmGain;
 
@@ -246,6 +252,50 @@ export class SoundEngine {
 
   isMuted(): boolean {
     return this.muted;
+  }
+
+  getBgmVolume(): number {
+    return this.bgmVolume;
+  }
+
+  setBgmVolume(vol: number): void {
+    this.bgmVolume = Math.max(0, Math.min(1, Number.isFinite(vol) ? vol : 1.0));
+    const target = BGM_BASE_GAIN * this.bgmVolume;
+    if (this.bgmGain && this.ctx && this.ctx.state !== 'closed') {
+      try {
+        const now = this.ctx.currentTime;
+        this.bgmGain.gain.cancelScheduledValues(now);
+        this.bgmGain.gain.setTargetAtTime(target, now, 0.03);
+      } catch {
+        try {
+          this.bgmGain.gain.value = target;
+        } catch {
+          // Safe no-op
+        }
+      }
+    }
+  }
+
+  getSfxVolume(): number {
+    return this.sfxVolume;
+  }
+
+  setSfxVolume(vol: number): void {
+    this.sfxVolume = Math.max(0, Math.min(1, Number.isFinite(vol) ? vol : 1.0));
+    const target = SFX_BASE_GAIN * this.sfxVolume;
+    if (this.sfxGain && this.ctx && this.ctx.state !== 'closed') {
+      try {
+        const now = this.ctx.currentTime;
+        this.sfxGain.gain.cancelScheduledValues(now);
+        this.sfxGain.gain.setTargetAtTime(target, now, 0.03);
+      } catch {
+        try {
+          this.sfxGain.gain.value = target;
+        } catch {
+          // Safe no-op
+        }
+      }
+    }
   }
 
   setMuffled(muffled: boolean): void {

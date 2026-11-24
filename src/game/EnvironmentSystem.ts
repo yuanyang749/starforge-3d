@@ -953,9 +953,9 @@ export class EnvironmentSystem {
   private hangarVistaMesh!: THREE.Mesh;
   private hangarVistaMat!: THREE.MeshBasicMaterial;
   private hangarDeckMat!: THREE.MeshPhysicalMaterial;
+  private hangarSideDeckMat!: THREE.MeshPhysicalMaterial;
   private hangarCeilingMat!: THREE.MeshBasicMaterial;
-  private hangarBulkheadNearMat!: THREE.MeshBasicMaterial;
-  private hangarBulkheadFarMat!: THREE.MeshBasicMaterial;
+  private hangarBulkheadMat!: THREE.MeshBasicMaterial;
   private readonly hangarParallaxGroup = new THREE.Group();
 
   private hangarVideoEl: HTMLVideoElement | null = null;
@@ -1248,6 +1248,20 @@ export class EnvironmentSystem {
     if (deckEmissive) this.hangarDeckMat.emissiveMap = deckEmissive;
     this.hangarDeckMat.needsUpdate = true;
 
+    const sideDeckAlbedo = loadedTextures?.get('hangar_side_deck_albedo');
+    const sideDeckNormal = loadedTextures?.get('hangar_side_deck_normal');
+    for (const sdt of [sideDeckAlbedo, sideDeckNormal]) {
+      if (sdt) {
+        sdt.wrapS = THREE.RepeatWrapping;
+        sdt.wrapT = THREE.RepeatWrapping;
+        sdt.repeat.set(6, 6);
+        sdt.needsUpdate = true;
+      }
+    }
+    if (sideDeckAlbedo) this.hangarSideDeckMat.map = sideDeckAlbedo;
+    if (sideDeckNormal) this.hangarSideDeckMat.normalMap = sideDeckNormal;
+    this.hangarSideDeckMat.needsUpdate = true;
+
     const ceilingTex = loadedTextures?.get('hangar_ceiling');
     if (ceilingTex) {
       this.hangarCeilingMat.map = ceilingTex;
@@ -1255,10 +1269,8 @@ export class EnvironmentSystem {
     }
     const bulkheadTex = loadedTextures?.get('hangar_bulkhead');
     if (bulkheadTex) {
-      this.hangarBulkheadNearMat.map = bulkheadTex;
-      this.hangarBulkheadNearMat.needsUpdate = true;
-      this.hangarBulkheadFarMat.map = bulkheadTex;
-      this.hangarBulkheadFarMat.needsUpdate = true;
+      this.hangarBulkheadMat.map = bulkheadTex;
+      this.hangarBulkheadMat.needsUpdate = true;
     }
 
     this.initHangarVideo();
@@ -1323,9 +1335,8 @@ export class EnvironmentSystem {
     }
 
     if (this.mode === 'hangar' || this.mode === 'boot') {
-      this.hangarParallaxGroup.position.x = Math.sin(elapsed * 0.34) * 0.14;
-      this.hangarParallaxGroup.position.y = Math.cos(elapsed * 0.25) * 0.04;
-      this.hangarVistaMesh.position.x = Math.sin(elapsed * 0.16) * 0.22;
+      this.hangarParallaxGroup.position.set(0, 0, 0);
+      this.hangarVistaMesh.position.x = Math.sin(elapsed * 0.14) * 0.18;
     }
 
     if (this.mode === 'combat') {
@@ -1598,15 +1609,38 @@ export class EnvironmentSystem {
     uv.needsUpdate = true;
   }
 
+  private createBayContactShadowTexture(): THREE.Texture {
+    if (typeof document === 'undefined') {
+      return createFallbackTexture(0x030710);
+    }
+    const canvas = document.createElement('canvas');
+    canvas.width = 64;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      const grad = ctx.createLinearGradient(0, 0, 0, 128);
+      grad.addColorStop(0.0, 'rgba(3, 7, 16, 0.88)');
+      grad.addColorStop(0.28, 'rgba(3, 7, 16, 0.54)');
+      grad.addColorStop(0.7, 'rgba(3, 7, 16, 0.16)');
+      grad.addColorStop(1.0, 'rgba(3, 7, 16, 0.0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 64, 128);
+    }
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
   private buildHangarBay(): void {
     this.hangarGroup.add(this.hangarParallaxGroup);
 
-    // 1. Gently concave 16:9 Cinema Orbital Vista Backdrop (looping Omni/Veo video + crisp 2K WebP poster fallback)
-    const vistaGeo = new THREE.PlaneGeometry(48, 27, 24, 1);
+    // 1. Gently concave 16:9 Cinema Orbital Vista Backdrop (looping Omni video + 2K poster fallback)
+    const vistaGeo = new THREE.PlaneGeometry(58, 32.625, 24, 1);
     const vistaPos = vistaGeo.attributes.position;
     for (let i = 0; i < vistaPos.count; i++) {
       const x = vistaPos.getX(i);
-      const curveZ = (x * x) / 135; // Subtle cylindrical concave wrap toward the bay viewer
+      const curveZ = (x * x) / 155;
       vistaPos.setZ(i, curveZ);
     }
     vistaPos.needsUpdate = true;
@@ -1619,12 +1653,12 @@ export class EnvironmentSystem {
     });
     this.hangarVistaMesh = new THREE.Mesh(vistaGeo, this.hangarVistaMat);
     this.hangarVistaMesh.name = 'HangarOrbitalVistaScreen';
-    this.hangarVistaMesh.position.set(0, -2.15, -38.0);
+    this.hangarVistaMesh.position.set(0, -2.05, -38.0);
     this.hangarVistaMesh.renderOrder = -85;
     this.hangarGroup.add(this.hangarVistaMesh);
     this.warmupTargets.push(this.hangarVistaMesh);
 
-    // 2. 2K PBR Sculpted Hangar Landing Deck (y = -1.72, catches real-time 2K ship shadow & Aerospace HDRI)
+    // 2. Central 2K PBR Launch Platform Deck & Seamless Mirrored Side-Bay Titanium Plates (y = -1.72)
     this.hangarDeckMat = new THREE.MeshPhysicalMaterial({
       color: 0xffffff,
       metalness: 0.72,
@@ -1637,6 +1671,16 @@ export class EnvironmentSystem {
       emissiveIntensity: 1.45,
     });
 
+    this.hangarSideDeckMat = new THREE.MeshPhysicalMaterial({
+      color: 0xd6e1ee,
+      metalness: 0.76,
+      roughness: 0.38,
+      clearcoat: 0.42,
+      clearcoatRoughness: 0.24,
+      envMapIntensity: 1.32,
+      normalScale: new THREE.Vector2(1.1, 1.1),
+    });
+
     const centerDeckGeo = new THREE.PlaneGeometry(13.2, 13.2, 1, 1);
     centerDeckGeo.rotateX(-Math.PI * 0.5);
     const centerDeckMesh = new THREE.Mesh(centerDeckGeo, this.hangarDeckMat);
@@ -1644,59 +1688,116 @@ export class EnvironmentSystem {
     centerDeckMesh.position.set(0, -1.72, 0);
     centerDeckMesh.receiveShadow = true;
 
-    const fwdApronGeo = new THREE.PlaneGeometry(13.2, 10.0, 1, 1);
+    const fwdApronGeo = new THREE.PlaneGeometry(13.2, 9.9, 1, 1);
     fwdApronGeo.rotateX(-Math.PI * 0.5);
-    this.remapPlaneUvs(fwdApronGeo, 0.0, 1.0, 0.8, 0.995);
+    this.remapPlaneUvs(fwdApronGeo, 0.0, 1.0, 0.805, 0.995);
     const fwdApronMesh = new THREE.Mesh(fwdApronGeo, this.hangarDeckMat);
     fwdApronMesh.name = 'HangarLandingDeckForward';
-    fwdApronMesh.position.set(0, -1.721, -11.6);
+    fwdApronMesh.position.set(0, -1.721, -11.55);
     fwdApronMesh.receiveShadow = true;
 
-    const sideWingGeoL = new THREE.PlaneGeometry(14.0, 23.2, 1, 1);
-    sideWingGeoL.rotateX(-Math.PI * 0.5);
-    this.remapPlaneUvs(sideWingGeoL, 0.02, 0.42, 0.02, 0.76);
-    const sideWingL = new THREE.Mesh(sideWingGeoL, this.hangarDeckMat);
-    sideWingL.position.set(-13.6, -1.722, -5.0);
+    const sideWingGeo = new THREE.PlaneGeometry(24.0, 23.4, 1, 1);
+    sideWingGeo.rotateX(-Math.PI * 0.5);
+    const sideWingL = new THREE.Mesh(sideWingGeo, this.hangarSideDeckMat);
+    sideWingL.position.set(-18.6, -1.722, -5.0);
     sideWingL.receiveShadow = true;
 
-    const sideWingGeoR = sideWingGeoL.clone();
-    const sideWingR = new THREE.Mesh(sideWingGeoR, this.hangarDeckMat);
-    sideWingR.position.set(13.6, -1.722, -5.0);
+    const sideWingR = new THREE.Mesh(sideWingGeo, this.hangarSideDeckMat);
+    sideWingR.position.set(18.6, -1.722, -5.0);
     sideWingR.receiveShadow = true;
 
     this.hangarGroup.add(centerDeckMesh, fwdApronMesh, sideWingL, sideWingR);
-    this.warmupTargets.push(centerDeckMesh);
+    this.warmupTargets.push(centerDeckMesh, sideWingL);
 
-    // 3. Observation Bay Forward Metallic Lip, Seam Blast Deflector & Atmospheric Shield Rail
-    const curbMat = new THREE.MeshPhysicalMaterial({
-      color: 0x24344d,
-      metalness: 0.86,
-      roughness: 0.24,
-      clearcoat: 0.5,
-      emissive: 0x0b2944,
-      emissiveIntensity: 0.35,
+    // 3. Wall-to-Wall Recessed Expansion Seam, Launch Trench Rails & Observation Lip (zero abrupt joints)
+    const trimMat = new THREE.MeshPhysicalMaterial({
+      color: 0x1a2639,
+      metalness: 0.88,
+      roughness: 0.26,
+      clearcoat: 0.55,
+      emissive: 0x071a2d,
+      emissiveIntensity: 0.3,
     });
-    const blastDeflector = new THREE.Mesh(new THREE.BoxGeometry(13.4, 0.055, 0.32), curbMat);
-    blastDeflector.position.set(0, -1.7, -6.62);
-    blastDeflector.receiveShadow = true;
-    const ledFlushGeo = new THREE.BoxGeometry(4.2, 0.02, 0.05);
-    const ledFlushMat = new THREE.MeshBasicMaterial({ color: 0x22e8ff, transparent: true, opacity: 0.85 });
+    const wallToWallSeam = new THREE.Mesh(new THREE.BoxGeometry(56.0, 0.036, 0.34), trimMat);
+    wallToWallSeam.position.set(0, -1.708, -6.6);
+    wallToWallSeam.receiveShadow = true;
+
+    const trenchRailGeo = new THREE.BoxGeometry(0.28, 0.045, 23.4);
     for (const side of [-1, 1]) {
-      const strip = new THREE.Mesh(ledFlushGeo, ledFlushMat);
-      strip.position.set(side * 4.4, -1.668, -6.62);
-      this.hangarGroup.add(strip);
+      const trenchRail = new THREE.Mesh(trenchRailGeo, trimMat);
+      trenchRail.position.set(side * 6.62, -1.705, -5.0);
+      trenchRail.receiveShadow = true;
+      this.hangarGroup.add(trenchRail);
     }
 
-    const curbMesh = new THREE.Mesh(new THREE.BoxGeometry(38, 0.22, 0.48), curbMat);
-    curbMesh.position.set(0, -1.62, -16.55);
+    const curbMesh = new THREE.Mesh(new THREE.BoxGeometry(58.0, 0.22, 0.52), trimMat);
+    curbMesh.position.set(0, -1.62, -16.52);
     const curbShieldStrip = new THREE.Mesh(
-      new THREE.BoxGeometry(36, 0.045, 0.08),
-      new THREE.MeshBasicMaterial({ color: 0x38e8ff, transparent: true, opacity: 0.9 })
+      new THREE.BoxGeometry(56.0, 0.042, 0.08),
+      new THREE.MeshBasicMaterial({ color: 0x38e8ff, transparent: true, opacity: 0.88 })
     );
-    curbShieldStrip.position.set(0, -1.49, -16.55);
-    this.hangarGroup.add(blastDeflector, curbMesh, curbShieldStrip);
+    curbShieldStrip.position.set(0, -1.495, -16.52);
+    this.hangarGroup.add(wallToWallSeam, curbMesh, curbShieldStrip);
 
-    // 4. Layered 2K Codex Transparent Architectural Matte Paintings (True 3D depth parallax framing the bay)
+    // 4. Unified Sealed Launch-Bay Portal & Perimeter Titanium Bulkheads (zero floating standees / ultrawide leaks)
+    const wallMat = new THREE.MeshPhysicalMaterial({
+      color: 0x162133,
+      metalness: 0.84,
+      roughness: 0.34,
+      clearcoat: 0.36,
+      emissive: 0x050e1c,
+      emissiveIntensity: 0.26,
+    });
+
+    // Outer perimeter bulkheads framing the bay portal opening (x in [-11.5..+11.5], y <= +4.15)
+    const outerWingWallGeo = new THREE.BoxGeometry(30.0, 16.5, 0.55);
+    const pilasterGeo = new THREE.BoxGeometry(1.12, 16.2, 0.96);
+    const accentVertStripGeo = new THREE.BoxGeometry(0.08, 11.0, 0.08);
+    const accentCyanMat = new THREE.MeshBasicMaterial({
+      color: 0x22d3ee,
+      transparent: true,
+      opacity: 0.68,
+    });
+    const plinthGeo = new THREE.BoxGeometry(19.0, 0.44, 1.38);
+    const bumperWedgeGeo = new THREE.BoxGeometry(1.4, 0.48, 1.48);
+
+    for (const side of [-1, 1]) {
+      const wingWall = new THREE.Mesh(outerWingWallGeo, wallMat);
+      wingWall.position.set(side * 26.6, 5.8, -16.32);
+      this.hangarParallaxGroup.add(wingWall);
+
+      // 3D titanium clamping pilaster exactly at the outer edge of the detailed catwalk pier (x = +-12.85)
+      for (const px of [12.85, 17.8, 22.8]) {
+        const pilaster = new THREE.Mesh(pilasterGeo, wallMat);
+        pilaster.position.set(side * px, 5.7, -15.95);
+        const strip = new THREE.Mesh(accentVertStripGeo, accentCyanMat);
+        strip.position.set(side * px - side * 0.45, 3.8, -15.44);
+        this.hangarParallaxGroup.add(pilaster, strip);
+      }
+
+      // 3D grounded armored base plinth bolting the portal piers & side walls firmly into the deck
+      const plinth = new THREE.Mesh(plinthGeo, trimMat);
+      plinth.position.set(side * 17.5, -1.56, -15.92);
+      plinth.receiveShadow = true;
+
+      const innerCornerBumper = new THREE.Mesh(bumperWedgeGeo, trimMat);
+      innerCornerBumper.position.set(side * 8.45, -1.56, -15.72);
+      innerCornerBumper.rotation.y = side * 0.25;
+      innerCornerBumper.receiveShadow = true;
+
+      // Side enclosure walls far to left/right so 21:9/32:9 screens stay completely enclosed
+      const sideBayWall = new THREE.Mesh(new THREE.BoxGeometry(0.8, 16.5, 24.5), wallMat);
+      sideBayWall.position.set(side * 29.8, 5.8, -4.6);
+
+      this.hangarParallaxGroup.add(plinth, innerCornerBumper, sideBayWall);
+    }
+
+    // Upper ceiling fascia sealed directly behind the overhead gantry truss
+    const upperFascia = new THREE.Mesh(new THREE.BoxGeometry(84.0, 10.5, 0.55), wallMat);
+    upperFascia.position.set(0, 9.3, -16.32);
+    this.hangarParallaxGroup.add(upperFascia);
+
+    // 5. Layered 2K Codex Transparent Bay Portal Arch & Catwalk Piers anchored right at the bay opening
     this.hangarCeilingMat = new THREE.MeshBasicMaterial({
       color: 0xe6f1ff,
       transparent: true,
@@ -1706,15 +1807,15 @@ export class EnvironmentSystem {
       fog: false,
       toneMapped: true,
     });
-    const ceilingMesh = new THREE.Mesh(new THREE.PlaneGeometry(18.6, 10.46, 1, 1), this.hangarCeilingMat);
+    const ceilingMesh = new THREE.Mesh(new THREE.PlaneGeometry(21.6, 12.15, 1, 1), this.hangarCeilingMat);
     ceilingMesh.name = 'HangarOverheadGantryMatte';
-    ceilingMesh.position.set(0.2, 0.55, -14.8);
-    ceilingMesh.renderOrder = 4;
+    ceilingMesh.position.set(0.0, 0.45, -15.92);
+    ceilingMesh.renderOrder = 2;
     this.hangarParallaxGroup.add(ceilingMesh);
     this.warmupTargets.push(ceilingMesh);
 
-    this.hangarBulkheadNearMat = new THREE.MeshBasicMaterial({
-      color: 0xebf3ff,
+    this.hangarBulkheadMat = new THREE.MeshBasicMaterial({
+      color: 0xe4eefc,
       transparent: true,
       alphaTest: 0.02,
       depthWrite: false,
@@ -1722,35 +1823,34 @@ export class EnvironmentSystem {
       fog: false,
       toneMapped: true,
     });
-    this.hangarBulkheadFarMat = new THREE.MeshBasicMaterial({
-      color: 0xbcd3ee,
-      transparent: true,
-      alphaTest: 0.02,
-      depthWrite: false,
-      side: THREE.DoubleSide,
-      fog: false,
-      toneMapped: true,
-    });
-
-    const bulkheadGeoNear = new THREE.PlaneGeometry(6.6, 8.8, 1, 1);
-    const bulkheadGeoFar = new THREE.PlaneGeometry(8.1, 10.8, 1, 1);
+    const bulkheadGeo = new THREE.PlaneGeometry(8.4, 11.2, 1, 1);
     for (const side of [-1, 1]) {
-      const nearWall = new THREE.Mesh(bulkheadGeoNear, this.hangarBulkheadNearMat);
-      nearWall.position.set(side < 0 ? -6.75 : 6.2, 2.68, -11.4);
-      nearWall.scale.x = side < 0 ? 1 : -1;
-      nearWall.rotation.y = side < 0 ? 0.1 : -0.1;
-      nearWall.renderOrder = 2;
-
-      const farWall = new THREE.Mesh(bulkheadGeoFar, this.hangarBulkheadFarMat);
-      farWall.position.set(side < 0 ? -9.6 : 9.1, 3.68, -15.6);
-      farWall.scale.x = side < 0 ? 1 : -1;
-      farWall.rotation.y = side < 0 ? 0.06 : -0.06;
-      farWall.renderOrder = 1;
-
-      this.hangarParallaxGroup.add(nearWall, farWall);
+      const portalPier = new THREE.Mesh(bulkheadGeo, this.hangarBulkheadMat);
+      portalPier.position.set(side * 8.85, 3.82, -15.72);
+      portalPier.scale.x = side < 0 ? 1 : -1;
+      portalPier.rotation.y = side < 0 ? 0.04 : -0.04;
+      portalPier.renderOrder = 3;
+      this.hangarParallaxGroup.add(portalPier);
     }
 
-    // 5. Soft Volumetric Bay Sunlight Shafts streaming from overhead gantry onto turntable (0, -0.8, 0)
+    // Grounded soft ambient-occlusion contact shadow strips beneath portal piers & base plinths
+    const aoShadowTex = this.createBayContactShadowTexture();
+    const aoShadowMat = new THREE.MeshBasicMaterial({
+      map: aoShadowTex,
+      transparent: true,
+      depthWrite: false,
+      fog: false,
+    });
+    const sideAoGeo = new THREE.PlaneGeometry(22.0, 2.8, 1, 1);
+    sideAoGeo.rotateX(-Math.PI * 0.5);
+    for (const side of [-1, 1]) {
+      const aoPatch = new THREE.Mesh(sideAoGeo, aoShadowMat);
+      aoPatch.position.set(side * 18.4, -1.706, -14.2);
+      aoPatch.renderOrder = 1;
+      this.hangarGroup.add(aoPatch);
+    }
+
+    // 6. Soft Volumetric Bay Sunlight Shafts streaming across the hero fighter turntable (0, -0.8, 0)
     const spotGeo = new THREE.CylinderGeometry(0.26, 2.55, 7.8, 18, 1, true);
     spotGeo.translate(0, -3.9, 0);
     const spotConfigs: Array<{ x: number; y: number; z: number; color: number; opacity: number }> = [

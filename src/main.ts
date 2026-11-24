@@ -1,3 +1,8 @@
+import '@fontsource/oxanium/600.css';
+import '@fontsource/oxanium/700.css';
+import '@fontsource/oxanium/800.css';
+import '@fontsource/chakra-petch/600.css';
+import '@fontsource/chakra-petch/700.css';
 import './style.css';
 import { Game } from './game/Game';
 

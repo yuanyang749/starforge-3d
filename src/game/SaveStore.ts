@@ -12,11 +12,20 @@ export interface SaveData {
   totalKills: number;
   totalRuns: number;
   muted: boolean;
+  bgmVolume: number;
+  sfxVolume: number;
+  autoFire: boolean;
+  showHudLegend: boolean;
   endlessUnlocked: boolean;
   graphicsPreset: GraphicsPreset;
 }
 
 const STORAGE_KEY = 'starforge_armada_save_v1';
+
+function clampUnit(raw: unknown, fallback: number): number {
+  if (typeof raw !== 'number' || !Number.isFinite(raw)) return fallback;
+  return Math.max(0, Math.min(1, raw));
+}
 
 function sanitizeGraphicsPreset(raw: unknown): GraphicsPreset {
   if (
@@ -48,6 +57,10 @@ function defaultSave(): SaveData {
     totalKills: 0,
     totalRuns: 0,
     muted: false,
+    bgmVolume: 1.0,
+    sfxVolume: 1.0,
+    autoFire: true,
+    showHudLegend: true,
     endlessUnlocked: false,
     graphicsPreset: 'auto',
   };
@@ -105,6 +118,10 @@ export class SaveStore {
         totalKills: nonNegInt(p.totalKills),
         totalRuns: nonNegInt(p.totalRuns),
         muted: Boolean(p.muted),
+        bgmVolume: clampUnit(p.bgmVolume, 1.0),
+        sfxVolume: clampUnit(p.sfxVolume, 1.0),
+        autoFire: typeof p.autoFire === 'boolean' ? p.autoFire : true,
+        showHudLegend: typeof p.showHudLegend === 'boolean' ? p.showHudLegend : true,
         endlessUnlocked: Boolean(p.endlessUnlocked) || hasLegacyClear,
         graphicsPreset: sanitizeGraphicsPreset(p.graphicsPreset),
       };
@@ -139,6 +156,42 @@ export class SaveStore {
 
   setMuted(muted: boolean): void {
     this.data.muted = muted;
+    this.persist();
+  }
+
+  getBgmVolume(): number {
+    return this.data.bgmVolume;
+  }
+
+  setBgmVolume(vol: number): void {
+    this.data.bgmVolume = clampUnit(vol, 1.0);
+    this.persist();
+  }
+
+  getSfxVolume(): number {
+    return this.data.sfxVolume;
+  }
+
+  setSfxVolume(vol: number): void {
+    this.data.sfxVolume = clampUnit(vol, 1.0);
+    this.persist();
+  }
+
+  isAutoFire(): boolean {
+    return this.data.autoFire;
+  }
+
+  setAutoFire(autoFire: boolean): void {
+    this.data.autoFire = Boolean(autoFire);
+    this.persist();
+  }
+
+  isHudLegendVisible(): boolean {
+    return this.data.showHudLegend;
+  }
+
+  setHudLegendVisible(visible: boolean): void {
+    this.data.showHudLegend = Boolean(visible);
     this.persist();
   }
 

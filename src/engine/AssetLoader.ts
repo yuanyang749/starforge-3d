@@ -104,6 +104,16 @@ const UI_PRELOAD_URLS = [
   './ui/frames/launch_btn_amber.webp',
   './ui/frames/hud_status_frame.webp',
   './ui/frames/hud_boss_frame.webp',
+  './ui/frames/hangar_header_crest.webp',
+  './ui/frames/btn_tactical_frame.webp',
+  './ui/icons/icon_settings.webp',
+  './ui/icons/icon_guide.webp',
+  './ui/icons/icon_audio.webp',
+  './ui/frames/hud_telemetry_crest.webp',
+  './ui/frames/hud_banner_wing.webp',
+  './ui/frames/hud_banner_wing_alert.webp',
+  './ui/icons/icon_autofire.webp',
+  './ui/icons/icon_pause.webp',
 ];
 
 interface EnvTextureSpec {
@@ -156,6 +166,19 @@ const ENV_TEXTURE_SPECS: ReadonlyArray<EnvTextureSpec> = [
     url: './env/hangar_deck_emissive.webp',
     fallbackHex: 0x000000,
     mipmaps: true,
+  },
+  {
+    key: 'hangar_side_deck_albedo',
+    url: './env/hangar_side_deck_albedo.webp',
+    fallbackHex: 0x1a2638,
+    mipmaps: true,
+  },
+  {
+    key: 'hangar_side_deck_normal',
+    url: './env/hangar_side_deck_normal.webp',
+    fallbackHex: 0x8080ff,
+    mipmaps: true,
+    linear: true,
   },
   { key: 'act1', url: './env/sky_act1_metropolis.webp', fallbackHex: 0x0d2847 },
   { key: 'act2', url: './env/sky_act2_nebula.webp', fallbackHex: 0x2e1f6b },
