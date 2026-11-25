@@ -38,6 +38,7 @@ import {
 } from './WaveDirector';
 
 export type GameState = 'boot' | 'hangar' | 'playing' | 'upgrade' | 'paused' | 'result';
+export type GameMode = 'arcade' | 'endless';
 
 export interface StarforgeBossPartSnapshot {
   id: string;
@@ -85,6 +86,8 @@ export interface StarforgeSnapshot {
   loadProgress: number;
   selectedShipId: ShipId;
   selectedShipIndex: number;
+  selectedGameMode: GameMode;
+  activeRunMode: GameMode;
   act: number;
   waveInAct: number;
   endless: boolean;
@@ -130,7 +133,8 @@ export interface StarforgeSnapshot {
 export interface StarforgeQaApi {
   getSnapshot(): StarforgeSnapshot;
   selectShip(index: number): void;
-  startSortie(): void;
+  setGameMode(mode: GameMode): void;
+  startSortie(mode?: GameMode): void;
   forceUpgradeModal(): void;
   spawnBossNow(act: 1 | 2 | 3): void;
   damageBossPart(partId: string, dmg: number): boolean;
@@ -292,6 +296,8 @@ export class Game {
 
   // State
   private state: GameState = 'boot';
+  private selectedGameMode: GameMode = 'arcade';
+  private activeRunMode: GameMode = 'arcade';
   private loadProgress = 0;
   private selectedShipIndex = 0;
   private hangarShipInstance: PooledModelInstance | null = null;
@@ -371,6 +377,8 @@ export class Game {
   private pendingLaunchWaveEvent: ReturnType<WaveDirector['startCampaign']> | null = null;
   private pauseEscGuardActive = false;
   private pauseEscGuardTimer: number | null = null;
+  private bootTransitioning = false;
+  private hangarIntroGlideTimer = 0;
   private lastRafTime = 0;
   private globalElapsed = 0;
   private bossDetachTick = 0;
@@ -432,7 +440,7 @@ export class Game {
 
     this.renderer = new THREE.WebGLRenderer({
       canvas,
-      antialias: false,
+      antialias: true,
       powerPreference: 'high-performance',
       stencil: false,
     });
@@ -460,7 +468,7 @@ export class Game {
     this.keyLight = new THREE.DirectionalLight(0xfff6ea, 2.85);
     this.keyLight.position.set(10, 18, 12);
     this.keyLight.castShadow = false;
-    this.keyLight.shadow.mapSize.set(2048, 2048);
+    this.keyLight.shadow.mapSize.set(1024, 1024);
     this.keyLight.shadow.camera.near = 2;
     this.keyLight.shadow.camera.far = 45;
     this.keyLight.shadow.camera.left = -5;
@@ -511,12 +519,10 @@ export class Game {
     padCollarGeo.rotateX(-Math.PI * 0.5);
     const padCollar = new THREE.Mesh(
       padCollarGeo,
-      new THREE.MeshPhysicalMaterial({
+      new THREE.MeshStandardMaterial({
         color: 0x16243a,
         metalness: 0.9,
-        roughness: 0.22,
-        clearcoat: 0.65,
-        clearcoatRoughness: 0.18,
+        roughness: 0.2,
       })
     );
     padCollar.position.y = -1.706;
@@ -643,7 +649,14 @@ export class Game {
       'hangar-ult-name',
       'hangar-ult-desc',
       'hangar-lore',
+      'hangar-mode-selector',
+      'hangar-mode-arcade',
+      'hangar-mode-endless',
+      'hangar-mode-arcade-badge',
+      'hangar-mode-endless-badge',
       'hangar-launch-btn',
+      'hangar-launch-title',
+      'hangar-launch-sub',
       'hud-ui',
       'hud-cluster-tl',
       'hud-reticle',
@@ -766,7 +779,7 @@ export class Game {
     const recommendedLabelZh =
       tier === 'low' ? '720P 极速' : tier === 'high' ? '2K 超清' : '1080P 均衡';
     const autoPixelBudget =
-      tier === 'low' ? 1_100_000 : tier === 'high' ? 3_686_400 : 2_560_000;
+      tier === 'low' ? 1_100_000 : tier === 'high' ? 3_686_400 : 1_600_000;
 
     const screenCssW = Math.max(1, Math.round(window.screen?.width || window.innerWidth));
     const screenCssH = Math.max(1, Math.round(window.screen?.height || window.innerHeight));
@@ -881,35 +894,35 @@ export class Game {
     const preset = this.graphicsPreset;
     const tier = this.hardwareProfile.tier;
     let budget: number;
-    let bloomCapW = 1280;
-    let bloomCapH = 720;
+    let bloomCapW = 640;
+    let bloomCapH = 360;
     let useBloom = true;
 
     if (preset === '720p') {
       budget = 921_600;
       useBloom = false;
-      bloomCapW = 640;
-      bloomCapH = 360;
+      bloomCapW = 480;
+      bloomCapH = 270;
     } else if (preset === '1080p') {
       budget = 2_073_600;
-      bloomCapW = 1280;
-      bloomCapH = 720;
+      bloomCapW = 640;
+      bloomCapH = 360;
     } else if (preset === '1440p') {
       budget = 3_686_400;
-      bloomCapW = 1440;
-      bloomCapH = 810;
+      bloomCapW = 960;
+      bloomCapH = 540;
     } else if (preset === 'native') {
       budget = 8_294_400;
-      bloomCapW = 1440;
-      bloomCapH = 810;
+      bloomCapW = 960;
+      bloomCapH = 540;
     } else {
       budget = this.hardwareProfile.autoPixelBudget * this.drsScale * this.drsScale;
       if (tier === 'high') {
-        bloomCapW = 1440;
-        bloomCapH = 810;
+        bloomCapW = 960;
+        bloomCapH = 540;
       } else if (tier === 'low') {
-        bloomCapW = 640;
-        bloomCapH = 360;
+        bloomCapW = 480;
+        bloomCapH = 270;
       }
     }
 
@@ -918,13 +931,13 @@ export class Game {
     const dpr = THREE.MathUtils.clamp(Math.min(nativeDpr, 2, maxDprForBudget), 0.25, 2);
     const internalW = Math.max(1, Math.round(w * dpr));
     const internalH = Math.max(1, Math.round(h * dpr));
-    const bloomW = Math.min(bloomCapW, Math.max(1, Math.round(internalW * 0.5)));
-    const bloomH = Math.min(bloomCapH, Math.max(1, Math.round(internalH * 0.5)));
+    const bloomW = Math.min(bloomCapW, Math.max(1, Math.round(internalW * 0.25)));
+    const bloomH = Math.min(bloomCapH, Math.max(1, Math.round(internalH * 0.25)));
     const maxSamples = this.renderer.capabilities.maxSamples || 0;
     const msaaSamples =
-      preset === '720p' || !this.renderer.capabilities.isWebGL2
+      preset === '720p' || !this.renderer.capabilities.isWebGL2 || tier === 'low'
         ? 0
-        : internalW * internalH <= 3_700_000
+        : tier === 'high' && internalW * internalH <= 3_700_000
           ? Math.min(4, maxSamples)
           : Math.min(2, maxSamples);
     return { dpr, internalW, internalH, bloomW, bloomH, useBloom, msaaSamples };
@@ -1198,20 +1211,92 @@ export class Game {
 
     const enterBtn = this.els['boot-enter-btn'] as HTMLButtonElement;
     enterBtn.disabled = false;
+    enterBtn.classList.add('is-ready');
     const enterLabel = enterBtn.querySelector('.btn-label-text') ?? enterBtn;
     enterLabel.textContent = '进入星港机库 · ENTER HANGAR';
   }
 
-  private openHangarFromBoot(): void {
-    if (this.state !== 'boot') return;
+  private openHangarFromBoot(immediate = false): void {
+    if (this.state !== 'boot' || this.bootTransitioning) return;
+    const bootEl = this.els['boot-screen'];
+    const enterBtn = this.els['boot-enter-btn'] as HTMLButtonElement;
+
+    if (immediate) {
+      bootEl.hidden = true;
+      bootEl.classList.remove('is-unlocking', 'is-open');
+      this.enterHangar(false);
+      return;
+    }
+
+    this.bootTransitioning = true;
+    enterBtn.disabled = true;
+    enterBtn.classList.remove('is-ready');
+    bootEl.style.pointerEvents = 'none';
+
     this.sound.unlock();
-    this.sound.playBootDoorOpen();
-    this.els['boot-screen'].classList.add('is-open');
-    this.els['boot-screen'].style.pointerEvents = 'none';
+    this.sound.playUiClick();
+    this.sound.playHudDeploy();
+
+    const prefersReducedMotion =
+      typeof window !== 'undefined' &&
+      typeof window.matchMedia === 'function' &&
+      window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+    if (prefersReducedMotion) {
+      bootEl.classList.add('is-unlocking');
+      this.enterHangar(false);
+      window.setTimeout(() => {
+        bootEl.hidden = true;
+        bootEl.classList.remove('is-unlocking', 'is-open');
+        this.bootTransitioning = false;
+      }, 80);
+      return;
+    }
+
+    // Beat 1: Console retracts & armored blast doors lock opaque with central airlock seal spin
+    bootEl.classList.add('is-unlocking');
+
+    const finalizeClose = () => {
+      if (bootEl.hidden) return;
+      bootEl.hidden = true;
+      bootEl.classList.remove('is-unlocking', 'is-open');
+      this.bootTransitioning = false;
+    };
+
+    // Beat 2: Stage 3D Hangar silently behind sealed doors, wait 2 rAF for crisp GPU frame, then part doors
     window.setTimeout(() => {
-      this.els['boot-screen'].hidden = true;
-    }, 650);
-    this.enterHangar();
+      this.enterHangar(true);
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => {
+          const leftDoor = bootEl.querySelector<HTMLElement>('.boot-door-left');
+          let done = false;
+          const finishOnce = () => {
+            if (done) return;
+            done = true;
+            finalizeClose();
+          };
+          leftDoor?.addEventListener(
+            'transitionend',
+            (e) => {
+              if (e.target === leftDoor && e.propertyName === 'transform') {
+                finishOnce();
+              }
+            },
+            { once: true }
+          );
+          window.setTimeout(finishOnce, 980);
+
+          bootEl.classList.add('is-open');
+          this.sound.playBootDoorOpen();
+
+          // Beat 3: Cascade Hangar HUD wings into view midway through door sweep
+          window.setTimeout(() => {
+            this.els['hangar-ui'].classList.remove('is-entering');
+            this.sound.playHudDeploy();
+          }, 340);
+        });
+      });
+    }, 220);
   }
 
   private worldXToPan(x: number): number {
@@ -1316,10 +1401,19 @@ export class Game {
       this.openHangarFromBoot();
     });
 
+    this.els['hangar-mode-selector'].addEventListener('click', (e) => {
+      const btn = (e.target as Element | null)?.closest<HTMLButtonElement>('.mode-dock-btn[data-game-mode]');
+      if (!btn) return;
+      const mode = btn.dataset.gameMode === 'endless' ? 'endless' : 'arcade';
+      this.sound.unlock();
+      this.sound.playUiClick();
+      this.setSelectedGameMode(mode);
+    });
+
     this.els['hangar-launch-btn'].addEventListener('click', () => {
       this.sound.unlock();
       this.sound.playUiClick();
-      this.startSortie();
+      this.startSortie(this.selectedGameMode);
     });
 
     this.els['hangar-guide-btn'].addEventListener('click', () => this.openGuideDialog());
@@ -1463,6 +1557,17 @@ export class Game {
         return;
       }
 
+      if (this.state === 'boot') {
+        if ((code === 'Enter' || code === 'Space') && !e.repeat) {
+          const enterBtn = this.els['boot-enter-btn'] as HTMLButtonElement;
+          if (!this.bootTransitioning && !enterBtn.disabled) {
+            e.preventDefault();
+            this.openHangarFromBoot();
+          }
+        }
+        return;
+      }
+
       if (this.state === 'upgrade') {
         if (code === 'Digit1' && this.currentUpgradeChoices[0]) {
           this.selectUpgradeCard(this.currentUpgradeChoices[0].id);
@@ -1535,7 +1640,7 @@ export class Game {
       } else if (val === 'hangar') {
         this.enterHangar();
       } else if (val === 'restart') {
-        this.startSortie();
+        this.startSortie(this.activeRunMode);
       } else {
         // '' (Esc) or 'resume' -> resume combat
         this.sound.setMuffled(false);
@@ -1550,7 +1655,7 @@ export class Game {
       if (val === 'endless') {
         this.enterEndlessMode();
       } else if (val === 'retry') {
-        this.startSortie();
+        this.startSortie(this.activeRunMode);
       } else {
         this.enterHangar();
       }
@@ -1831,7 +1936,7 @@ export class Game {
 
   // ==================== HANGAR ====================
 
-  private enterHangar(): void {
+  private enterHangar(fromBootTransition = false): void {
     this.clearLaunchCountdown(false);
     this.hideWaveCallout();
     this.playerDying = false;
@@ -1851,6 +1956,19 @@ export class Game {
     this.els['boss-hud'].hidden = true;
     this.hangarPedestal.visible = true;
     this.beamGroup.visible = false;
+
+    if (fromBootTransition) {
+      this.els['hangar-ui'].classList.add('is-entering');
+      this.camera.position.set(0.95, 2.35, 10.6);
+      this.camera.fov = 60;
+      this.camera.lookAt(0, -0.15, 0);
+      this.camera.updateProjectionMatrix();
+      this.hangarYaw = -0.52;
+      this.hangarIntroGlideTimer = 1.25;
+    } else {
+      this.els['hangar-ui'].classList.remove('is-entering');
+      this.hangarIntroGlideTimer = 0;
+    }
 
     const saveData = this.save.getAll();
     this.els['hangar-career-stats'].textContent = `总击坠 ${saveData.totalKills} · 出击 ${saveData.totalRuns} 次`;
@@ -1914,7 +2032,7 @@ export class Game {
     inst.root.traverse((obj) => {
       if ((obj as THREE.Mesh).isMesh) {
         obj.castShadow = true;
-        obj.receiveShadow = true;
+        obj.receiveShadow = false;
       }
     });
     this.scene.add(inst.root);
@@ -1979,6 +2097,40 @@ export class Game {
       <div class="bp-spec-cell"><span>出力</span><strong>${ship.specTelemetry.output}</strong></div>
       <div class="bp-spec-cell"><span>装甲</span><strong>${ship.specTelemetry.armorClass}</strong></div>
     `;
+
+    this.syncHangarModeUi();
+  }
+
+  private setSelectedGameMode(mode: GameMode): void {
+    this.selectedGameMode = mode;
+    this.syncHangarModeUi();
+  }
+
+  private syncHangarModeUi(): void {
+    if (!this.els) return;
+    const isEndless = this.selectedGameMode === 'endless';
+    const arcadeBtn = this.els['hangar-mode-arcade'] as HTMLButtonElement;
+    const endlessBtn = this.els['hangar-mode-endless'] as HTMLButtonElement;
+    arcadeBtn.classList.toggle('is-active', !isEndless);
+    arcadeBtn.setAttribute('aria-pressed', String(!isEndless));
+    endlessBtn.classList.toggle('is-active', isEndless);
+    endlessBtn.setAttribute('aria-pressed', String(isEndless));
+
+    const rec = this.save.getShipRecord(this.activeShip.id);
+    const endlessUnlocked = this.save.isEndlessUnlocked();
+    this.els['hangar-mode-arcade-badge'].textContent =
+      rec.clears > 0 ? `已通关 ${rec.clears} 次` : '3 幕战役';
+    this.els['hangar-mode-endless-badge'].textContent =
+      rec.bestEndlessWave > 0
+        ? `最高 W${rec.bestEndlessWave}`
+        : endlessUnlocked
+          ? '已解锁 · 冲榜'
+          : '无限挑战';
+
+    const launchBtn = this.els['hangar-launch-btn'];
+    launchBtn.classList.toggle('is-endless-mode', isEndless);
+    this.els['hangar-launch-title'].textContent = isEndless ? '跃迁无尽' : '点火出击';
+    this.els['hangar-launch-sub'].textContent = isEndless ? 'ENTER ENDLESS' : 'IGNITE & LAUNCH';
   }
 
   private renderShipBlueprintSvg(shipId: ShipId): string {
@@ -2077,7 +2229,8 @@ export class Game {
 
   // ==================== SORTIE & COMBAT ====================
 
-  private startSortie(): void {
+  private startSortie(mode: GameMode = this.selectedGameMode): void {
+    this.activeRunMode = mode;
     this.closeAllDialogs();
     this.clearInputState();
     this.cleanupCombatObjects();
@@ -2144,14 +2297,23 @@ export class Game {
 
     this.sound.setMuffled(false);
     this.sound.playHudDeploy();
-    this.sound.setBgmTrack('act1');
-    const startEv = this.waves.startCampaign();
-    this.envSystem.setAct(1, true);
-    this.beginLaunchCountdown(startEv);
+    if (mode === 'endless') {
+      this.sound.setBgmTrack('act3');
+      const startEv = this.waves.startEndlessMode();
+      this.envSystem.setAct(this.waves.getAct(), true);
+      this.beginLaunchCountdown(startEv);
+    } else {
+      this.sound.setBgmTrack('act1');
+      const startEv = this.waves.startCampaign();
+      this.envSystem.setAct(1, true);
+      this.beginLaunchCountdown(startEv);
+    }
     this.updateHud();
   }
 
   private enterEndlessMode(): void {
+    this.activeRunMode = 'endless';
+    this.selectedGameMode = 'endless';
     this.closeAllDialogs();
     this.clearInputState();
     this.setScreenState('playing');
@@ -2617,7 +2779,7 @@ export class Game {
     `;
 
     const endlessBtn = this.els['result-endless-btn'] as HTMLButtonElement;
-    endlessBtn.hidden = !victory;
+    endlessBtn.hidden = !victory || this.waves.isEndless();
 
     this.dialogs.result.returnValue = '';
     if (!this.dialogs.result.open) {
@@ -2961,20 +3123,17 @@ export class Game {
         const wallSec = wallMs / 1000;
         this.fpsUiTimer += wallSec;
 
-        if (this.graphicsPreset === 'auto' && this.loadProgress >= 100) {
-          if (this.state === 'hangar') {
-            this.drsHighTimer = 0;
-            this.drsRecoverTimer = 0;
-            if (this.drsScale < 1.0) {
-              this.drsScale = 1.0;
-              this.applyGraphicsSettings();
-            }
-          } else if (this.emaFrameMs > 24.0) {
+        if (
+          this.graphicsPreset === 'auto' &&
+          this.loadProgress >= 100 &&
+          (this.state === 'hangar' || this.state === 'playing')
+        ) {
+          if (this.emaFrameMs > 24.0) {
             this.drsHighTimer += wallSec;
             this.drsRecoverTimer = 0;
-            if (this.drsHighTimer >= 1.4 && this.drsScale > 0.82) {
+            if (this.drsHighTimer >= 1.4 && this.drsScale > 0.78) {
               this.drsHighTimer = 0;
-              this.drsScale = Math.max(0.82, +(this.drsScale - 0.09).toFixed(2));
+              this.drsScale = Math.max(0.78, +(this.drsScale - 0.08).toFixed(2));
               this.applyGraphicsSettings();
             }
           } else if (this.emaFrameMs <= 18.5 && this.drsScale < 1.0) {
@@ -2982,7 +3141,7 @@ export class Game {
             this.drsRecoverTimer += wallSec;
             if (this.drsRecoverTimer >= 3.0) {
               this.drsRecoverTimer = 0;
-              this.drsScale = Math.min(1.0, +(this.drsScale + 0.09).toFixed(2));
+              this.drsScale = Math.min(1.0, +(this.drsScale + 0.08).toFixed(2));
               this.applyGraphicsSettings();
             }
           } else {
@@ -3043,17 +3202,27 @@ export class Game {
         this.hangarShipInstance.root.position.y = Math.sin(this.globalElapsed * 2.1) * 0.08 - 0.15;
         this.hangarShipRig.update({ dt: rawDt, elapsed: this.globalElapsed });
       }
+      if (this.hangarIntroGlideTimer > 0) {
+        this.hangarIntroGlideTimer = Math.max(0, this.hangarIntroGlideTimer - rawDt);
+      }
+      const camPosRate = this.hangarIntroGlideTimer > 0 ? rawDt * 3.1 : rawDt * 6;
+      const camFovRate = this.hangarIntroGlideTimer > 0 ? rawDt * 3.2 : rawDt * 5;
       this.camera.position.lerp(
         this.tmpCamTarget.set(
           0.4 + Math.sin(this.globalElapsed * 0.32) * 0.12,
           1.45 + Math.cos(this.globalElapsed * 0.24) * 0.035,
           5.1
         ),
-        rawDt * 6
+        camPosRate
       );
       this.camera.lookAt(0, -0.15, 0);
-      this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, 50, rawDt * 5);
-      this.camera.updateProjectionMatrix();
+      if (Math.abs(this.camera.fov - 50) > 0.01) {
+        this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, 50, camFovRate);
+        if (Math.abs(this.camera.fov - 50) <= 0.01) {
+          this.camera.fov = 50;
+        }
+        this.camera.updateProjectionMatrix();
+      }
       this.envSystem.update(rawDt, this.globalElapsed, 36 * 0.35, this.camera);
       this.projectileVisuals.updatePlayerThrusters(
         false,
@@ -4598,6 +4767,8 @@ export class Game {
           loadProgress: this.loadProgress,
           selectedShipId: this.activeShip.id,
           selectedShipIndex: this.selectedShipIndex,
+          selectedGameMode: this.selectedGameMode,
+          activeRunMode: this.activeRunMode,
           act: this.waves.getAct(),
           waveInAct: this.waves.getWaveInAct(),
           endless: this.waves.isEndless(),
@@ -4644,7 +4815,7 @@ export class Game {
       selectShip: (index: number): void => {
         const idx = Math.max(0, Math.min(SHIPS.length - 1, Math.floor(index)));
         if (this.state === 'boot') {
-          this.openHangarFromBoot();
+          this.openHangarFromBoot(true);
         }
         if (this.state === 'hangar') {
           this.selectHangarShip(idx);
@@ -4657,16 +4828,20 @@ export class Game {
         }
       },
 
-      startSortie: (): void => {
+      setGameMode: (mode: GameMode): void => {
+        this.setSelectedGameMode(mode === 'endless' ? 'endless' : 'arcade');
+      },
+
+      startSortie: (mode?: GameMode): void => {
         if (this.state === 'boot') {
-          this.openHangarFromBoot();
+          this.openHangarFromBoot(true);
         }
-        this.startSortie();
+        this.startSortie(mode ?? this.selectedGameMode);
       },
 
       forceUpgradeModal: (): void => {
         if (this.state === 'boot') {
-          this.openHangarFromBoot();
+          this.openHangarFromBoot(true);
         }
         if (this.state === 'hangar' || this.state === 'result') {
           this.startSortie();
@@ -4682,7 +4857,7 @@ export class Game {
 
       spawnBossNow: (act: 1 | 2 | 3): void => {
         if (this.state === 'boot') {
-          this.openHangarFromBoot();
+          this.openHangarFromBoot(true);
         }
         if (this.state === 'hangar' || this.state === 'result') {
           this.startSortie();

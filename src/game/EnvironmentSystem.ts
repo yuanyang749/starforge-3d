@@ -952,8 +952,8 @@ export class EnvironmentSystem {
 
   private hangarVistaMesh!: THREE.Mesh;
   private hangarVistaMat!: THREE.MeshBasicMaterial;
-  private hangarDeckMat!: THREE.MeshPhysicalMaterial;
-  private hangarSideDeckMat!: THREE.MeshPhysicalMaterial;
+  private hangarDeckMat!: THREE.MeshStandardMaterial;
+  private hangarSideDeckMat!: THREE.MeshStandardMaterial;
   private hangarCeilingMat!: THREE.MeshBasicMaterial;
   private hangarBulkheadMat!: THREE.MeshBasicMaterial;
   private readonly hangarParallaxGroup = new THREE.Group();
@@ -1302,39 +1302,43 @@ export class EnvironmentSystem {
     const safeDt = Math.min(0.1, Math.max(0, dt));
     const speed = Number.isFinite(scrollSpeed) ? scrollSpeed : 0;
     this.scrollDistance += speed * safeDt;
+    const isHangar = this.mode === 'hangar' || this.mode === 'boot';
 
-    // Keep sky dome locked on camera and cyclorama centered toward -Z ahead of camera
-    this.skySphere.position.copy(camera.position);
-    const desiredOffset = this.mode === 'hangar' ? -20 : -10;
-    this.cycloramaYOffset = THREE.MathUtils.lerp(
-      this.cycloramaYOffset,
-      desiredOffset,
-      Math.min(1, safeDt * 5.0)
-    );
-    this.cyclorama.position.set(
-      camera.position.x,
-      camera.position.y + this.cycloramaYOffset,
-      camera.position.z
-    );
-
-    // Smooth sky palette and vista crossfade transitions
+    // Smooth sky palette transitions
     this.lerpSkyPalette(safeDt);
-    if (this.vistaBlend < 1.0) {
-      this.vistaBlend = Math.min(1.0, this.vistaBlend + safeDt * 2.2);
-      this.cycloramaMat.uniforms.uTexMix.value = this.vistaBlend;
-      if (this.vistaBlend >= 1.0) {
-        this.currentVistaKey = this.targetVistaKey;
-      }
-    }
 
-    this.skyMat.uniforms.uTime.value = elapsed;
-    this.skyMat.uniforms.uScroll.value = this.scrollDistance;
+    if (!isHangar) {
+      // Keep sky dome locked on camera and cyclorama centered toward -Z ahead of camera
+      this.skySphere.position.copy(camera.position);
+      this.cycloramaYOffset = THREE.MathUtils.lerp(
+        this.cycloramaYOffset,
+        -10,
+        Math.min(1, safeDt * 5.0)
+      );
+      this.cyclorama.position.set(
+        camera.position.x,
+        camera.position.y + this.cycloramaYOffset,
+        camera.position.z
+      );
+
+      // Smooth vista crossfade transitions
+      if (this.vistaBlend < 1.0) {
+        this.vistaBlend = Math.min(1.0, this.vistaBlend + safeDt * 2.2);
+        this.cycloramaMat.uniforms.uTexMix.value = this.vistaBlend;
+        if (this.vistaBlend >= 1.0) {
+          this.currentVistaKey = this.targetVistaKey;
+        }
+      }
+
+      this.skyMat.uniforms.uTime.value = elapsed;
+      this.skyMat.uniforms.uScroll.value = this.scrollDistance;
+    }
 
     for (const beamMat of this.volumetricBeams) {
       beamMat.uniforms.uTime.value = elapsed;
     }
 
-    if (this.mode === 'hangar' || this.mode === 'boot') {
+    if (isHangar) {
       this.hangarParallaxGroup.position.set(0, 0, 0);
       this.hangarVistaMesh.position.x = Math.sin(elapsed * 0.14) * 0.18;
     }
@@ -1479,6 +1483,7 @@ export class EnvironmentSystem {
   private syncVisibility(): void {
     const isHangar = this.mode === 'hangar' || this.mode === 'boot';
     this.hangarGroup.visible = isHangar;
+    this.skySphere.visible = !isHangar;
     this.cyclorama.visible = !isHangar;
     this.act1Group.visible = this.mode === 'combat' && this.currentAct === 1;
     this.act2Group.visible = this.mode === 'combat' && this.currentAct === 2;
@@ -1659,25 +1664,21 @@ export class EnvironmentSystem {
     this.warmupTargets.push(this.hangarVistaMesh);
 
     // 2. Central 2K PBR Launch Platform Deck & Seamless Mirrored Side-Bay Titanium Plates (y = -1.72)
-    this.hangarDeckMat = new THREE.MeshPhysicalMaterial({
+    this.hangarDeckMat = new THREE.MeshStandardMaterial({
       color: 0xffffff,
       metalness: 0.72,
-      roughness: 0.9,
-      clearcoat: 0.48,
-      clearcoatRoughness: 0.22,
-      envMapIntensity: 1.4,
+      roughness: 0.82,
+      envMapIntensity: 1.45,
       normalScale: new THREE.Vector2(1.2, 1.2),
       emissive: new THREE.Color(0x9befff),
       emissiveIntensity: 1.45,
     });
 
-    this.hangarSideDeckMat = new THREE.MeshPhysicalMaterial({
+    this.hangarSideDeckMat = new THREE.MeshStandardMaterial({
       color: 0xd6e1ee,
-      metalness: 0.76,
-      roughness: 0.38,
-      clearcoat: 0.42,
-      clearcoatRoughness: 0.24,
-      envMapIntensity: 1.32,
+      metalness: 0.78,
+      roughness: 0.34,
+      envMapIntensity: 1.38,
       normalScale: new THREE.Vector2(1.1, 1.1),
     });
 
@@ -1694,39 +1695,33 @@ export class EnvironmentSystem {
     const fwdApronMesh = new THREE.Mesh(fwdApronGeo, this.hangarDeckMat);
     fwdApronMesh.name = 'HangarLandingDeckForward';
     fwdApronMesh.position.set(0, -1.721, -11.55);
-    fwdApronMesh.receiveShadow = true;
 
     const sideWingGeo = new THREE.PlaneGeometry(24.0, 23.4, 1, 1);
     sideWingGeo.rotateX(-Math.PI * 0.5);
     const sideWingL = new THREE.Mesh(sideWingGeo, this.hangarSideDeckMat);
     sideWingL.position.set(-18.6, -1.722, -5.0);
-    sideWingL.receiveShadow = true;
 
     const sideWingR = new THREE.Mesh(sideWingGeo, this.hangarSideDeckMat);
     sideWingR.position.set(18.6, -1.722, -5.0);
-    sideWingR.receiveShadow = true;
 
     this.hangarGroup.add(centerDeckMesh, fwdApronMesh, sideWingL, sideWingR);
     this.warmupTargets.push(centerDeckMesh, sideWingL);
 
     // 3. Wall-to-Wall Recessed Expansion Seam, Launch Trench Rails & Observation Lip (zero abrupt joints)
-    const trimMat = new THREE.MeshPhysicalMaterial({
+    const trimMat = new THREE.MeshStandardMaterial({
       color: 0x1a2639,
       metalness: 0.88,
-      roughness: 0.26,
-      clearcoat: 0.55,
+      roughness: 0.24,
       emissive: 0x071a2d,
       emissiveIntensity: 0.3,
     });
     const wallToWallSeam = new THREE.Mesh(new THREE.BoxGeometry(56.0, 0.036, 0.34), trimMat);
     wallToWallSeam.position.set(0, -1.708, -6.6);
-    wallToWallSeam.receiveShadow = true;
 
     const trenchRailGeo = new THREE.BoxGeometry(0.28, 0.045, 23.4);
     for (const side of [-1, 1]) {
       const trenchRail = new THREE.Mesh(trenchRailGeo, trimMat);
       trenchRail.position.set(side * 6.62, -1.705, -5.0);
-      trenchRail.receiveShadow = true;
       this.hangarGroup.add(trenchRail);
     }
 
@@ -1740,11 +1735,10 @@ export class EnvironmentSystem {
     this.hangarGroup.add(wallToWallSeam, curbMesh, curbShieldStrip);
 
     // 4. Unified Sealed Launch-Bay Portal & Perimeter Titanium Bulkheads (zero floating standees / ultrawide leaks)
-    const wallMat = new THREE.MeshPhysicalMaterial({
+    const wallMat = new THREE.MeshStandardMaterial({
       color: 0x162133,
       metalness: 0.84,
-      roughness: 0.34,
-      clearcoat: 0.36,
+      roughness: 0.32,
       emissive: 0x050e1c,
       emissiveIntensity: 0.26,
     });
@@ -1778,12 +1772,10 @@ export class EnvironmentSystem {
       // 3D grounded armored base plinth bolting the portal piers & side walls firmly into the deck
       const plinth = new THREE.Mesh(plinthGeo, trimMat);
       plinth.position.set(side * 17.5, -1.56, -15.92);
-      plinth.receiveShadow = true;
 
       const innerCornerBumper = new THREE.Mesh(bumperWedgeGeo, trimMat);
       innerCornerBumper.position.set(side * 8.45, -1.56, -15.72);
       innerCornerBumper.rotation.y = side * 0.25;
-      innerCornerBumper.receiveShadow = true;
 
       // Side enclosure walls far to left/right so 21:9/32:9 screens stay completely enclosed
       const sideBayWall = new THREE.Mesh(new THREE.BoxGeometry(0.8, 16.5, 24.5), wallMat);

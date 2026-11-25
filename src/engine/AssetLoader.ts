@@ -73,7 +73,7 @@ const DYNAMIC_NODE_KEYWORDS = [
 ];
 
 const UI_PRELOAD_URLS = [
-  './ui/bootloader_bg.png',
+  './ui/bootloader_bg.webp',
   './ui/logo_emblem.png',
   './ui/card_chip_frame.png',
   './ui/icons/badge_boss_alert.png',
@@ -451,6 +451,32 @@ function replaceWithPhysicalClearcoat(
   return phys;
 }
 
+function optimizeShipAstraCanopy(root: THREE.Object3D): void {
+  const seen = new Set<THREE.Material>();
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.material) return;
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const mat of mats) {
+      if (seen.has(mat)) continue;
+      seen.add(mat);
+      if (mat instanceof THREE.MeshPhysicalMaterial && mat.transmission > 0) {
+        mat.transmission = 0;
+        mat.thickness = 0;
+        mat.transparent = true;
+        mat.opacity = 0.62;
+        mat.roughness = 0.08;
+        mat.metalness = 0.15;
+        mat.clearcoat = 1.0;
+        mat.clearcoatRoughness = 0.05;
+        mat.envMapIntensity = 1.65;
+        mat.depthWrite = false;
+        mat.needsUpdate = true;
+      }
+    }
+  });
+}
+
 function enhanceShipMorph(root: THREE.Object3D): void {
   const replaced = new Map<THREE.Material, THREE.Material>();
   root.traverse((obj) => {
@@ -825,6 +851,8 @@ export class AssetLoader {
       }
       if (key === 'enemy_foldwing') {
         tintEnemyFoldwing(rawScene);
+      } else if (key === 'ship_astra') {
+        optimizeShipAstraCanopy(rawScene);
       } else if (key === 'ship_morph') {
         enhanceShipMorph(rawScene);
       } else if (key === 'pickup_repair' || key === 'pickup_energy') {
@@ -940,7 +968,7 @@ export class AssetLoader {
       prop_gate: 2,
     };
 
-    const maxAniso = Math.min(16, renderer.capabilities?.getMaxAnisotropy?.() || 4);
+    const maxAniso = Math.min(4, renderer.capabilities?.getMaxAnisotropy?.() || 4);
     for (const proto of this.prototypes.values()) {
       applyTextureSharpness(proto.prototype, maxAniso);
     }

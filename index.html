@@ -5,6 +5,82 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>星穹战翼：破晓远征 · STARFORGE: ECLIPSE VANGUARD</title>
     <link rel="icon" type="image/png" href="./ui/logo_emblem.png" />
+    <link rel="preload" as="image" href="./ui/bootloader_bg.webp" fetchpriority="high" />
+    <style>
+      *,
+      *::before,
+      *::after {
+        box-sizing: border-box;
+      }
+      html,
+      body {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        background: #050914;
+        color: #e8f3ff;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      #game-canvas {
+        position: fixed;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      .fps-hud:not(:popover-open),
+      .boot-door,
+      .boot-seam-flash,
+      .boot-airlock-seal {
+        opacity: 0;
+        pointer-events: none;
+      }
+      .boot-screen {
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+        display: grid;
+        place-items: center;
+        overflow: hidden;
+        background: #050914;
+      }
+      .boot-screen.is-unlocking,
+      .boot-screen.is-open {
+        background: transparent;
+      }
+      .boot-bg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        pointer-events: none;
+        z-index: 0;
+      }
+      .boot-console {
+        position: relative;
+        z-index: 4;
+        width: min(760px, 92dvw);
+        max-height: 92dvh;
+        overflow: hidden;
+      }
+      .ui-frame-bg {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: fill;
+        pointer-events: none;
+      }
+      .boot-logo {
+        width: 164px;
+        height: auto;
+      }
+    </style>
   </head>
   <body>
     <canvas id="game-canvas" aria-label="星穹战翼 3D 战场画布"></canvas>
@@ -144,16 +220,34 @@
     <!-- 1. Orbital Bootloader Screen -->
     <section id="boot-screen" class="boot-screen" aria-label="轨道启动终端">
       <img
-        src="./ui/bootloader_bg.png"
+        src="./ui/bootloader_bg.webp"
         class="boot-bg"
         alt=""
         aria-hidden="true"
         width="2048"
         height="1154"
+        decoding="sync"
         fetchpriority="high"
       />
-      <div class="boot-door boot-door-left" aria-hidden="true"></div>
-      <div class="boot-door boot-door-right" aria-hidden="true"></div>
+      <div class="boot-door boot-door-left" aria-hidden="true">
+        <span class="boot-door-plate" aria-hidden="true"></span>
+        <span class="boot-door-chevron" aria-hidden="true"></span>
+        <span class="boot-door-edge" aria-hidden="true"></span>
+      </div>
+      <div class="boot-door boot-door-right" aria-hidden="true">
+        <span class="boot-door-plate" aria-hidden="true"></span>
+        <span class="boot-door-chevron" aria-hidden="true"></span>
+        <span class="boot-door-edge" aria-hidden="true"></span>
+      </div>
+      <div class="boot-seam-flash" aria-hidden="true"></div>
+      <div class="boot-airlock-seal" aria-hidden="true">
+        <svg viewBox="0 0 120 120" width="112" height="112">
+          <circle cx="60" cy="60" r="52" fill="rgba(4,12,28,0.86)" stroke="rgba(0,240,255,0.65)" stroke-width="2" />
+          <circle cx="60" cy="60" r="42" fill="none" stroke="rgba(255,179,71,0.75)" stroke-width="1.5" stroke-dasharray="10 6" />
+          <polygon points="60,16 98,38 98,82 60,104 22,82 22,38" fill="none" stroke="rgba(0,240,255,0.9)" stroke-width="2" />
+          <path d="M44 60 L54 60 L60 48 L66 72 L72 60 L76 60" fill="none" stroke="#ffb347" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" />
+        </svg>
+      </div>
 
       <div class="boot-console framed-shell" data-spotlight>
         <img
@@ -190,9 +284,11 @@
 
           <div id="boot-log" class="boot-log" role="log" aria-live="polite"></div>
 
-          <button id="boot-enter-btn" type="button" class="btn-primary-launch" data-spotlight disabled>
+          <button id="boot-enter-btn" type="button" class="btn-primary-launch boot-enter-btn" data-spotlight disabled>
             <span class="ui-spotlight" aria-hidden="true"></span>
+            <span class="boot-enter-sheen" aria-hidden="true"></span>
             <span class="btn-label-text">正在同步神经火控与跃迁星图...</span>
+            <span class="boot-enter-arrow" aria-hidden="true">»</span>
           </button>
         </div>
       </div>
@@ -355,6 +451,42 @@
         </div>
       </aside>
 
+      <div id="hangar-mode-selector" class="hangar-mode-dock" role="group" aria-label="选择作战模式">
+        <button
+          id="hangar-mode-arcade"
+          type="button"
+          class="mode-dock-btn is-arcade is-active"
+          data-spotlight
+          data-game-mode="arcade"
+          aria-pressed="true"
+        >
+          <span class="ui-spotlight" aria-hidden="true"></span>
+          <span class="mode-dock-top">
+            <span class="mode-dock-code">ARCADE</span>
+            <span id="hangar-mode-arcade-badge" class="mode-dock-badge">3 幕战役</span>
+          </span>
+          <span class="mode-dock-title">街机战役</span>
+          <span class="mode-dock-desc">三幕首领推进 · 芯片构筑通关</span>
+        </button>
+
+        <button
+          id="hangar-mode-endless"
+          type="button"
+          class="mode-dock-btn is-endless"
+          data-spotlight
+          data-game-mode="endless"
+          aria-pressed="false"
+        >
+          <span class="ui-spotlight" aria-hidden="true"></span>
+          <span class="mode-dock-top">
+            <span class="mode-dock-code">ENDLESS</span>
+            <span id="hangar-mode-endless-badge" class="mode-dock-badge">极限冲榜</span>
+          </span>
+          <span class="mode-dock-title">无尽深空</span>
+          <span class="mode-dock-desc">无限波次跃迁 · 高压首领轮战</span>
+        </button>
+      </div>
+
       <div class="hangar-viewport-hint" aria-label="泊位检视提示">
         <span class="dock-pill"><i class="dock-dot is-emerald"></i>泊位就绪</span>
         <span class="dock-pill-main">鼠标左右拖拽全方位检视战机气动与武装构型</span>
@@ -456,8 +588,8 @@
             <span class="ui-spotlight is-amber" aria-hidden="true"></span>
             <span class="ui-sheen" aria-hidden="true"></span>
             <span class="launch-plate-content">
-              <span class="launch-plate-title">点火出击</span>
-              <span class="launch-plate-sub">IGNITE &amp; LAUNCH</span>
+              <span id="hangar-launch-title" class="launch-plate-title">点火出击</span>
+              <span id="hangar-launch-sub" class="launch-plate-sub">IGNITE &amp; LAUNCH</span>
             </span>
             <span class="launch-chevrons" aria-hidden="true">≫</span>
           </button>
