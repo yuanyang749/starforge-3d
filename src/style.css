@@ -3814,9 +3814,15 @@ dialog[open]::backdrop {
   gap: 0.95rem;
 }
 
+.result-shell {
+  width: min(680px, 90dvw);
+  padding: 5.2rem 4.6rem 5.4rem;
+}
+
 .result-inner {
   align-items: center;
   text-align: center;
+  gap: 0.82rem;
 }
 
 .dialog-header {
@@ -4241,8 +4247,9 @@ dialog[open]::backdrop {
 }
 
 .result-medal {
-  width: 104px;
-  height: 104px;
+  width: 88px;
+  height: 88px;
+  margin-top: 0.1rem;
   filter: drop-shadow(0 0 24px rgba(255, 179, 71, 0.5));
 }
 
@@ -4296,6 +4303,11 @@ dialog[open]::backdrop {
   flex-wrap: wrap;
   justify-content: center;
   gap: 0.7rem;
+}
+
+.result-shell .dialog-actions {
+  margin-top: 0.2rem;
+  padding-inline: 0.5rem;
 }
 
 /* ==================== Settings & Pilot Guide Dialogs ==================== */
@@ -5014,6 +5026,37 @@ dialog[open]::backdrop {
   }
   .compact-shell {
     padding: 3.1rem 3.3rem 3.25rem;
+  }
+  .result-shell {
+    width: min(660px, 90dvw);
+    padding: 4.8rem 4.35rem 5.05rem;
+  }
+  .result-inner {
+    gap: 0.62rem;
+  }
+  .result-medal {
+    width: 78px;
+    height: 78px;
+    margin-top: 0.1rem;
+  }
+  .result-stats-grid {
+    gap: 0.52rem;
+  }
+  .res-stat {
+    padding: 0.54rem 0.72rem;
+  }
+  .result-shell .dialog-actions {
+    margin-top: 0.16rem;
+    padding-inline: 0.45rem;
+  }
+  .result-shell .btn-primary-launch,
+  .result-shell .btn-amber-launch {
+    padding: 0.68rem 1.28rem;
+    font-size: 0.9rem;
+  }
+  .result-shell .btn-ghost {
+    padding: 0.56rem 1.05rem;
+    font-size: 0.84rem;
   }
   .settings-shell,
   .guide-shell {
