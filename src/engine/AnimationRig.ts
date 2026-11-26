@@ -14,6 +14,8 @@ export interface RigControlInput {
   playerPos?: THREE.Vector3;
   worldPos?: THREE.Vector3;
   disabledParts?: Set<string>;
+  introFold?: number; // 0 = combat spread, 1 = dramatic folded dive (Act 1 Skywing)
+  introPulse?: number; // 0..1 showcase energy boost during Boss cinema intro
 }
 
 export class AnimationRig {
@@ -245,6 +247,15 @@ export class AnimationRig {
         action.timeScale = -2.4;
         action.play();
       }
+    } else if (this.key === 'boss_act1_skywing') {
+      // Deterministic scrubbing of WingFold_Pivot_L/R: t=0.033s spread combat wings, t=5.0s folded dive wings
+      for (const action of this.actions.values()) {
+        action.reset();
+        action.timeScale = 1;
+        action.paused = true;
+        action.time = 0.033;
+        action.play();
+      }
     } else if (this.key === 'prop_gate') {
       if (mode === 'closed') {
         this.gateTriggered = false;
@@ -336,6 +347,14 @@ export class AnimationRig {
       if (ailL) ailL.time = ailL.getClip().duration * (0.5 + rollNorm * 0.25);
       if (ailR) ailR.time = ailR.getClip().duration * (0.5 + rollNorm * 0.25);
       this.mixer.update(safeDt);
+    } else if (this.key === 'boss_act1_skywing') {
+      const foldFrac = THREE.MathUtils.clamp(input.introFold ?? 0, 0, 1);
+      const breath = foldFrac < 0.05 ? (0.5 + 0.5 * Math.sin(input.elapsed * 2.1)) * 0.035 : 0;
+      const targetTime = THREE.MathUtils.lerp(0.033, 5.0, THREE.MathUtils.clamp(foldFrac + breath, 0, 1));
+      for (const action of this.actions.values()) {
+        action.time = targetTime;
+      }
+      this.mixer.update(0);
     } else if (this.key === 'prop_gate') {
       if (!this.gateTriggered && input.worldPos && input.worldPos.z >= -195) {
         this.setMode('opening');
@@ -395,6 +414,25 @@ export class AnimationRig {
       return;
     }
 
+    if (this.key === 'boss_act1_skywing') {
+      const prop = this.nodes.get('Propeller');
+      if (prop) prop.rotation.z += dt * 44;
+
+      const recoil = this.bossFirePulse * 0.016;
+      for (const [id, nodeName] of [
+        ['wing_pod_l', 'BossWingPod_L'],
+        ['wing_pod_r', 'BossWingPod_R'],
+      ]) {
+        if (disabledParts?.has(id)) continue;
+        const n = this.nodes.get(nodeName);
+        const basePos = this.basePositions.get(nodeName);
+        if (n && basePos) {
+          n.position.z = basePos.z - recoil;
+        }
+      }
+      return;
+    }
+
     if (this.key === 'enemy_drone') {
       const turret = this.nodes.get('Turret | faceted multi-camera optical head');
       if (turret) {
@@ -448,6 +486,7 @@ export class AnimationRig {
       }
 
       // Dual shoulder cannons recoil if not destroyed
+      const introBoost = input.introPulse ?? 0;
       for (const [id, nodeName] of [
         ['cannon_l', 'Cannon_L'],
         ['cannon_r', 'Cannon_R'],
@@ -456,19 +495,20 @@ export class AnimationRig {
         const n = this.nodes.get(nodeName);
         const basePos = this.basePositions.get(nodeName);
         if (n && basePos) {
-          n.position.z = basePos.z - this.bossFirePulse * 0.18;
+          n.position.z = basePos.z - (this.bossFirePulse * 0.18 + introBoost * 0.12);
         }
       }
       return;
     }
 
     if (this.key === 'boss_act2_crab') {
+      const introBoost = input.introPulse ?? 0;
       for (let i = 1; i <= 3; i++) {
         const legL = this.nodes.get(`Leg_L${i}`);
         const legR = this.nodes.get(`Leg_R${i}`);
         const ph = i * 1.1;
-        if (legL) legL.rotation.z = Math.sin(elapsed * 4.5 + ph) * 0.24;
-        if (legR) legR.rotation.z = -Math.sin(elapsed * 4.5 + ph + Math.PI * 0.5) * 0.24;
+        if (legL) legL.rotation.z = Math.sin(elapsed * 4.5 + ph) * (0.24 + introBoost * 0.14);
+        if (legR) legR.rotation.z = -Math.sin(elapsed * 4.5 + ph + Math.PI * 0.5) * (0.24 + introBoost * 0.14);
       }
       for (const [id, clawName, pincerName, sign] of [
         ['claw_l', 'Claw_L', 'Claw_L_Pincer', 1],
@@ -478,10 +518,10 @@ export class AnimationRig {
         const claw = this.nodes.get(clawName);
         const pincer = this.nodes.get(pincerName);
         if (claw) {
-          claw.rotation.y = sign * (Math.sin(elapsed * 2.2) * 0.18 + this.bossFirePulse * 0.25);
+          claw.rotation.y = sign * (Math.sin(elapsed * 2.2) * 0.18 + this.bossFirePulse * 0.25 + introBoost * 0.32);
         }
         if (pincer) {
-          pincer.rotation.y = -sign * (0.2 + Math.sin(elapsed * 5.2) * 0.22);
+          pincer.rotation.y = -sign * (0.2 + Math.sin(elapsed * 5.2) * 0.22 + introBoost * 0.24);
         }
       }
       for (const eyeName of ['Eye_L', 'Eye_R']) {
@@ -494,23 +534,26 @@ export class AnimationRig {
     }
 
     if (this.key === 'boss_act3_carrier') {
+      const introBoost = input.introPulse ?? 0;
       const dish = this.nodes.get('SensorMast_DishArray');
-      if (dish) dish.rotation.y += dt * 2.4;
+      if (dish) dish.rotation.y += dt * (2.4 + introBoost * 5.2);
 
       if (!disabledParts?.has('dorsal_turret')) {
         const turret = this.nodes.get('DorsalTurret');
         if (turret) {
           const targetYaw =
-            playerPos && worldPos
-              ? THREE.MathUtils.clamp((playerPos.x - worldPos.x) * 0.035, -0.8, 0.8)
-              : Math.sin(elapsed * 1.2) * 0.55;
+            introBoost > 0.05
+              ? Math.sin(elapsed * 3.4) * 0.52
+              : playerPos && worldPos
+                ? THREE.MathUtils.clamp((playerPos.x - worldPos.x) * 0.035, -0.8, 0.8)
+                : Math.sin(elapsed * 1.2) * 0.55;
           turret.rotation.y = THREE.MathUtils.lerp(turret.rotation.y, targetYaw, Math.min(1, dt * 4));
         }
       }
 
       if (!disabledParts?.has('bow_crane')) {
         const bow = this.nodes.get('BowCraneArms');
-        if (bow) bow.rotation.x = Math.sin(elapsed * 1.8) * 0.14 + this.bossFirePulse * 0.18;
+        if (bow) bow.rotation.x = Math.sin(elapsed * 1.8) * 0.14 + this.bossFirePulse * 0.18 + introBoost * 0.22;
       }
 
       // Docked fighters subtly pulse forward when launching waves

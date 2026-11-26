@@ -38,7 +38,13 @@ export interface PooledModelInstance {
   baseEmissiveIntensities: number[];
 }
 
-const BATCH_WHITELIST = new Set<ModelKey>(['pickup_repair', 'pickup_energy', 'enemy_foldwing', 'ship_astra']);
+const BATCH_WHITELIST = new Set<ModelKey>([
+  'pickup_repair',
+  'pickup_energy',
+  'enemy_foldwing',
+  'boss_act1_skywing',
+  'ship_astra',
+]);
 
 const DYNAMIC_NODE_KEYWORDS = [
   'rotor_',
@@ -50,6 +56,7 @@ const DYNAMIC_NODE_KEYWORDS = [
   'propeller',
   'wingfold_pivot',
   'wings_outer',
+  'bosswingpod',
   'antenna',
   'turret',
   'cannon_',
@@ -180,140 +187,141 @@ const ENV_TEXTURE_SPECS: ReadonlyArray<EnvTextureSpec> = [
     mipmaps: true,
     linear: true,
   },
-  { key: 'act1', url: './env/sky_act1_metropolis.webp', fallbackHex: 0x0d2847 },
+  { key: 'act1', url: './env/sky_stratosphere.webp', fallbackHex: 0x07152e },
+  { key: 'act2', url: './env/sky_act1_metropolis.webp', fallbackHex: 0x0d2847 },
   {
-    key: 'act1_highway_albedo',
+    key: 'act2_highway_albedo',
     url: './env/act1_highway_albedo.webp',
     fallbackHex: 0x1d2d44,
     mipmaps: true,
   },
   {
-    key: 'act1_highway_normal',
+    key: 'act2_highway_normal',
     url: './env/act1_highway_normal.webp',
     fallbackHex: 0x8080ff,
     mipmaps: true,
     linear: true,
   },
   {
-    key: 'act1_highway_roughness',
+    key: 'act2_highway_roughness',
     url: './env/act1_highway_roughness.webp',
     fallbackHex: 0x666666,
     mipmaps: true,
     linear: true,
   },
   {
-    key: 'act1_highway_emissive',
+    key: 'act2_highway_emissive',
     url: './env/act1_highway_emissive.webp',
     fallbackHex: 0x000000,
     mipmaps: true,
   },
   {
-    key: 'act1_sky_arch',
+    key: 'act2_sky_arch',
     url: './env/act1_sky_arch.webp',
     fallbackHex: 0x000000,
     mipmaps: true,
     transparentFallback: true,
   },
   {
-    key: 'act1_tower_a',
+    key: 'act2_tower_a',
     url: './env/act1_tower_cluster_a.webp',
     fallbackHex: 0x000000,
     mipmaps: true,
     transparentFallback: true,
   },
   {
-    key: 'act1_tower_b',
+    key: 'act2_tower_b',
     url: './env/act1_tower_cluster_b.webp',
     fallbackHex: 0x000000,
     mipmaps: true,
     transparentFallback: true,
   },
   {
-    key: 'act1_holo_pylon',
+    key: 'act2_holo_pylon',
     url: './env/act1_holo_pylon.webp',
     fallbackHex: 0x000000,
     mipmaps: true,
     transparentFallback: true,
   },
-  { key: 'act2', url: './env/sky_act2_nebula.webp', fallbackHex: 0x2e1f6b },
+  { key: 'act3', url: './env/sky_act2_nebula.webp', fallbackHex: 0x2e1f6b },
   {
-    key: 'act2_warp_ring',
+    key: 'act3_warp_ring',
     url: './env/act2_warp_ring.webp',
     fallbackHex: 0x000000,
     mipmaps: true,
     transparentFallback: true,
   },
   {
-    key: 'act2_crystal_a',
+    key: 'act3_crystal_a',
     url: './env/act2_crystal_a.webp',
     fallbackHex: 0x000000,
     mipmaps: true,
     transparentFallback: true,
   },
   {
-    key: 'act2_crystal_b',
+    key: 'act3_crystal_b',
     url: './env/act2_crystal_b.webp',
     fallbackHex: 0x000000,
     mipmaps: true,
     transparentFallback: true,
   },
   {
-    key: 'act2_derelict',
+    key: 'act3_derelict',
     url: './env/act2_derelict_hulk.webp',
     fallbackHex: 0x000000,
     mipmaps: true,
     transparentFallback: true,
   },
-  { key: 'act3', url: './env/sky_act3_citadel.webp', fallbackHex: 0x5c1922 },
+  { key: 'act4', url: './env/sky_act3_citadel.webp', fallbackHex: 0x5c1922 },
   {
-    key: 'act3_hull_albedo',
+    key: 'act4_hull_albedo',
     url: './env/act3_hull_albedo.webp',
     fallbackHex: 0x241315,
     mipmaps: true,
   },
   {
-    key: 'act3_hull_normal',
+    key: 'act4_hull_normal',
     url: './env/act3_hull_normal.webp',
     fallbackHex: 0x8080ff,
     mipmaps: true,
     linear: true,
   },
   {
-    key: 'act3_hull_roughness',
+    key: 'act4_hull_roughness',
     url: './env/act3_hull_roughness.webp',
     fallbackHex: 0x666666,
     mipmaps: true,
     linear: true,
   },
   {
-    key: 'act3_hull_emissive',
+    key: 'act4_hull_emissive',
     url: './env/act3_hull_emissive.webp',
     fallbackHex: 0x000000,
     mipmaps: true,
   },
   {
-    key: 'act3_keel_arch',
+    key: 'act4_keel_arch',
     url: './env/act3_keel_arch.webp',
     fallbackHex: 0x000000,
     mipmaps: true,
     transparentFallback: true,
   },
   {
-    key: 'act3_bastion_a',
+    key: 'act4_bastion_a',
     url: './env/act3_bastion_a.webp',
     fallbackHex: 0x000000,
     mipmaps: true,
     transparentFallback: true,
   },
   {
-    key: 'act3_bastion_b',
+    key: 'act4_bastion_b',
     url: './env/act3_bastion_b.webp',
     fallbackHex: 0x000000,
     mipmaps: true,
     transparentFallback: true,
   },
   {
-    key: 'act3_flak_pylon',
+    key: 'act4_flak_pylon',
     url: './env/act3_flak_pylon.webp',
     fallbackHex: 0x000000,
     mipmaps: true,
@@ -552,6 +560,178 @@ function tintEnemyFoldwing(root: THREE.Object3D): void {
       mesh.material = tintOne(mesh.material);
     }
   });
+}
+
+function enhanceBossSkywing(root: THREE.Object3D): void {
+  // 1. Imperial Stratosphere Commander livery: deep sapphire titanium + solar gold trim + glowing cyan cockpit
+  const replaced = new Map<THREE.Material, THREE.Material>();
+  root.traverse((obj) => {
+    const mesh = obj as THREE.Mesh;
+    if (!mesh.isMesh || !mesh.material) return;
+    const upgradeOne = (src: THREE.Material): THREE.Material => {
+      const existing = replaced.get(src);
+      if (existing) return existing;
+      if (!(src instanceof THREE.MeshStandardMaterial)) {
+        replaced.set(src, src);
+        return src;
+      }
+
+      let out: THREE.Material = src;
+      const name = src.name || '';
+      if (name === 'Paint_Red' || name === 'Paint_Fin' || name === 'Propeller_YellowTip') {
+        out = replaceWithPhysicalClearcoat(src, {
+          color: 0xf4b63c,
+          metalness: 0.9,
+          roughness: 0.14,
+          clearcoat: 0.95,
+          clearcoatRoughness: 0.04,
+          emissive: 0x7c3e08,
+          emissiveIntensity: 0.48,
+          envMapIntensity: 1.75,
+        });
+      } else if (name === 'Canopy_Glass' || name === 'Window_DarkGlass') {
+        out = replaceWithPhysicalClearcoat(src, {
+          color: 0x073452,
+          metalness: 0.2,
+          roughness: 0.05,
+          clearcoat: 1.0,
+          clearcoatRoughness: 0.02,
+          emissive: 0x16e0ff,
+          emissiveIntensity: 1.05,
+          envMapIntensity: 1.85,
+        });
+      } else if (name === 'Paint_Fuselage' || name === 'Paint_Wings' || name === 'Paint_Tailplane') {
+        out = replaceWithPhysicalClearcoat(src, {
+          color: 0x1c3152,
+          metalness: 0.72,
+          roughness: 0.18,
+          clearcoat: 0.92,
+          clearcoatRoughness: 0.05,
+          emissive: 0x08223d,
+          emissiveIntensity: 0.35,
+          envMapIntensity: 1.65,
+        });
+      } else if (name === 'Chrome' || name === 'Exhaust_Silver' || name === 'Canopy_Frame_Bronze') {
+        out = replaceWithPhysicalClearcoat(src, {
+          color: 0xb9d6f2,
+          metalness: 0.94,
+          roughness: 0.12,
+          clearcoat: 0.65,
+          clearcoatRoughness: 0.06,
+          envMapIntensity: 1.75,
+        });
+      } else {
+        out = replaceWithPhysicalClearcoat(src, {
+          color: src.color.clone().lerp(new THREE.Color(0x16243b), 0.45).getHex(),
+          metalness: Math.max(src.metalness, 0.68),
+          roughness: Math.min(src.roughness, 0.24),
+          clearcoat: 0.6,
+          clearcoatRoughness: 0.08,
+          envMapIntensity: 1.45,
+        });
+      }
+      if (out !== src) src.dispose();
+      replaced.set(src, out);
+      return out;
+    };
+
+    if (Array.isArray(mesh.material)) {
+      mesh.material = mesh.material.map(upgradeOne);
+    } else {
+      mesh.material = upgradeOne(mesh.material);
+    }
+  });
+
+  // 2. Mount glowing destructible Wingtip Plasma Turbine Pods directly inside WingFold_Pivot_L/R
+  root.updateMatrixWorld(true);
+  const podChassisMat = new THREE.MeshPhysicalMaterial({
+    color: 0x14243b,
+    metalness: 0.88,
+    roughness: 0.2,
+    clearcoat: 0.85,
+    clearcoatRoughness: 0.06,
+    emissive: 0x062038,
+    emissiveIntensity: 0.4,
+    envMapIntensity: 1.6,
+  });
+  const podGoldRingMat = new THREE.MeshPhysicalMaterial({
+    color: 0xf7bd42,
+    metalness: 0.94,
+    roughness: 0.14,
+    clearcoat: 0.9,
+    emissive: 0x804208,
+    emissiveIntensity: 0.45,
+    envMapIntensity: 1.8,
+  });
+  const podCoreMat = new THREE.MeshStandardMaterial({
+    color: 0x56f5ff,
+    emissive: 0x1ae8ff,
+    emissiveIntensity: 2.4,
+    metalness: 0.1,
+    roughness: 0.15,
+  });
+
+  const buildWingPod = (podName: string, sideSign: 1 | -1): THREE.Group => {
+    const pod = new THREE.Group();
+    pod.name = podName;
+
+    const nacelle = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.022, 0.115, 16), podChassisMat);
+    nacelle.rotation.x = Math.PI * 0.5;
+
+    const collarFront = new THREE.Mesh(new THREE.TorusGeometry(0.0205, 0.0042, 10, 24), podGoldRingMat);
+    collarFront.position.z = 0.036;
+
+    const collarRear = new THREE.Mesh(new THREE.TorusGeometry(0.0185, 0.0036, 10, 24), podGoldRingMat);
+    collarRear.position.z = -0.032;
+
+    const plasmaCore = new THREE.Mesh(new THREE.SphereGeometry(0.0145, 16, 12), podCoreMat);
+    plasmaCore.scale.set(1.0, 1.0, 1.65);
+    plasmaCore.position.z = 0.052;
+
+    const plasmaHalo = new THREE.Mesh(new THREE.TorusGeometry(0.0245, 0.0028, 8, 28), podCoreMat);
+    plasmaHalo.position.z = 0.024;
+
+    const pylonStrut = new THREE.Mesh(new THREE.BoxGeometry(0.009, 0.026, 0.058), podChassisMat);
+    pylonStrut.position.set(0, 0.018, 0.004);
+
+    const sideFin = new THREE.Mesh(new THREE.BoxGeometry(0.026, 0.005, 0.064), podGoldRingMat);
+    sideFin.position.set(sideSign * 0.018, 0, -0.008);
+
+    pod.add(nacelle, collarFront, collarRear, plasmaCore, plasmaHalo, pylonStrut, sideFin);
+    return pod;
+  };
+
+  for (const [pivotName, outerName, podName, sideSign] of [
+    ['WingFold_Pivot_L', 'Wings_Outer_L', 'BossWingPod_L', 1],
+    ['WingFold_Pivot_R', 'Wings_Outer_R', 'BossWingPod_R', -1],
+  ] as const) {
+    let pivotNode: THREE.Object3D | null = null;
+    let outerNode: THREE.Object3D | null = null;
+    root.traverse((obj) => {
+      if (obj.name === pivotName) pivotNode = obj;
+      if (obj.name === outerName) outerNode = obj;
+    });
+    if (!pivotNode) continue;
+    const pivotObj = pivotNode as THREE.Object3D;
+    const pod = buildWingPod(podName, sideSign);
+
+    if (outerNode) {
+      const box = new THREE.Box3().setFromObject(outerNode);
+      if (!box.isEmpty()) {
+        const worldCenter = new THREE.Vector3();
+        box.getCenter(worldCenter);
+        worldCenter.y = box.min.y - 0.012;
+        worldCenter.z += 0.018;
+        const localPos = pivotObj.worldToLocal(worldCenter.clone());
+        pod.position.copy(localPos);
+      } else {
+        pod.position.set(sideSign * 0.11, -0.022, 0.042);
+      }
+    } else {
+      pod.position.set(sideSign * 0.11, -0.022, 0.042);
+    }
+    pivotObj.add(pod);
+  }
 }
 
 function replaceWithPhysicalClearcoat(
@@ -987,6 +1167,8 @@ export class AssetLoader {
       }
       if (key === 'enemy_foldwing') {
         tintEnemyFoldwing(rawScene);
+      } else if (key === 'boss_act1_skywing') {
+        enhanceBossSkywing(rawScene);
       } else if (key === 'ship_astra') {
         optimizeShipAstraCanopy(rawScene);
       } else if (key === 'ship_morph') {
@@ -1091,6 +1273,7 @@ export class AssetLoader {
       ship_opus: 1,
       ship_morph: 1,
       ship_aero: 1,
+      boss_act1_skywing: 1,
       boss_act1_mech: 1,
       boss_act2_crab: 1,
       boss_act3_carrier: 1,

@@ -55,6 +55,8 @@ export interface StarforgeBossSnapshot {
   act: number;
   hp: number;
   maxHp: number;
+  entering: boolean;
+  introProgress: number;
   dying: boolean;
   deathTimer: number;
   parts: StarforgeBossPartSnapshot[];
@@ -104,6 +106,9 @@ export interface StarforgeSnapshot {
   ultActiveTimer: number;
   countdownActive: boolean;
   countdownRemaining: number;
+  bossIntroActive: boolean;
+  cameraFov: number;
+  timeScale: number;
   playerDying: boolean;
   activeGateCount: number;
   pickupCount: number;
@@ -136,7 +141,8 @@ export interface StarforgeQaApi {
   setGameMode(mode: GameMode): void;
   startSortie(mode?: GameMode): void;
   forceUpgradeModal(): void;
-  spawnBossNow(act: 1 | 2 | 3): void;
+  spawnBossNow(act: 1 | 2 | 3 | 4, opts?: { playIntro?: boolean }): void;
+  skipBossIntro(): void;
   damageBossPart(partId: string, dmg: number): boolean;
   damageBossCore(dmg: number): boolean;
   fillUltimate(): void;
@@ -314,6 +320,7 @@ export class Game {
 
   private playerPos = new THREE.Vector3(0, 0, 0);
   private playerVel = new THREE.Vector3(0, 0, 0);
+  private cameraRoll = 0;
   private playerHp = 100;
   private playerMaxHp = 100;
   private invulnTimer = 0;
@@ -329,6 +336,9 @@ export class Game {
   private boostFovTimer = 0;
   private hitStopTimer = 0;
   private slowMoTimer = 0;
+  private currentTimeScale = 1.0;
+  private bossIntroHideTimer: number | null = null;
+  private bossHudChargeTimer: number | null = null;
   private screenShake = 0;
   private score = 0;
   private kills = 0;
@@ -425,6 +435,9 @@ export class Game {
   private readonly tmpDir = new THREE.Vector3();
   private readonly tmpQuat = new THREE.Quaternion();
   private readonly tmpCamTarget = new THREE.Vector3();
+  private readonly tmpCamLookAt = new THREE.Vector3();
+  private readonly tmpHeroCamPos = new THREE.Vector3();
+  private readonly tmpHeroLookAt = new THREE.Vector3();
 
   constructor(canvas: HTMLCanvasElement) {
     this.canvas = canvas;
@@ -695,6 +708,14 @@ export class Game {
       'boss-hud-hp-fill',
       'boss-parts-row',
       'boss-hud-intel',
+      'boss-cinema-overlay',
+      'boss-cinema-card',
+      'boss-cinema-alert-top',
+      'boss-cinema-act',
+      'boss-cinema-threat',
+      'boss-cinema-name',
+      'boss-cinema-code',
+      'boss-cinema-intel',
       'hud-roll-card',
       'hud-roll-status',
       'hud-roll-fill',
@@ -1504,6 +1525,12 @@ export class Game {
         this.isDraggingHangar = true;
         this.dragStartX = e.clientX;
       } else if (this.state === 'playing') {
+        if (this.isBossIntroActive()) {
+          if ((this.waves.activeBoss?.introElapsed ?? 0) >= 0.45) {
+            this.skipBossIntro();
+          }
+          return;
+        }
         if (e.button === 2) {
           this.tryBarrelRoll();
         } else {
@@ -1581,6 +1608,21 @@ export class Game {
       }
 
       if (this.state === 'playing') {
+        if (this.isBossIntroActive()) {
+          if ((code === 'Space' || code === 'Enter') && !e.repeat) {
+            e.preventDefault();
+            if ((this.waves.activeBoss?.introElapsed ?? 0) >= 0.45) {
+              this.skipBossIntro();
+            }
+          } else if (code === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            if (!e.repeat) {
+              this.openPauseDialog(true);
+            }
+          }
+          return;
+        }
         if (code === 'ShiftLeft' || code === 'ShiftRight') {
           this.tryBarrelRoll();
         } else if (code === 'Space' || code === 'KeyQ') {
@@ -1957,6 +1999,8 @@ export class Game {
     this.els['boss-hud'].hidden = true;
     this.hangarPedestal.visible = true;
     this.beamGroup.visible = false;
+    this.cameraRoll = 0;
+    this.camera.up.set(0, 1, 0);
 
     if (fromBootTransition) {
       this.els['hangar-ui'].classList.add('is-entering');
@@ -2120,7 +2164,7 @@ export class Game {
     const rec = this.save.getShipRecord(this.activeShip.id);
     const endlessUnlocked = this.save.isEndlessUnlocked();
     this.els['hangar-mode-arcade-badge'].textContent =
-      rec.clears > 0 ? `已通关 ${rec.clears} 次` : '3 幕战役';
+      rec.clears > 0 ? `已通关 ${rec.clears} 次` : '4 幕战役';
     this.els['hangar-mode-endless-badge'].textContent =
       rec.bestEndlessWave > 0
         ? `最高 W${rec.bestEndlessWave}`
@@ -2281,6 +2325,8 @@ export class Game {
     this.playerHp = ship.baseHp;
     this.playerPos.set(0, -0.8, 0);
     this.playerVel.set(0, 0, 0);
+    this.cameraRoll = 0;
+    this.camera.up.set(0, 1, 0);
 
     const pInst = this.loader.instantiateFresh(ship.modelKey, false);
     this.scene.add(pInst.root);
@@ -2419,6 +2465,7 @@ export class Game {
   }
 
   private cleanupCombatObjects(): void {
+    this.clearBossIntroOverlayImmediate();
     this.playerDying = false;
     this.playerDeathTimer = 0;
     this.playerDeathSecondaryBurstDone = false;
@@ -2718,6 +2765,7 @@ export class Game {
 
   private showResultDialog(victory: boolean): void {
     this.clearLaunchCountdown(false);
+    this.clearBossIntroOverlayImmediate();
     this.hideWaveCallout();
     this.closeAllDialogs();
     this.clearInputState();
@@ -2789,10 +2837,143 @@ export class Game {
     this.promoteFpsHudToTopLayer();
   }
 
+  private isBossIntroActive(): boolean {
+    const boss = this.waves.activeBoss;
+    return Boolean(boss && boss.entering && !boss.dying);
+  }
+
+  private clearBossIntroOverlayImmediate(): void {
+    if (this.bossIntroHideTimer !== null) {
+      window.clearTimeout(this.bossIntroHideTimer);
+      this.bossIntroHideTimer = null;
+    }
+    if (this.bossHudChargeTimer !== null) {
+      window.clearTimeout(this.bossHudChargeTimer);
+      this.bossHudChargeTimer = null;
+    }
+    this.els['hud-ui']?.classList.remove('is-boss-cinema');
+    this.els['boss-hud']?.classList.remove('is-charging');
+    const overlay = this.els['boss-cinema-overlay'];
+    if (overlay) {
+      overlay.classList.remove('is-active', 'is-card-visible');
+      overlay.hidden = true;
+    }
+    this.currentTimeScale = 1.0;
+  }
+
+  private computeBossIntroTimeScale(boss: ActiveBoss): number {
+    const t = boss.introElapsed;
+    if (t < 0.45) {
+      const p = THREE.MathUtils.clamp(t / 0.45, 0, 1);
+      const ease = p * p * (3 - 2 * p);
+      return THREE.MathUtils.lerp(1.0, 0.22, ease);
+    }
+    if (t < 1.95) {
+      const mid = Math.sin(((t - 0.45) / 1.5) * Math.PI);
+      return 0.22 - mid * 0.04;
+    }
+    const p = THREE.MathUtils.clamp((t - 1.95) / Math.max(0.05, boss.introDuration - 1.95), 0, 1);
+    const ease = 1 - Math.pow(1 - p, 3);
+    return THREE.MathUtils.lerp(0.22, 1.0, ease);
+  }
+
+  private beginBossIntroCinematic(boss: ActiveBoss): void {
+    this.clearBossIntroOverlayImmediate();
+    this.hideWaveCallout();
+    this.els['boss-hud'].hidden = true;
+
+    // Guarantee fair safety & pristine widescreen cinema framing (no stray bullets or damage numbers)
+    this.enemyBullets.length = 0;
+    this.projectileVisuals.syncEnemyProjectiles(this.enemyBullets, 0, this.globalElapsed);
+    this.playerBullets.length = 0;
+    this.projectileVisuals.syncPlayerProjectiles(this.playerBullets, 0, this.globalElapsed);
+    for (const ft of this.floatingTexts) {
+      ft.el.remove();
+    }
+    this.floatingTexts.length = 0;
+    this.invulnTimer = Math.max(this.invulnTimer, 3.4);
+
+    const cfg = boss.config;
+    const romanActs = ['I', 'II', 'III', 'IV'] as const;
+    const roman = romanActs[Math.max(0, Math.min(3, cfg.act - 1))];
+    const overlay = this.els['boss-cinema-overlay'];
+    overlay.style.setProperty('--boss-accent', cfg.accentColor);
+    this.els['boss-cinema-alert-top'].textContent = this.waves.isEndless()
+      ? '无尽深空高危首领接敌 · 战术时间缓滞中'
+      : '高危首领目标接敌 · 战术时间缓滞中';
+    this.els['boss-cinema-act'].textContent = this.waves.isEndless()
+      ? `无尽波次 W${this.waves.getEndlessWave()} · 首领拦截`
+      : `ACT ${roman} · 关底首领拦截`;
+    this.els['boss-cinema-threat'].textContent = cfg.threatTag;
+    this.els['boss-cinema-name'].textContent = cfg.nameZh;
+    this.els['boss-cinema-code'].textContent = cfg.codeName;
+    this.els['boss-cinema-intel'].textContent = cfg.tacticalIntel;
+
+    this.els['hud-ui'].classList.add('is-boss-cinema');
+    overlay.hidden = false;
+    overlay.classList.remove('is-active', 'is-card-visible');
+    void overlay.offsetWidth;
+    overlay.classList.add('is-active');
+
+    this.sound.playBossWarning();
+    this.sound.setBgmTrack('boss', 1.1);
+    this.sound.setMuffled(true);
+  }
+
+  private finishBossIntroCinematic(boss: ActiveBoss, immediate = false): void {
+    boss.entering = false;
+    boss.introElapsed = boss.introDuration;
+    boss.instance.root.rotation.set(0, 0, 0);
+    if (immediate) {
+      boss.pos.copy(boss.introHoverPos);
+    }
+
+    this.els['hud-ui'].classList.remove('is-boss-cinema');
+    const overlay = this.els['boss-cinema-overlay'];
+    overlay.classList.remove('is-active', 'is-card-visible');
+    if (this.bossIntroHideTimer !== null) {
+      window.clearTimeout(this.bossIntroHideTimer);
+      this.bossIntroHideTimer = null;
+    }
+    if (immediate) {
+      overlay.hidden = true;
+    } else {
+      this.bossIntroHideTimer = window.setTimeout(() => {
+        overlay.hidden = true;
+        this.bossIntroHideTimer = null;
+      }, 360);
+    }
+
+    this.sound.setMuffled(false);
+    this.showBossHud(boss.config, !immediate);
+
+    if (!immediate) {
+      this.boostFovTimer = Math.max(this.boostFovTimer, 0.34);
+      this.screenShake = Math.max(this.screenShake, 0.34);
+      this.sound.playHudDeploy();
+    }
+  }
+
+  private skipBossIntro(): void {
+    const boss = this.waves.activeBoss;
+    if (!boss || !boss.entering || boss.dying) return;
+    if (boss.introElapsed < 1.98) {
+      boss.introElapsed = 1.98;
+      boss.pos.copy(boss.introHoverPos);
+      boss.instance.root.rotation.set(0, 0, 0);
+      this.els['boss-cinema-overlay'].classList.remove('is-active', 'is-card-visible');
+      this.els['hud-ui'].classList.remove('is-boss-cinema');
+      this.sound.setMuffled(false);
+    } else {
+      this.finishBossIntroCinematic(boss, true);
+    }
+  }
+
   private handleWaveEvent(ev: ReturnType<WaveDirector['startCampaign']>): void {
     if (ev.type === 'act_banner') {
       this.envSystem.setAct(ev.act, false);
-      const track: BgmTrackId = ev.act === 1 ? 'act1' : ev.act === 2 ? 'act2' : 'act3';
+      const track: BgmTrackId =
+        ev.act <= 2 ? 'act1' : ev.act === 3 ? 'act2' : 'act3';
       this.sound.setBgmTrack(track);
       const theme = ACT_THEMES[Math.min(ACT_THEMES.length - 1, Math.max(0, ev.act - 1))];
       this.showWaveCallout({
@@ -2805,8 +2986,9 @@ export class Game {
     } else if (ev.type === 'endless_wave') {
       this.envSystem.setAct(ev.act, false);
       this.sound.setBgmTrack('act3');
+      const theme = ACT_THEMES[Math.min(ACT_THEMES.length - 1, Math.max(0, ev.act - 1))];
       this.showWaveCallout({
-        sector: '无尽深空 · ENDLESS',
+        sector: `无尽深空 · ${theme.titleZh.replace(/^ACT [IV]+\s*·\s*/, '')}`,
         title: `第 ${ev.endlessWave} 波`,
         fraction: `WAVE ${String(ev.endlessWave).padStart(2, '0')}`,
         sub: '敌群火力持续强化 · 全力突破极限',
@@ -2816,28 +2998,39 @@ export class Game {
       this.openUpgradeDialog();
     } else if (ev.type === 'boss_intro' && ev.bossConfig) {
       this.envSystem.setAct(ev.act, false);
-      this.sound.playBossWarning();
-      this.sound.setBgmTrack('boss', 0.9);
-      this.showBossHud(ev.bossConfig);
-      this.showWaveCallout({
-        sector: `ACT ${ev.act} · 最终拦截阶段`,
-        title: '第 3 波 · 首领降临',
-        fraction: 'BOSS 3 / 3',
-        sub: `${ev.bossConfig.nameZh} · ${ev.bossConfig.threatTag}`,
-        waveStep: 3,
-        isBoss: true,
-      });
+      const boss = this.waves.activeBoss;
+      if (boss && boss.entering) {
+        this.beginBossIntroCinematic(boss);
+      } else {
+        this.sound.playBossWarning();
+        this.sound.setBgmTrack('boss', 0.9);
+        this.showBossHud(ev.bossConfig, false);
+      }
     } else if (ev.type === 'campaign_victory') {
       this.showResultDialog(true);
     }
   }
 
-  private showBossHud(cfg: BossConfig): void {
-    this.els['boss-hud'].hidden = false;
+  private showBossHud(cfg: BossConfig, playChargeAnim = false): void {
+    const hud = this.els['boss-hud'];
+    hud.hidden = false;
     this.els['boss-hud-name'].textContent = cfg.nameZh;
     this.els['boss-hud-threat-badge'].textContent = cfg.threatTag;
     this.els['boss-hud-intel'].textContent = cfg.tacticalIntel;
     this.els['boss-hud-hp-ghost'].style.width = '100%';
+    if (this.bossHudChargeTimer !== null) {
+      window.clearTimeout(this.bossHudChargeTimer);
+      this.bossHudChargeTimer = null;
+    }
+    hud.classList.remove('is-charging');
+    if (playChargeAnim) {
+      void hud.offsetWidth;
+      hud.classList.add('is-charging');
+      this.bossHudChargeTimer = window.setTimeout(() => {
+        hud.classList.remove('is-charging');
+        this.bossHudChargeTimer = null;
+      }, 620);
+    }
     this.updateBossHud();
   }
 
@@ -3176,6 +3369,8 @@ export class Game {
   private frameUpdate(rawDt: number): void {
     if (this.state === 'boot') {
       this.waves.updateEnvironment(rawDt, 0.75);
+      this.cameraRoll = 0;
+      this.camera.up.set(0, 1, 0);
       this.camera.position.set(Math.sin(this.globalElapsed * 0.25) * 1.4, 1.8, 12);
       this.camera.lookAt(0, 0, -40);
       this.envSystem.update(rawDt, this.globalElapsed, 36 * 0.75, this.camera);
@@ -3260,10 +3455,14 @@ export class Game {
     }
 
     let timeScale = 1.0;
-    if (this.slowMoTimer > 0) {
+    const introBoss = this.waves.activeBoss;
+    if (introBoss && introBoss.entering && !introBoss.dying) {
+      timeScale = this.computeBossIntroTimeScale(introBoss);
+    } else if (this.slowMoTimer > 0) {
       this.slowMoTimer -= rawDt;
       timeScale = 0.28;
     }
+    this.currentTimeScale = timeScale;
     const dt = rawDt * timeScale;
 
     const enemySlowFactor =
@@ -3339,8 +3538,8 @@ export class Game {
     // 2. Player Movement, Firing, Abilities & Rig
     this.updatePlayer(dt);
 
-    // Solid obstacle impact test against Act 2/3 Warp Gate bulkhead & door armor
-    if (!this.playerDying && this.launchCountdownCombatUnlocked) {
+    // Solid obstacle impact test against Act 3/4 Warp Gate bulkhead & door armor
+    if (!this.playerDying && this.launchCountdownCombatUnlocked && !this.isBossIntroActive()) {
       const gateHit = this.waves.checkGateSolidCollision(this.playerPos, 1.1);
       if (gateHit !== null) {
         this.triggerPlayerCrashDestruction();
@@ -3369,7 +3568,7 @@ export class Game {
 
     // 6. Camera, Atmosphere Sync, Floating Numbers & HUD
     this.updateCameraAndFloatingTexts(rawDt);
-    this.envSystem.update(dt, this.globalElapsed, 36 * envBoost, this.camera);
+    this.envSystem.update(dt, this.globalElapsed, 36 * envBoost, this.camera, timeScale);
     this.updateHud();
   }
 
@@ -3506,8 +3705,8 @@ export class Game {
       w.rig.update({ dt, elapsed: this.globalElapsed });
     }
 
-    // Firing (held cleanly until 3-2-1 launch countdown completes)
-    if (!this.launchCountdownCombatUnlocked) {
+    // Firing (held cleanly until 3-2-1 launch countdown & Boss cinema intro complete)
+    if (!this.launchCountdownCombatUnlocked || this.isBossIntroActive()) {
       this.invulnTimer = Math.max(this.invulnTimer, 0.8);
     } else if ((this.autoFire || this.pointerDown) && this.fireCooldown <= 0) {
       this.fireMainWeapons();
@@ -3715,7 +3914,7 @@ export class Game {
     }
 
     const boss = this.waves.activeBoss;
-    if (boss && !boss.dying) {
+    if (boss && !boss.dying && !boss.entering) {
       let hitPart = false;
       for (const p of boss.parts) {
         if (p.destroyed) continue;
@@ -3760,9 +3959,15 @@ export class Game {
         worldPos: e.pos,
       });
 
-      // Firing (suppressed during boss death slow-mo sequence)
+      // Firing (suppressed during boss entrance cinema & boss death slow-mo)
       e.fireTimer -= dt;
-      if (e.fireTimer <= 0 && e.pos.z > -82 && e.pos.z < -8 && !this.waves.activeBoss?.dying) {
+      if (
+        e.fireTimer <= 0 &&
+        e.pos.z > -82 &&
+        e.pos.z < -8 &&
+        !this.waves.activeBoss?.dying &&
+        !this.waves.activeBoss?.entering
+      ) {
         this.fireEnemyWeapon(e);
       }
     }
@@ -3885,15 +4090,129 @@ export class Game {
       return null;
     }
 
+    if (boss.entering) {
+      boss.introElapsed += rawDt;
+      const t = boss.introElapsed;
+      const entryT = THREE.MathUtils.clamp(t / 1.15, 0, 1);
+      const easeOutQuart = 1 - Math.pow(1 - entryT, 4);
+      boss.pos.lerpVectors(boss.introStartPos, boss.introHoverPos, easeOutQuart);
+      if (entryT > 0.65) {
+        const settle = (entryT - 0.65) / 0.35;
+        boss.pos.y += Math.sin(t * 2.2) * 0.45 * settle;
+      }
+
+      // Per-Act signature entrance attitude & transformation choreography
+      let introFold = 0;
+      const introPulse =
+        t >= 0.45 && t <= 1.95 ? Math.sin(((t - 0.45) / 1.5) * Math.PI) : 0;
+
+      if (boss.config.act === 1) {
+        // Skyward Valkyrie: dramatic high-altitude dive leveling out while unfolding wings 80deg -> 0deg in bullet-time
+        boss.instance.root.rotation.set(
+          (1 - easeOutQuart) * 0.42,
+          0,
+          Math.sin(entryT * Math.PI) * 0.26 * boss.introSweepSign
+        );
+        const unfoldP = THREE.MathUtils.clamp((t - 0.46) / 1.18, 0, 1);
+        const unfoldEase = unfoldP * unfoldP * (3 - 2 * unfoldP);
+        introFold = 1 - unfoldEase;
+      } else if (boss.config.act === 2) {
+        boss.instance.root.rotation.set((1 - easeOutQuart) * 0.16, 0, 0);
+      } else if (boss.config.act === 3) {
+        boss.instance.root.rotation.set(
+          (1 - easeOutQuart) * 0.12,
+          (1 - easeOutQuart) * 0.44,
+          (1 - easeOutQuart) * -0.18
+        );
+      } else {
+        boss.instance.root.rotation.set((1 - easeOutQuart) * 0.08, 0, 0);
+      }
+
+      // Beat 2 Title Slam card reveal (0.42s -> 1.92s) & Beat 3 retraction (1.95s+)
+      const overlay = this.els['boss-cinema-overlay'];
+      if (t >= 0.42 && t < 1.92) {
+        overlay.classList.add('is-card-visible');
+      } else {
+        overlay.classList.remove('is-card-visible');
+      }
+      if (t >= 1.95) {
+        overlay.classList.remove('is-active');
+        this.els['hud-ui'].classList.remove('is-boss-cinema');
+        this.sound.setMuffled(false);
+      }
+
+      // Signature arrival sparks & weapon ignition flash (keeps 3D Boss silhouette 100% crisp without white sphere occlusion)
+      if (!boss.introBurstDone && t >= 0.48) {
+        boss.introBurstDone = true;
+        this.vfx.spawnSparks(boss.pos, 30, boss.config.accentHex, 28);
+        this.vfx.spawnSparks(boss.pos, 16, 0xffd27a, 22);
+        this.screenShake = Math.max(this.screenShake, 0.28);
+        boss.rig.triggerBossFire();
+        if (boss.config.act === 4) {
+          boss.rig.triggerCarrierLaunch();
+        }
+      }
+      if (!boss.introMidSparkDone && t >= 1.25) {
+        boss.introMidSparkDone = true;
+        boss.rig.triggerBossFire();
+        for (const p of boss.parts) {
+          if (p.node) {
+            p.node.getWorldPosition(p.worldPos);
+            this.vfx.spawnSparks(p.worldPos, 14, boss.config.accentHex, 16);
+            this.projectileVisuals.spawnMuzzleFlash(
+              p.worldPos,
+              new THREE.Vector3(0, 0, 1),
+              boss.config.accentHex,
+              1.35
+            );
+          }
+        }
+      }
+
+      boss.rig.update({
+        dt: dt * enemySlowFactor,
+        elapsed: this.globalElapsed,
+        playerPos: this.playerPos,
+        worldPos: boss.pos,
+        disabledParts: boss.disabledParts,
+        introFold,
+        introPulse,
+      });
+
+      boss.instance.root.updateMatrixWorld(true);
+      for (const p of boss.parts) {
+        if (!p.destroyed && p.node) {
+          p.node.getWorldPosition(p.worldPos);
+        }
+      }
+
+      if (t >= boss.introDuration) {
+        this.finishBossIntroCinematic(boss, false);
+      }
+      return null;
+    }
+
     const bdt = dt * enemySlowFactor;
     boss.age += bdt;
     boss.flashTimer = Math.max(0, boss.flashTimer - dt);
     this.applyHitFlashVisuals(boss.instance, boss.flashTimer);
 
     // Boss hovering patrol in front of player
-    boss.pos.z = THREE.MathUtils.lerp(boss.pos.z, -38, Math.min(1, bdt * 1.4));
+    const patrolZ = boss.config.act === 4 ? -40 : -38;
+    boss.pos.z = THREE.MathUtils.lerp(boss.pos.z, patrolZ, Math.min(1, bdt * 1.4));
     boss.pos.x = Math.sin(boss.age * 0.72) * 8.5;
     boss.pos.y = 1.6 + Math.cos(boss.age * 1.05) * 1.8;
+
+    if (boss.config.act === 1) {
+      // Sleek aerial banking roll for Skyward Valkyrie in open stratosphere combat
+      boss.instance.root.rotation.set(
+        Math.sin(boss.age * 1.05) * 0.08,
+        Math.cos(boss.age * 0.72) * 0.08,
+        -Math.cos(boss.age * 0.72) * 0.24
+      );
+    } else {
+      boss.instance.root.rotation.set(0, 0, 0);
+    }
 
     boss.rig.update({
       dt: bdt,
@@ -3901,6 +4220,8 @@ export class Game {
       playerPos: this.playerPos,
       worldPos: boss.pos,
       disabledParts: boss.disabledParts,
+      introFold: 0,
+      introPulse: 0,
     });
 
     // Sync world coordinates of intact destructible parts
@@ -3919,9 +4240,9 @@ export class Game {
 
     boss.escortTimer -= bdt;
     if (boss.escortTimer <= 0 && boss.pos.z > -65) {
-      boss.escortTimer = boss.config.act === 3 && !boss.disabledParts.has('bow_crane') ? 7.5 : 10.5;
+      boss.escortTimer = boss.config.act === 4 && !boss.disabledParts.has('bow_crane') ? 7.5 : 10.5;
       boss.rig.triggerCarrierLaunch();
-      const escortKind = boss.config.act === 1 ? 'enemy_drone' : 'enemy_foldwing';
+      const escortKind = boss.config.act <= 2 ? 'enemy_drone' : 'enemy_foldwing';
       this.waves.spawnEscortEnemy(escortKind, boss.pos);
     }
 
@@ -3932,19 +4253,27 @@ export class Game {
     boss.rig.triggerBossFire();
     const act = boss.config.act;
     const intactCount = boss.parts.filter((p) => !p.destroyed).length;
-    boss.fireTimer = Math.max(1.15, 2.1 - act * 0.2 + (boss.parts.length - intactCount) * 0.45);
+    boss.fireTimer = Math.max(1.15, 2.2 - act * 0.18 + (boss.parts.length - intactCount) * 0.45);
 
     const originMain = boss.pos.clone().add(new THREE.Vector3(0, 0.5, 2));
     const toPlayer = this.safeDirectionToPlayer(originMain);
     this.projectileVisuals.spawnMuzzleFlash(originMain, toPlayer, boss.config.accentHex, 1.45);
-    this.spawnEnemyBullet(originMain, toPlayer.multiplyScalar(34), 16, boss.config.accentHex);
+    this.spawnEnemyBullet(originMain, toPlayer.multiplyScalar(act === 1 ? 32 : 34), act === 1 ? 14 : 16, boss.config.accentHex);
 
     // Part-driven attacks
     for (const part of boss.parts) {
       if (part.destroyed) continue;
       const pOrigin = part.worldPos.clone();
       const dir = this.safeDirectionToPlayer(pOrigin);
-      if (part.weaponEffectKey === 'leftCannon' || part.weaponEffectKey === 'rightCannon') {
+      if (part.weaponEffectKey === 'leftWingPod' || part.weaponEffectKey === 'rightWingPod') {
+        this.projectileVisuals.spawnMuzzleFlash(pOrigin, dir, 0x38e8ff, 1.2);
+        for (const a of [-0.09, 0.09]) {
+          const d = dir.clone();
+          d.x += a;
+          d.normalize();
+          this.spawnEnemyBullet(pOrigin, d.multiplyScalar(35), 12, 0x38e8ff);
+        }
+      } else if (part.weaponEffectKey === 'leftCannon' || part.weaponEffectKey === 'rightCannon') {
         this.projectileVisuals.spawnMuzzleFlash(pOrigin, dir, 0xff9f43, 1.25);
         this.spawnEnemyBullet(pOrigin, dir.multiplyScalar(38), 15, 0xff9f43);
       } else if (part.weaponEffectKey === 'leftClaw' || part.weaponEffectKey === 'rightClaw') {
@@ -4280,7 +4609,12 @@ export class Game {
       }
     }
 
-    if (jumps < this.upgrades.chainJumps && this.waves.activeBoss && !this.waves.activeBoss.dying) {
+    if (
+      jumps < this.upgrades.chainJumps &&
+      this.waves.activeBoss &&
+      !this.waves.activeBoss.dying &&
+      !this.waves.activeBoss.entering
+    ) {
       if (this.waves.activeBoss.pos.distanceTo(origin) <= 28) {
         points.push(this.waves.activeBoss.pos.clone());
         this.damageBoss(this.waves.activeBoss, arcDamage, this.waves.activeBoss.pos, false, true);
@@ -4305,7 +4639,7 @@ export class Game {
     }
 
     const boss = this.waves.activeBoss;
-    if (boss && !boss.dying) {
+    if (boss && !boss.dying && !boss.entering) {
       for (const p of boss.parts) {
         if (p.destroyed) continue;
         const d2 = from.distanceToSquared(p.worldPos);
@@ -4577,15 +4911,66 @@ export class Game {
     const sx = (Math.random() - 0.5) * this.screenShake * 1.25;
     const sy = (Math.random() - 0.5) * this.screenShake * 1.25;
 
-    this.camera.position.lerp(
-      this.tmpCamTarget.set(this.playerPos.x * 0.45 + sx, this.playerPos.y * 0.42 + 2.45 + sy, 14.2),
-      Math.min(1, rawDt * 8)
-    );
-    this.camera.lookAt(this.playerPos.x * 0.75, this.playerPos.y * 0.65, -28);
+    const normalRoll = THREE.MathUtils.clamp(-this.playerVel.x * 0.0042, -0.064, 0.064);
+    const normalFov = this.boostFovTimer > 0 || this.ultimateActiveTimer > 0 ? 74 : 62;
+    this.tmpCamTarget.set(this.playerPos.x * 0.52 + sx, this.playerPos.y * 0.48 + 2.35 + sy, 14.0);
+    this.tmpCamLookAt.set(this.playerPos.x * 0.92, this.playerPos.y * 0.78, -32);
 
-    const targetFov = this.boostFovTimer > 0 || this.ultimateActiveTimer > 0 ? 70 : 58;
+    let targetRoll = normalRoll;
+    let targetFov = normalFov;
+    let camLerpRate = 8.0;
+
+    const introBoss = this.waves.activeBoss;
+    if (introBoss && introBoss.entering && !introBoss.dying) {
+      const t = introBoss.introElapsed;
+      let heroWeight = 0;
+      if (t < 0.56) {
+        const p = THREE.MathUtils.clamp((t - 0.06) / 0.5, 0, 1);
+        heroWeight = p * p * (3 - 2 * p);
+      } else if (t < 1.95) {
+        heroWeight = 1.0;
+      } else {
+        const p = THREE.MathUtils.clamp(
+          (t - 1.95) / Math.max(0.05, introBoss.introDuration - 1.95),
+          0,
+          1
+        );
+        const ease = p * p * (3 - 2 * p);
+        heroWeight = 1.0 - ease;
+      }
+
+      const arcT = THREE.MathUtils.clamp((t - 0.22) / 1.75, 0, 1);
+      const isFlagship = introBoss.config.act === 4;
+      const camDist = isFlagship ? 20.5 : introBoss.config.act === 1 ? 19.5 : 18.8;
+      const sideSpan = isFlagship ? 12.2 : 8.6;
+      const sideX = introBoss.introSweepSign * THREE.MathUtils.lerp(-sideSpan, sideSpan, arcT);
+      this.tmpHeroCamPos.set(
+        introBoss.pos.x + sideX + sx * 0.4,
+        introBoss.pos.y - (isFlagship ? 1.85 : 2.35) + arcT * 1.35 + sy * 0.4,
+        introBoss.pos.z + camDist
+      );
+      this.tmpHeroLookAt.set(introBoss.pos.x, introBoss.pos.y + 0.35, introBoss.pos.z);
+
+      this.tmpCamTarget.lerp(this.tmpHeroCamPos, heroWeight);
+      this.tmpCamLookAt.lerp(this.tmpHeroLookAt, heroWeight);
+      targetFov = THREE.MathUtils.lerp(normalFov, 44, heroWeight);
+      targetRoll = THREE.MathUtils.lerp(
+        normalRoll,
+        introBoss.introSweepSign * 0.048 * Math.sin(arcT * Math.PI),
+        heroWeight
+      );
+      camLerpRate = 11.5;
+    }
+
+    this.cameraRoll = THREE.MathUtils.lerp(this.cameraRoll, targetRoll, Math.min(1, rawDt * 6.5));
+    this.camera.up.set(-Math.sin(this.cameraRoll), Math.cos(this.cameraRoll), 0);
+
+    this.camera.position.lerp(this.tmpCamTarget, Math.min(1, rawDt * camLerpRate));
+    this.camera.lookAt(this.tmpCamLookAt);
+    this.camera.updateMatrixWorld();
+
     if (Math.abs(this.camera.fov - targetFov) > 0.05) {
-      this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, rawDt * 6);
+      this.camera.fov = THREE.MathUtils.lerp(this.camera.fov, targetFov, Math.min(1, rawDt * 7.5));
       this.camera.updateProjectionMatrix();
     }
 
@@ -4747,6 +5132,12 @@ export class Game {
               act: boss.config.act,
               hp: Math.max(0, Math.round(boss.hp)),
               maxHp: boss.maxHp,
+              entering: boss.entering,
+              introProgress: +(
+                boss.entering
+                  ? THREE.MathUtils.clamp(boss.introElapsed / Math.max(0.01, boss.introDuration), 0, 1)
+                  : 1
+              ).toFixed(3),
               dying: boss.dying,
               deathTimer: +boss.deathTimer.toFixed(3),
               parts: boss.parts.map(
@@ -4786,6 +5177,9 @@ export class Game {
           ultActiveTimer: +this.ultimateActiveTimer.toFixed(3),
           countdownActive: !this.launchCountdownCombatUnlocked,
           countdownRemaining: +Math.max(0, this.launchCountdownRemaining).toFixed(2),
+          bossIntroActive: this.isBossIntroActive(),
+          cameraFov: +this.camera.fov.toFixed(2),
+          timeScale: +this.currentTimeScale.toFixed(3),
           playerDying: this.playerDying,
           activeGateCount: this.waves.getActiveGateCount(),
           pickupCount: this.pickups.length,
@@ -4856,7 +5250,7 @@ export class Game {
         }
       },
 
-      spawnBossNow: (act: 1 | 2 | 3): void => {
+      spawnBossNow: (act: 1 | 2 | 3 | 4, opts?: { playIntro?: boolean }): void => {
         if (this.state === 'boot') {
           this.openHangarFromBoot(true);
         }
@@ -4867,6 +5261,7 @@ export class Game {
           this.clearInputState();
           this.setScreenState('playing');
         }
+        this.clearBossIntroOverlayImmediate();
         this.playerDying = false;
         this.playerDeathTimer = 0;
         this.playerDeathSecondaryBurstDone = false;
@@ -4878,21 +5273,28 @@ export class Game {
         this.enemyBullets.length = 0;
         this.projectileVisuals.syncEnemyProjectiles(this.enemyBullets, 0, this.globalElapsed);
         const ev = this.waves.forceSpawnBoss(act);
-        this.handleWaveEvent(ev);
+        const boss = this.waves.activeBoss;
+        const playIntro = Boolean(opts?.playIntro);
+        if (boss && !playIntro) {
+          boss.entering = false;
+          boss.introElapsed = boss.introDuration;
+          boss.pos.copy(boss.introHoverPos);
+        }
         this.waves.setCombatActive(true);
         this.envSystem.setMode('combat');
         this.envSystem.setAct(act, true);
+        this.handleWaveEvent(ev);
         this.waves.updateEnvironment(0, 1.0);
-        this.envSystem.update(0, this.globalElapsed, 36, this.camera);
-        const boss = this.waves.activeBoss;
+        this.envSystem.update(0, this.globalElapsed, 36, this.camera, playIntro ? 0.25 : 1.0);
         if (boss) {
-          boss.pos.set(0, 1.6, -38);
           boss.rig.update({
             dt: 0,
             elapsed: this.globalElapsed,
             playerPos: this.playerPos,
             worldPos: boss.pos,
             disabledParts: boss.disabledParts,
+            introFold: playIntro && act === 1 ? 1.0 : 0,
+            introPulse: 0,
           });
           boss.instance.root.updateMatrixWorld(true);
           for (const p of boss.parts) {
@@ -4900,7 +5302,16 @@ export class Game {
               p.node.getWorldPosition(p.worldPos);
             }
           }
-          this.updateBossHud();
+          if (!playIntro) {
+            this.updateBossHud();
+          }
+        }
+      },
+
+      skipBossIntro: (): void => {
+        const boss = this.waves.activeBoss;
+        if (boss && boss.entering) {
+          this.finishBossIntroCinematic(boss, true);
         }
       },
 

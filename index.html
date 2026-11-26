@@ -463,10 +463,10 @@
           <span class="ui-spotlight" aria-hidden="true"></span>
           <span class="mode-dock-top">
             <span class="mode-dock-code">ARCADE</span>
-            <span id="hangar-mode-arcade-badge" class="mode-dock-badge">3 幕战役</span>
+            <span id="hangar-mode-arcade-badge" class="mode-dock-badge">4 幕战役</span>
           </span>
           <span class="mode-dock-title">街机战役</span>
-          <span class="mode-dock-desc">三幕首领推进 · 芯片构筑通关</span>
+          <span class="mode-dock-desc">四幕首领推进 · 芯片构筑通关</span>
         </button>
 
         <button
@@ -634,7 +634,7 @@
 
       <!-- Center-Screen Cinematic Wave Progress Callout -->
       <div id="wave-callout" class="wave-callout" aria-live="polite" aria-hidden="true">
-        <div id="wave-callout-sector" class="wave-callout-sector">ACT 1 · 轨道城峡谷</div>
+        <div id="wave-callout-sector" class="wave-callout-sector">ACT I · 平流层云海空域</div>
         <div class="wave-callout-title-row">
           <img
             src="./ui/frames/hud_banner_wing.webp"
@@ -681,6 +681,36 @@
           <span class="wave-step-node is-upcoming" data-wave-step="3">首领波</span>
         </div>
         <div id="wave-callout-sub" class="wave-callout-sub">先遣敌机编队突入航道</div>
+      </div>
+
+      <!-- 3-Beat Cinema Boss Slow-Mo Entrance Overlay -->
+      <div id="boss-cinema-overlay" class="boss-cinema-overlay" aria-live="assertive" aria-hidden="true" hidden>
+        <div class="boss-letterbox boss-letterbox-top">
+          <div class="boss-letterbox-strip">
+            <span class="boss-alert-dot" aria-hidden="true"></span>
+            <span id="boss-cinema-alert-top">高危首领目标接敌 · 战术时间缓滞中</span>
+          </div>
+        </div>
+        <div class="boss-cinema-vignette" aria-hidden="true"></div>
+        <div id="boss-cinema-card" class="boss-cinema-card">
+          <span class="boss-cinema-accent-bar" aria-hidden="true"></span>
+          <div class="boss-cinema-meta">
+            <span id="boss-cinema-act" class="boss-cinema-act">ACT I · 关底首领拦截</span>
+            <span id="boss-cinema-threat" class="boss-cinema-threat">威胁 III 级 · 苍穹指挥舰</span>
+          </div>
+          <div class="boss-cinema-titles">
+            <h2 id="boss-cinema-name" class="boss-cinema-name">云穹折翼指挥舰</h2>
+            <span id="boss-cinema-code" class="boss-cinema-code">SKYWARD VALKYRIE</span>
+          </div>
+          <div id="boss-cinema-intel" class="boss-cinema-intel">
+            战术弱点：优先击毁左右折翼涡轮核，瓦解高速扇形电浆齐射
+          </div>
+        </div>
+        <div class="boss-letterbox boss-letterbox-bottom">
+          <div class="boss-letterbox-strip is-bottom">
+            <span class="boss-cinema-skip">按 [SPACE] 或点击跳过特写演出</span>
+          </div>
+        </div>
       </div>
 
       <!-- Top Left: Hull, Upgrades & Live Pickup Stack -->
@@ -1418,7 +1448,7 @@
               <article class="guide-card">
                 <img src="./ui/icons/icon_shield.png" class="guide-card-icon" alt="" width="256" height="256" />
                 <div class="guide-card-body">
-                  <div class="guide-card-title">第二/三幕星际闸门警示</div>
+                  <div class="guide-card-title">第三/四幕星际闸门警示</div>
                   <p>高空城市与行星环航段会出现合拢的装甲闸门：注意观察绿色/青色透光通行孔洞及时走位穿越，避免高速正面撞毁战机。</p>
                 </div>
               </article>

@@ -2,7 +2,7 @@ import * as THREE from 'three';
 
 export type EnvMode = 'boot' | 'hangar' | 'combat';
 
-type VistaKey = 'hangar' | 'act1' | 'act2' | 'act3';
+type VistaKey = 'hangar' | 'act1' | 'act2' | 'act3' | 'act4';
 
 interface SkyPalette {
   zenith: THREE.Color;
@@ -55,13 +55,14 @@ interface CorridorStreakState {
   z: number;
   speedMult: number;
   length: number;
+  thickness?: number;
   vy?: number;
   bobPhase?: number;
 }
 
 interface ActVideoSlot {
-  act: 1 | 2 | 3;
-  vistaKey: 'act1' | 'act2' | 'act3';
+  act: 1 | 2 | 3 | 4;
+  vistaKey: 'act1' | 'act2' | 'act3' | 'act4';
   video: HTMLVideoElement;
   tex: THREE.VideoTexture | null;
   ready: boolean;
@@ -98,17 +99,28 @@ const SKY_PALETTES: Record<VistaKey, SkyPalette> = {
     auroraIntensity: 0.55,
   },
   act1: {
-    zenith: new THREE.Color(0x091f46),
-    mid: new THREE.Color(0x16447c),
-    horizon: new THREE.Color(0xdda15c),
-    nadir: new THREE.Color(0x0e2849),
-    auroraA: new THREE.Color(0x4ae6ff),
-    auroraB: new THREE.Color(0xffbe66),
-    sunColor: new THREE.Color(0xffe4b2),
-    starIntensity: 0.58,
-    auroraIntensity: 0.35,
+    zenith: new THREE.Color(0x040d26),
+    mid: new THREE.Color(0x0a214c),
+    horizon: new THREE.Color(0x996038),
+    nadir: new THREE.Color(0x07152e),
+    auroraA: new THREE.Color(0x38c8f0),
+    auroraB: new THREE.Color(0xd9924c),
+    sunColor: new THREE.Color(0xffcfa0),
+    starIntensity: 0.72,
+    auroraIntensity: 0.25,
   },
   act2: {
+    zenith: new THREE.Color(0x0b254f),
+    mid: new THREE.Color(0x164a7e),
+    horizon: new THREE.Color(0x5ab8d8),
+    nadir: new THREE.Color(0x112a4a),
+    auroraA: new THREE.Color(0x3ad8ff),
+    auroraB: new THREE.Color(0xffc06a),
+    sunColor: new THREE.Color(0xffd796),
+    starIntensity: 0.65,
+    auroraIntensity: 0.35,
+  },
+  act3: {
     zenith: new THREE.Color(0x0b0a2b),
     mid: new THREE.Color(0x1b1954),
     horizon: new THREE.Color(0x1da89b),
@@ -119,7 +131,7 @@ const SKY_PALETTES: Record<VistaKey, SkyPalette> = {
     starIntensity: 0.9,
     auroraIntensity: 0.45,
   },
-  act3: {
+  act4: {
     zenith: new THREE.Color(0x24090f),
     mid: new THREE.Color(0x561517),
     horizon: new THREE.Color(0xd96b28),
@@ -162,10 +174,20 @@ const SCENE_LIGHT_PRESETS: Record<
     rimColor: new THREE.Color(0x22e8ff),
     rimIntensity: 1.75,
     fillColor: new THREE.Color(0xffa63b),
-    fillIntensity: 0.65,
+    fillIntensity: 0.72,
     envIntensity: 1.35,
   },
   act2: {
+    hemiSky: new THREE.Color(0x9ee6ff),
+    hemiGround: new THREE.Color(0x0e1428),
+    hemiIntensity: 0.78,
+    rimColor: new THREE.Color(0x22e8ff),
+    rimIntensity: 1.75,
+    fillColor: new THREE.Color(0xffa63b),
+    fillIntensity: 0.65,
+    envIntensity: 1.35,
+  },
+  act3: {
     hemiSky: new THREE.Color(0x76e8d8),
     hemiGround: new THREE.Color(0x160c2a),
     hemiIntensity: 0.72,
@@ -175,7 +197,7 @@ const SCENE_LIGHT_PRESETS: Record<
     fillIntensity: 0.72,
     envIntensity: 1.15,
   },
-  act3: {
+  act4: {
     hemiSky: new THREE.Color(0x8a5248),
     hemiGround: new THREE.Color(0x1a080a),
     hemiIntensity: 0.56,
@@ -187,15 +209,22 @@ const SCENE_LIGHT_PRESETS: Record<
   },
 };
 
-const DUST_COUNT = 240;
-const ACT2_DEBRIS_COUNT = 24;
-const ACT2_WARP_RING_COUNT = 5;
-const ACT2_STREAK_COUNT = 64;
-const ACT1_ARCH_COUNT = 5;
-const ACT1_PYLON_COUNT = 28;
-const ACT1_TRAFFIC_COUNT = 64;
-const ACT3_ARCH_COUNT = 5;
-const ACT3_EMBER_COUNT = 72;
+const DUST_COUNT = 340;
+const DUST_ACT_COLORS = [
+  new THREE.Color(0x94ecff),
+  new THREE.Color(0x6de8ff),
+  new THREE.Color(0xb8fff0),
+  new THREE.Color(0xffb56b),
+] as const;
+const ACT1_SLIPSTREAM_COUNT = 48;
+const ACT2_METRO_PYLON_COUNT = 28;
+const ACT2_METRO_ARCH_COUNT = 5;
+const ACT2_METRO_TRAFFIC_COUNT = 64;
+const ACT3_DEBRIS_COUNT = 24;
+const ACT3_WARP_RING_COUNT = 5;
+const ACT3_STREAK_COUNT = 64;
+const ACT4_ARCH_COUNT = 5;
+const ACT4_EMBER_COUNT = 72;
 
 const SKY_VERT = `
   varying vec3 vWorldDir;
@@ -331,6 +360,8 @@ const CYCLORAMA_VERT = `
 const CYCLORAMA_FRAG = `
   uniform sampler2D uTexA;
   uniform sampler2D uTexB;
+  uniform float uTexAIsVideo;
+  uniform float uTexBIsVideo;
   uniform float uTexMix;
   uniform float uBrightness;
   uniform float uEdgeFeather;
@@ -339,16 +370,26 @@ const CYCLORAMA_FRAG = `
   uniform float uOpacity;
   varying vec2 vUv;
 
+  vec3 decodeVideoSrgb(vec3 c) {
+    vec3 low = c * 0.0773993808;
+    vec3 high = pow(max(vec3(1e-5), c * 0.9478672986 + vec3(0.0521327014)), vec3(2.4));
+    return mix(high, low, step(c, vec3(0.04045)));
+  }
+
   void main() {
-    // Flip horizontal UV because BackSide cylinder faces inward toward -Z
+    // Flip horizontal UV because BackSide sphere faces inward toward -Z
     vec2 texUv = vec2(1.0 - vUv.x, vUv.y);
     vec3 colA = texture2D(uTexA, texUv).rgb;
+    if (uTexAIsVideo > 0.5) colA = decodeVideoSrgb(colA);
     vec3 colB = texture2D(uTexB, texUv).rgb;
+    if (uTexBIsVideo > 0.5) colB = decodeVideoSrgb(colB);
     vec3 vista = mix(colA, colB, uTexMix) * uBrightness;
 
-    float hMask = smoothstep(0.0, uEdgeFeather, vUv.x) * smoothstep(1.0, 1.0 - uEdgeFeather, vUv.x);
-    float vMask = smoothstep(0.0, uVertFeatherBottom, vUv.y) * smoothstep(1.0, 1.0 - uVertFeatherTop, vUv.y);
-    float alpha = clamp(hMask * vMask * uOpacity, 0.0, 1.0);
+    float hMask = smoothstep(0.0, uEdgeFeather, vUv.x) * (1.0 - smoothstep(1.0 - uEdgeFeather, 1.0, vUv.x));
+    float vMask = smoothstep(0.0, uVertFeatherBottom, vUv.y) * (1.0 - smoothstep(1.0 - uVertFeatherTop, 1.0, vUv.y));
+    float cornerDist = length((vUv - 0.5) * vec2(1.92, 1.98));
+    float cornerMask = 1.0 - smoothstep(0.86, 1.08, cornerDist);
+    float alpha = clamp(hMask * vMask * cornerMask * uOpacity, 0.0, 1.0);
     if (!(alpha >= 0.004)) discard;
     gl_FragColor = vec4(vista, alpha);
   }
@@ -392,6 +433,17 @@ const VOLUMETRIC_BEAM_FRAG = `
     float alpha = clamp(softEdge * verticalFade * uOpacity * shimmer, 0.0, 1.0);
     if (!(alpha >= 0.003)) discard;
     gl_FragColor = vec4(uColor * 1.25, alpha);
+  }
+`;
+
+const ACT1_MATTE_VERT = `
+  varying vec2 vUv;
+  varying vec3 vWorldPos;
+  void main() {
+    vUv = uv;
+    vec4 wp = modelMatrix * vec4(position, 1.0);
+    vWorldPos = wp.xyz;
+    gl_Position = projectionMatrix * viewMatrix * wp;
   }
 `;
 
@@ -444,8 +496,8 @@ const CLOUD_SEA_FRAG = `
   }
 
   void main() {
-    float distX = smoothstep(205.0, 95.0, abs(vWorldXZ.x));
-    float distZ = smoothstep(-275.0, -145.0, vWorldXZ.y) * smoothstep(42.0, 12.0, vWorldXZ.y);
+    float distX = 1.0 - smoothstep(95.0, 205.0, abs(vWorldXZ.x));
+    float distZ = smoothstep(-275.0, -145.0, vWorldXZ.y) * (1.0 - smoothstep(12.0, 42.0, vWorldXZ.y));
     float alpha = clamp(distX * distZ, 0.0, 1.0);
     if (!(alpha >= 0.01)) discard;
 
@@ -496,20 +548,19 @@ const TERRACE_DECK_FRAG = `
     float x = vWorldPos.x;
     float z = vWorldPos.z - uScrollZ;
 
-    // Sci-fi armored deck plating grid + micro sub-panel seams
     vec2 bayCoord = vec2(vLocalPos.x * 0.28, z * 0.14);
     vec2 bayCell = floor(bayCoord);
     vec2 bayF = fract(bayCoord);
     float plateTone = 0.86 + 0.26 * hash21(bayCell);
 
     float baySeam = min(
-      smoothstep(0.0, 0.045, bayF.x) * smoothstep(1.0, 0.955, bayF.x),
-      smoothstep(0.0, 0.045, bayF.y) * smoothstep(1.0, 0.955, bayF.y)
+      smoothstep(0.0, 0.045, bayF.x) * (1.0 - smoothstep(0.955, 1.0, bayF.x)),
+      smoothstep(0.0, 0.045, bayF.y) * (1.0 - smoothstep(0.955, 1.0, bayF.y))
     );
     vec2 subF = fract(bayCoord * 2.0);
     float subSeam = min(
-      smoothstep(0.0, 0.035, subF.x) * smoothstep(1.0, 0.965, subF.x),
-      smoothstep(0.0, 0.035, subF.y) * smoothstep(1.0, 0.965, subF.y)
+      smoothstep(0.0, 0.035, subF.x) * (1.0 - smoothstep(0.965, 1.0, subF.x)),
+      smoothstep(0.0, 0.035, subF.y) * (1.0 - smoothstep(0.965, 1.0, subF.y))
     );
 
     float isTop = step(0.5, n.y);
@@ -519,14 +570,12 @@ const TERRACE_DECK_FRAG = `
     metal *= mix(0.76, 1.0, baySeam) * mix(0.88, 1.0, subSeam);
     metal += vec3(0.02, 0.065, 0.11) * (1.0 - baySeam);
 
-    // Recessed structural maintenance channel along terrace spine
-    float conduit = smoothstep(0.95, 0.15, abs(abs(vLocalPos.x) - 5.8));
+    float conduit = 1.0 - smoothstep(0.15, 0.95, abs(abs(vLocalPos.x) - 5.8));
     float ribTick = step(0.42, fract(z * 0.25));
     metal = mix(metal, metal * 0.68 + vec3(0.015, 0.055, 0.095) * ribTick, conduit * 0.72 * isTop);
 
-    // Flowing cyan inner/outer edge rails & subtle amber data pulses
-    float innerBorder = smoothstep(0.52, 0.08, abs(abs(x) - 14.85));
-    float outerBorder = smoothstep(0.58, 0.10, abs(abs(x) - 36.15));
+    float innerBorder = 1.0 - smoothstep(0.08, 0.52, abs(abs(x) - 14.85));
+    float outerBorder = 1.0 - smoothstep(0.10, 0.58, abs(abs(x) - 36.15));
     float flowCyan = 0.52 + 0.48 * pow(max(1e-4, sin(z * 0.32 - uTime * 7.5)), 8.0);
     float flowAmber = pow(max(1e-4, sin(z * 0.22 + uTime * 5.2)), 12.0);
 
@@ -534,11 +583,10 @@ const TERRACE_DECK_FRAG = `
     vec3 amberLight = vec3(1.05, 0.66, 0.20);
     vec3 col = metal;
     col += cyanLight * (innerBorder * 0.72 + outerBorder * 0.58) * flowCyan * isTop;
-    col += amberLight * smoothstep(0.32, 0.05, abs(abs(vLocalPos.x) - 9.4)) * flowAmber * 0.78 * isTop;
+    col += amberLight * (1.0 - smoothstep(0.05, 0.32, abs(abs(vLocalPos.x) - 9.4))) * flowAmber * 0.78 * isTop;
 
-    // Vertical outer fascia trim
     float sideRibs = smoothstep(0.88, 0.98, abs(sin(z * 0.45)));
-    float sideSlit = smoothstep(0.28, 0.06, abs(vLocalPos.y - 0.18));
+    float sideSlit = 1.0 - smoothstep(0.06, 0.28, abs(vLocalPos.y - 0.18));
     vec3 fasciaCol = vec3(0.036, 0.065, 0.11) + vec3(0.03, 0.08, 0.14) * sideRibs + cyanLight * sideSlit * 0.58;
     col = mix(fasciaCol, col, isTop);
 
@@ -547,19 +595,7 @@ const TERRACE_DECK_FRAG = `
     col = mix(horizonHaze, col, farFade);
     float alpha = clamp(farFade, 0.0, 1.0);
     if (!(alpha >= 0.01)) discard;
-
     gl_FragColor = vec4(col, alpha);
-  }
-`;
-
-const ACT1_MATTE_VERT = `
-  varying vec2 vUv;
-  varying vec3 vWorldPos;
-  void main() {
-    vUv = uv;
-    vec4 wp = modelMatrix * vec4(position, 1.0);
-    vWorldPos = wp.xyz;
-    gl_Position = projectionMatrix * viewMatrix * wp;
   }
 `;
 
@@ -770,6 +806,7 @@ export class EnvironmentSystem {
   private readonly act1Group = new THREE.Group();
   private readonly act2Group = new THREE.Group();
   private readonly act3Group = new THREE.Group();
+  private readonly act4Group = new THREE.Group();
 
   private readonly skySphere: THREE.Mesh;
   private readonly skyMat: THREE.ShaderMaterial;
@@ -782,50 +819,56 @@ export class EnvironmentSystem {
   private readonly volumetricBeams: THREE.ShaderMaterial[] = [];
   private readonly searchlights: SearchlightState[] = [];
 
+  private act1SlipstreamInst!: THREE.InstancedMesh;
+  private readonly act1Slipstreams: CorridorStreakState[] = [];
+  private transparentFallbackTex!: THREE.DataTexture;
+
+  // Act 2: Restored Orbital Metropolis Corridor
   private cloudSeaMat!: THREE.ShaderMaterial;
   private highwayDeckMat!: THREE.MeshStandardMaterial;
   private readonly highwayPbrTextures: THREE.Texture[] = [];
   private terraceDeckMat!: THREE.ShaderMaterial;
   private pylonInst!: THREE.InstancedMesh;
   private readonly pylonZ: number[] = [];
-  private act1ArchMat!: THREE.ShaderMaterial;
-  private act1HoloPylonMat!: THREE.ShaderMaterial;
-  private act1TowerMatA!: THREE.ShaderMaterial;
-  private act1TowerMatB!: THREE.ShaderMaterial;
-  private act1FarTowerMatA!: THREE.ShaderMaterial;
-  private act1FarTowerMatB!: THREE.ShaderMaterial;
-  private readonly act1ScrollingProps: ScrollingMatteProp[] = [];
-  private act1TrafficInst!: THREE.InstancedMesh;
-  private readonly act1Traffic: CorridorStreakState[] = [];
-  private transparentFallbackTex!: THREE.DataTexture;
+  private metroArchMat!: THREE.ShaderMaterial;
+  private metroHoloPylonMat!: THREE.ShaderMaterial;
+  private metroTowerMatA!: THREE.ShaderMaterial;
+  private metroTowerMatB!: THREE.ShaderMaterial;
+  private metroFarTowerMatA!: THREE.ShaderMaterial;
+  private metroFarTowerMatB!: THREE.ShaderMaterial;
+  private readonly metroScrollingProps: ScrollingMatteProp[] = [];
+  private metroTrafficInst!: THREE.InstancedMesh;
+  private readonly metroTraffic: CorridorStreakState[] = [];
 
+  // Act 3: Fractured Warp Gateway
   private megalithMat!: THREE.ShaderMaterial;
   private megalithInst!: THREE.InstancedMesh;
   private crystalShardInst!: THREE.InstancedMesh;
   private plasmaRiverMat!: THREE.ShaderMaterial;
   private readonly megaliths: MegalithState[] = [];
-  private act2WarpRingMat!: THREE.ShaderMaterial;
-  private act2CrystalNearAMat!: THREE.ShaderMaterial;
-  private act2CrystalNearBMat!: THREE.ShaderMaterial;
-  private act2DerelictMidMat!: THREE.ShaderMaterial;
-  private act2DerelictFarMat!: THREE.ShaderMaterial;
-  private act2CrystalFarMat!: THREE.ShaderMaterial;
-  private readonly act2ScrollingProps: ScrollingMatteProp[] = [];
-  private act2StreakInst!: THREE.InstancedMesh;
-  private readonly act2Streaks: CorridorStreakState[] = [];
-
-  private act3HullMat!: THREE.MeshStandardMaterial;
-  private act3SideDeckMat!: THREE.MeshStandardMaterial;
-  private readonly act3HullPbrTextures: THREE.Texture[] = [];
-  private act3KeelArchMat!: THREE.ShaderMaterial;
-  private act3FlakPylonMat!: THREE.ShaderMaterial;
-  private act3BastionMatA!: THREE.ShaderMaterial;
-  private act3BastionMatB!: THREE.ShaderMaterial;
-  private act3FarBastionMatA!: THREE.ShaderMaterial;
-  private act3FarBastionMatB!: THREE.ShaderMaterial;
+  private act3WarpRingMat!: THREE.ShaderMaterial;
+  private act3CrystalNearAMat!: THREE.ShaderMaterial;
+  private act3CrystalNearBMat!: THREE.ShaderMaterial;
+  private act3DerelictMidMat!: THREE.ShaderMaterial;
+  private act3DerelictFarMat!: THREE.ShaderMaterial;
+  private act3CrystalFarMat!: THREE.ShaderMaterial;
   private readonly act3ScrollingProps: ScrollingMatteProp[] = [];
-  private act3EmberInst!: THREE.InstancedMesh;
-  private readonly act3Embers: CorridorStreakState[] = [];
+  private act3StreakInst!: THREE.InstancedMesh;
+  private readonly act3Streaks: CorridorStreakState[] = [];
+
+  // Act 4: Crimson Dreadnought Citadel
+  private act4HullMat!: THREE.MeshStandardMaterial;
+  private act4SideDeckMat!: THREE.MeshStandardMaterial;
+  private readonly act4HullPbrTextures: THREE.Texture[] = [];
+  private act4KeelArchMat!: THREE.ShaderMaterial;
+  private act4FlakPylonMat!: THREE.ShaderMaterial;
+  private act4BastionMatA!: THREE.ShaderMaterial;
+  private act4BastionMatB!: THREE.ShaderMaterial;
+  private act4FarBastionMatA!: THREE.ShaderMaterial;
+  private act4FarBastionMatB!: THREE.ShaderMaterial;
+  private readonly act4ScrollingProps: ScrollingMatteProp[] = [];
+  private act4EmberInst!: THREE.InstancedMesh;
+  private readonly act4Embers: CorridorStreakState[] = [];
 
   private hangarVistaMesh!: THREE.Mesh;
   private hangarVistaMat!: THREE.MeshBasicMaterial;
@@ -840,7 +883,7 @@ export class EnvironmentSystem {
   private hangarVideoReady = false;
   private hangarVideoUnlockHandler: (() => void) | null = null;
 
-  private readonly actVideos = new Map<1 | 2 | 3, ActVideoSlot>();
+  private readonly actVideos = new Map<1 | 2 | 3 | 4, ActVideoSlot>();
 
   private readonly dustParticles: DustParticle[] = [];
   private readonly dummy = new THREE.Object3D();
@@ -858,7 +901,7 @@ export class EnvironmentSystem {
   private currentVistaKey: VistaKey = 'hangar';
   private targetVistaKey: VistaKey = 'hangar';
   private vistaBlend = 1.0;
-  private cycloramaYOffset = -16;
+  private cycloramaPitch = -0.02;
 
   private currentZenith = new THREE.Color().copy(SKY_PALETTES.hangar.zenith);
   private currentMid = new THREE.Color().copy(SKY_PALETTES.hangar.mid);
@@ -890,15 +933,17 @@ export class EnvironmentSystem {
 
     this.envRoot.name = 'EnvironmentSystemRoot';
     this.hangarGroup.name = 'EnvHangarBay';
-    this.act1Group.name = 'EnvAct1Metropolis';
-    this.act2Group.name = 'EnvAct2Nebula';
-    this.act3Group.name = 'EnvAct3Citadel';
+    this.act1Group.name = 'EnvAct1Stratosphere';
+    this.act2Group.name = 'EnvAct2Metropolis';
+    this.act3Group.name = 'EnvAct3Nebula';
+    this.act4Group.name = 'EnvAct4Citadel';
 
     this.fallbackTextures = {
       hangar: createFallbackTexture(0x28679e),
-      act1: createFallbackTexture(0x3a7ca5),
-      act2: createFallbackTexture(0x2d488f),
-      act3: createFallbackTexture(0x8c2f24),
+      act1: createFallbackTexture(0x1e4e7a),
+      act2: createFallbackTexture(0x3a7ca5),
+      act3: createFallbackTexture(0x2d488f),
+      act4: createFallbackTexture(0x8c2f24),
     };
     const alphaData = new Uint8Array([0, 0, 0, 0]);
     this.transparentFallbackTex = new THREE.DataTexture(alphaData, 1, 1, THREE.RGBAFormat);
@@ -907,6 +952,7 @@ export class EnvironmentSystem {
     this.activeTextures.set('act1', this.fallbackTextures.act1);
     this.activeTextures.set('act2', this.fallbackTextures.act2);
     this.activeTextures.set('act3', this.fallbackTextures.act3);
+    this.activeTextures.set('act4', this.fallbackTextures.act4);
 
     this.ambientFillLight = new THREE.HemisphereLight(0x8be9ff, 0x1b2e4d, 0.55);
     this.envRoot.add(this.ambientFillLight);
@@ -940,19 +986,23 @@ export class EnvironmentSystem {
     this.envRoot.add(this.skySphere);
     this.warmupTargets.push(this.skySphere);
 
-    // 2. Forward Curved 2K Vista Cyclorama (~155 deg horizontal FOV toward -Z)
-    const thetaLength = THREE.MathUtils.degToRad(155);
-    const thetaStart = Math.PI - thetaLength * 0.5;
-    const cycloramaGeo = new THREE.CylinderGeometry(270, 270, 250, 48, 1, true, thetaStart, thetaLength);
+    // 2. Forward Concentric Spherical Cinema Panorama Dome (~150 deg azimuth x 90 deg elevation)
+    const phiLength = THREE.MathUtils.degToRad(150);
+    const phiStart = Math.PI * 1.5 - phiLength * 0.5;
+    const thetaLength = THREE.MathUtils.degToRad(90);
+    const thetaStart = THREE.MathUtils.degToRad(45);
+    const cycloramaGeo = new THREE.SphereGeometry(285, 48, 32, phiStart, phiLength, thetaStart, thetaLength);
     this.cycloramaMat = new THREE.ShaderMaterial({
       uniforms: {
         uTexA: { value: this.fallbackTextures.hangar },
         uTexB: { value: this.fallbackTextures.hangar },
+        uTexAIsVideo: { value: 0.0 },
+        uTexBIsVideo: { value: 0.0 },
         uTexMix: { value: 1.0 },
-        uBrightness: { value: 0.88 },
-        uEdgeFeather: { value: 0.14 },
-        uVertFeatherTop: { value: 0.12 },
-        uVertFeatherBottom: { value: 0.16 },
+        uBrightness: { value: 1.05 },
+        uEdgeFeather: { value: 0.08 },
+        uVertFeatherTop: { value: 0.08 },
+        uVertFeatherBottom: { value: 0.08 },
         uOpacity: { value: 1.0 },
       },
       vertexShader: CYCLORAMA_VERT,
@@ -969,13 +1019,14 @@ export class EnvironmentSystem {
     this.envRoot.add(this.cyclorama);
     this.warmupTargets.push(this.cyclorama);
 
-    // 3. Build 3D Hangar Bay & 3 Combat Biomes
+    // 3. Build 3D Hangar Bay & 4 Combat Biomes
     this.buildHangarBay();
-    this.buildAct1Metropolis();
-    this.buildAct2Nebula();
-    this.buildAct3Citadel();
+    this.buildAct1Stratosphere();
+    this.buildAct2Metropolis();
+    this.buildAct3Nebula();
+    this.buildAct4Citadel();
 
-    // 4. Velocity-Stretched Space Dust Streaks (240 soft Gaussian streaks)
+    // 4. Velocity-Stretched Space Dust Streaks (340 soft Gaussian streaks)
     const dustGeo = this.createCrossedStreakGeometry();
     this.dustMat = new THREE.ShaderMaterial({
       uniforms: {
@@ -995,7 +1046,13 @@ export class EnvironmentSystem {
     this.envRoot.add(this.dustInst);
     this.warmupTargets.push(this.dustInst);
 
-    this.envRoot.add(this.hangarGroup, this.act1Group, this.act2Group, this.act3Group);
+    this.envRoot.add(
+      this.hangarGroup,
+      this.act1Group,
+      this.act2Group,
+      this.act3Group,
+      this.act4Group
+    );
     this.scene.add(this.envRoot);
 
     this.syncVisibility();
@@ -1121,7 +1178,7 @@ export class EnvironmentSystem {
     }
 
     // Bind loaded 2K panoramic vista textures
-    const keys: VistaKey[] = ['hangar', 'act1', 'act2', 'act3'];
+    const keys: VistaKey[] = ['hangar', 'act1', 'act2', 'act3', 'act4'];
     for (const k of keys) {
       const tex = loadedTextures?.get(k);
       if (tex) {
@@ -1168,10 +1225,10 @@ export class EnvironmentSystem {
     }
     if (sideDeckNormal) {
       this.hangarSideDeckMat.normalMap = sideDeckNormal;
-      this.act3SideDeckMat.normalMap = sideDeckNormal;
+      this.act4SideDeckMat.normalMap = sideDeckNormal;
     }
     this.hangarSideDeckMat.needsUpdate = true;
-    this.act3SideDeckMat.needsUpdate = true;
+    this.act4SideDeckMat.needsUpdate = true;
 
     const ceilingTex = loadedTextures?.get('hangar_ceiling');
     if (ceilingTex) {
@@ -1184,12 +1241,12 @@ export class EnvironmentSystem {
       this.hangarBulkheadMat.needsUpdate = true;
     }
 
-    // Bind Act 1 2K Seamless PBR Orbital Highway & Codex transparent architectural matte layers
+    // Bind Act 2 Orbital Metropolis 2K PBR Highway & Codex transparent architectural matte layers
     this.highwayPbrTextures.length = 0;
-    const hwAlbedo = loadedTextures?.get('act1_highway_albedo');
-    const hwNormal = loadedTextures?.get('act1_highway_normal');
-    const hwRough = loadedTextures?.get('act1_highway_roughness');
-    const hwEmissive = loadedTextures?.get('act1_highway_emissive');
+    const hwAlbedo = loadedTextures?.get('act2_highway_albedo');
+    const hwNormal = loadedTextures?.get('act2_highway_normal');
+    const hwRough = loadedTextures?.get('act2_highway_roughness');
+    const hwEmissive = loadedTextures?.get('act2_highway_emissive');
     for (const hwt of [hwAlbedo, hwNormal, hwRough, hwEmissive]) {
       if (hwt) {
         hwt.wrapS = THREE.RepeatWrapping;
@@ -1205,79 +1262,79 @@ export class EnvironmentSystem {
     if (hwEmissive) this.highwayDeckMat.emissiveMap = hwEmissive;
     this.highwayDeckMat.needsUpdate = true;
 
-    const archTex = loadedTextures?.get('act1_sky_arch');
-    if (archTex) this.act1ArchMat.uniforms.uMap.value = archTex;
-    const holoTex = loadedTextures?.get('act1_holo_pylon');
-    if (holoTex) this.act1HoloPylonMat.uniforms.uMap.value = holoTex;
-    const towerATex = loadedTextures?.get('act1_tower_a');
+    const archTex = loadedTextures?.get('act2_sky_arch');
+    if (archTex) this.metroArchMat.uniforms.uMap.value = archTex;
+    const holoTex = loadedTextures?.get('act2_holo_pylon');
+    if (holoTex) this.metroHoloPylonMat.uniforms.uMap.value = holoTex;
+    const towerATex = loadedTextures?.get('act2_tower_a');
     if (towerATex) {
-      this.act1TowerMatA.uniforms.uMap.value = towerATex;
-      this.act1FarTowerMatA.uniforms.uMap.value = towerATex;
+      this.metroTowerMatA.uniforms.uMap.value = towerATex;
+      this.metroFarTowerMatA.uniforms.uMap.value = towerATex;
     }
-    const towerBTex = loadedTextures?.get('act1_tower_b');
+    const towerBTex = loadedTextures?.get('act2_tower_b');
     if (towerBTex) {
-      this.act1TowerMatB.uniforms.uMap.value = towerBTex;
-      this.act1FarTowerMatB.uniforms.uMap.value = towerBTex;
+      this.metroTowerMatB.uniforms.uMap.value = towerBTex;
+      this.metroFarTowerMatB.uniforms.uMap.value = towerBTex;
     }
 
-    // Bind Act 2 Fractured Warp Gateway transparent layers
-    const warpRingTex = loadedTextures?.get('act2_warp_ring');
-    if (warpRingTex) this.act2WarpRingMat.uniforms.uMap.value = warpRingTex;
-    const crystalATex = loadedTextures?.get('act2_crystal_a');
+    // Bind Act 3 Fractured Warp Gateway transparent layers
+    const warpRingTex = loadedTextures?.get('act3_warp_ring');
+    if (warpRingTex) this.act3WarpRingMat.uniforms.uMap.value = warpRingTex;
+    const crystalATex = loadedTextures?.get('act3_crystal_a');
     if (crystalATex) {
-      this.act2CrystalNearAMat.uniforms.uMap.value = crystalATex;
-      this.act2CrystalFarMat.uniforms.uMap.value = crystalATex;
+      this.act3CrystalNearAMat.uniforms.uMap.value = crystalATex;
+      this.act3CrystalFarMat.uniforms.uMap.value = crystalATex;
     }
-    const crystalBTex = loadedTextures?.get('act2_crystal_b');
-    if (crystalBTex) this.act2CrystalNearBMat.uniforms.uMap.value = crystalBTex;
-    const derelictTex = loadedTextures?.get('act2_derelict');
+    const crystalBTex = loadedTextures?.get('act3_crystal_b');
+    if (crystalBTex) this.act3CrystalNearBMat.uniforms.uMap.value = crystalBTex;
+    const derelictTex = loadedTextures?.get('act3_derelict');
     if (derelictTex) {
-      this.act2DerelictMidMat.uniforms.uMap.value = derelictTex;
-      this.act2DerelictFarMat.uniforms.uMap.value = derelictTex;
+      this.act3DerelictMidMat.uniforms.uMap.value = derelictTex;
+      this.act3DerelictFarMat.uniforms.uMap.value = derelictTex;
     }
 
-    // Bind Act 3 Dreadnought Citadel 2K PBR hull & Codex transparent superstructure layers
-    this.act3HullPbrTextures.length = 0;
-    const hullAlbedo = loadedTextures?.get('act3_hull_albedo');
-    const hullNormal = loadedTextures?.get('act3_hull_normal');
-    const hullRough = loadedTextures?.get('act3_hull_roughness');
-    const hullEmissive = loadedTextures?.get('act3_hull_emissive');
+    // Bind Act 4 Dreadnought Citadel 2K PBR hull & Codex transparent superstructure layers
+    this.act4HullPbrTextures.length = 0;
+    const hullAlbedo = loadedTextures?.get('act4_hull_albedo');
+    const hullNormal = loadedTextures?.get('act4_hull_normal');
+    const hullRough = loadedTextures?.get('act4_hull_roughness');
+    const hullEmissive = loadedTextures?.get('act4_hull_emissive');
     for (const ht of [hullAlbedo, hullNormal, hullRough, hullEmissive]) {
       if (ht) {
         ht.wrapS = THREE.RepeatWrapping;
         ht.wrapT = THREE.RepeatWrapping;
         ht.repeat.set(1, 7);
         ht.needsUpdate = true;
-        this.act3HullPbrTextures.push(ht);
+        this.act4HullPbrTextures.push(ht);
       }
     }
-    if (hullAlbedo) this.act3HullMat.map = hullAlbedo;
-    if (hullNormal) this.act3HullMat.normalMap = hullNormal;
-    if (hullRough) this.act3HullMat.roughnessMap = hullRough;
-    if (hullEmissive) this.act3HullMat.emissiveMap = hullEmissive;
-    this.act3HullMat.needsUpdate = true;
+    if (hullAlbedo) this.act4HullMat.map = hullAlbedo;
+    if (hullNormal) this.act4HullMat.normalMap = hullNormal;
+    if (hullRough) this.act4HullMat.roughnessMap = hullRough;
+    if (hullEmissive) this.act4HullMat.emissiveMap = hullEmissive;
+    this.act4HullMat.needsUpdate = true;
 
-    const keelArchTex = loadedTextures?.get('act3_keel_arch');
-    if (keelArchTex) this.act3KeelArchMat.uniforms.uMap.value = keelArchTex;
-    const flakTex = loadedTextures?.get('act3_flak_pylon');
-    if (flakTex) this.act3FlakPylonMat.uniforms.uMap.value = flakTex;
-    const bastionATex = loadedTextures?.get('act3_bastion_a');
+    const keelArchTex = loadedTextures?.get('act4_keel_arch');
+    if (keelArchTex) this.act4KeelArchMat.uniforms.uMap.value = keelArchTex;
+    const flakTex = loadedTextures?.get('act4_flak_pylon');
+    if (flakTex) this.act4FlakPylonMat.uniforms.uMap.value = flakTex;
+    const bastionATex = loadedTextures?.get('act4_bastion_a');
     if (bastionATex) {
-      this.act3BastionMatA.uniforms.uMap.value = bastionATex;
-      this.act3FarBastionMatA.uniforms.uMap.value = bastionATex;
+      this.act4BastionMatA.uniforms.uMap.value = bastionATex;
+      this.act4FarBastionMatA.uniforms.uMap.value = bastionATex;
     }
-    const bastionBTex = loadedTextures?.get('act3_bastion_b');
+    const bastionBTex = loadedTextures?.get('act4_bastion_b');
     if (bastionBTex) {
-      this.act3BastionMatB.uniforms.uMap.value = bastionBTex;
-      this.act3FarBastionMatB.uniforms.uMap.value = bastionBTex;
+      this.act4BastionMatB.uniforms.uMap.value = bastionBTex;
+      this.act4FarBastionMatB.uniforms.uMap.value = bastionBTex;
     }
 
     this.initHangarVideo();
     this.initActVideos();
 
     const activeTex = this.getVistaTexture(this.targetVistaKey);
-    this.cycloramaMat.uniforms.uTexA.value = activeTex;
-    this.cycloramaMat.uniforms.uTexB.value = activeTex;
+    this.setCycloramaTexA(activeTex);
+    this.setCycloramaTexB(activeTex);
     this.cycloramaMat.uniforms.uTexMix.value = 1.0;
     this.currentVistaKey = this.targetVistaKey;
     this.vistaBlend = 1.0;
@@ -1292,13 +1349,19 @@ export class EnvironmentSystem {
   }
 
   setAct(act: number, immediate = false): void {
-    const clampedAct = Math.max(1, Math.min(3, Math.round(act)));
+    const clampedAct = Math.max(1, Math.min(4, Math.round(act)));
     this.currentAct = clampedAct;
     this.syncVisibility();
     this.updateVistaTarget(immediate);
   }
 
-  update(dt: number, elapsed: number, scrollSpeed: number, camera: THREE.Camera): void {
+  update(
+    dt: number,
+    elapsed: number,
+    scrollSpeed: number,
+    camera: THREE.Camera,
+    timeScale = 1.0
+  ): void {
     if (this.disposed) return;
     const safeDt = Math.min(0.1, Math.max(0, dt));
     const speed = Number.isFinite(scrollSpeed) ? scrollSpeed : 0;
@@ -1309,19 +1372,22 @@ export class EnvironmentSystem {
     this.lerpSkyPalette(safeDt);
 
     if (!isHangar) {
-      // Keep sky dome locked on camera and cyclorama centered toward -Z ahead of camera
+      // Keep sky dome and spherical panorama cap concentric on camera with subtle per-act pitch
       this.skySphere.position.copy(camera.position);
-      const targetCycloY = this.currentAct === 1 ? -22 : this.currentAct === 2 ? -19 : -16;
-      this.cycloramaYOffset = THREE.MathUtils.lerp(
-        this.cycloramaYOffset,
-        targetCycloY,
+      const targetPitch = this.currentAct === 1 ? -0.135 : this.currentAct === 4 ? 0.02 : 0.0;
+      const targetBright = this.currentAct === 1 ? 1.05 : 1.0;
+      this.cycloramaPitch = THREE.MathUtils.lerp(
+        this.cycloramaPitch,
+        targetPitch,
         Math.min(1, safeDt * 5.0)
       );
-      this.cyclorama.position.set(
-        camera.position.x,
-        camera.position.y + this.cycloramaYOffset,
-        camera.position.z
+      this.cycloramaMat.uniforms.uBrightness.value = THREE.MathUtils.lerp(
+        this.cycloramaMat.uniforms.uBrightness.value,
+        targetBright,
+        Math.min(1, safeDt * 4.0)
       );
+      this.cyclorama.position.copy(camera.position);
+      this.cyclorama.rotation.x = this.cycloramaPitch;
 
       // Smooth vista crossfade transitions
       if (this.vistaBlend < 1.0) {
@@ -1334,6 +1400,21 @@ export class EnvironmentSystem {
 
       this.skyMat.uniforms.uTime.value = elapsed;
       this.skyMat.uniforms.uScroll.value = this.scrollDistance;
+
+      // Sync active combat vista video playback rate smoothly with flight speed / boost / slow-mo
+      const activeSlot = this.actVideos.get(this.currentAct as 1 | 2 | 3 | 4);
+      if (activeSlot && activeSlot.ready && !activeSlot.video.paused) {
+        const rawFactor = speed > 0.5 ? (speed / 36) * timeScale : timeScale;
+        const minRate = timeScale < 0.75 ? 0.22 : 0.85;
+        const targetRate = THREE.MathUtils.clamp(rawFactor, minRate, 1.65);
+        if (Math.abs(activeSlot.video.playbackRate - targetRate) > 0.025) {
+          activeSlot.video.playbackRate = THREE.MathUtils.lerp(
+            activeSlot.video.playbackRate,
+            targetRate,
+            Math.min(1, Math.max(0.016, safeDt) * 8.0)
+          );
+        }
+      }
     }
 
     for (const beamMat of this.volumetricBeams) {
@@ -1349,9 +1430,11 @@ export class EnvironmentSystem {
       if (this.currentAct === 1) {
         this.updateAct1(safeDt, elapsed, speed);
       } else if (this.currentAct === 2) {
-        this.updateAct2(safeDt, elapsed, speed);
+        this.updateAct2Metropolis(safeDt, elapsed, speed);
+      } else if (this.currentAct === 3) {
+        this.updateAct3Nebula(safeDt, elapsed, speed);
       } else {
-        this.updateAct3(safeDt, elapsed, speed);
+        this.updateAct4Citadel(safeDt, elapsed, speed);
       }
     }
 
@@ -1402,6 +1485,16 @@ export class EnvironmentSystem {
     this.warmupTargets.length = 0;
   }
 
+  private setCycloramaTexA(tex: THREE.Texture): void {
+    this.cycloramaMat.uniforms.uTexA.value = tex;
+    this.cycloramaMat.uniforms.uTexAIsVideo.value = (tex as THREE.VideoTexture).isVideoTexture ? 1.0 : 0.0;
+  }
+
+  private setCycloramaTexB(tex: THREE.Texture): void {
+    this.cycloramaMat.uniforms.uTexB.value = tex;
+    this.cycloramaMat.uniforms.uTexBIsVideo.value = (tex as THREE.VideoTexture).isVideoTexture ? 1.0 : 0.0;
+  }
+
   private getVistaTexture(key: VistaKey): THREE.Texture {
     return this.activeTextures.get(key) ?? this.fallbackTextures[key];
   }
@@ -1410,6 +1503,7 @@ export class EnvironmentSystem {
     if (this.mode === 'hangar' || this.mode === 'boot') return 'hangar';
     if (this.currentAct === 2) return 'act2';
     if (this.currentAct === 3) return 'act3';
+    if (this.currentAct === 4) return 'act4';
     return 'act1';
   }
 
@@ -1441,20 +1535,22 @@ export class EnvironmentSystem {
       this.syncPaletteUniforms();
 
       const tex = this.getVistaTexture(nextKey);
-      this.cycloramaMat.uniforms.uTexA.value = tex;
-      this.cycloramaMat.uniforms.uTexB.value = tex;
+      this.setCycloramaTexA(tex);
+      this.setCycloramaTexB(tex);
       this.cycloramaMat.uniforms.uTexMix.value = 1.0;
       this.currentVistaKey = nextKey;
       this.targetVistaKey = nextKey;
       this.vistaBlend = 1.0;
-      this.cycloramaYOffset =
+      this.cycloramaPitch =
         this.mode === 'hangar'
-          ? -20
+          ? -0.02
           : this.currentAct === 1
-            ? -22
-            : this.currentAct === 2
-              ? -19
-              : -16;
+            ? -0.135
+            : this.currentAct === 4
+              ? 0.02
+              : 0.0;
+      this.cycloramaMat.uniforms.uBrightness.value = this.currentAct === 1 && this.mode === 'combat' ? 1.05 : 1.0;
+      this.cyclorama.rotation.x = this.cycloramaPitch;
       return;
     }
 
@@ -1463,8 +1559,8 @@ export class EnvironmentSystem {
       const fromTex = this.getVistaTexture(fromKey);
       const toTex = this.getVistaTexture(nextKey);
       this.currentVistaKey = fromKey;
-      this.cycloramaMat.uniforms.uTexA.value = fromTex;
-      this.cycloramaMat.uniforms.uTexB.value = toTex;
+      this.setCycloramaTexA(fromTex);
+      this.setCycloramaTexB(toTex);
       this.cycloramaMat.uniforms.uTexMix.value = 0.0;
       this.targetVistaKey = nextKey;
       this.vistaBlend = 0.0;
@@ -1554,6 +1650,7 @@ export class EnvironmentSystem {
     this.act1Group.visible = this.mode === 'combat' && this.currentAct === 1;
     this.act2Group.visible = this.mode === 'combat' && this.currentAct === 2;
     this.act3Group.visible = this.mode === 'combat' && this.currentAct === 3;
+    this.act4Group.visible = this.mode === 'combat' && this.currentAct === 4;
     this.dustInst.visible = this.mode === 'combat';
     this.syncHangarVideoPlayback();
     this.syncActVideosPlayback();
@@ -1563,7 +1660,7 @@ export class EnvironmentSystem {
     return this.actVideos.get(1)?.ready ?? false;
   }
 
-  isActVideoReady(act: 1 | 2 | 3): boolean {
+  isActVideoReady(act: 1 | 2 | 3 | 4): boolean {
     return this.actVideos.get(act)?.ready ?? false;
   }
 
@@ -1638,14 +1735,15 @@ export class EnvironmentSystem {
     if (typeof document === 'undefined' || this.actVideos.size > 0) return;
 
     const specs: Array<{
-      act: 1 | 2 | 3;
-      vistaKey: 'act1' | 'act2' | 'act3';
+      act: 1 | 2 | 3 | 4;
+      vistaKey: 'act1' | 'act2' | 'act3' | 'act4';
       url: string;
       preload: 'auto' | 'metadata';
     }> = [
-      { act: 1, vistaKey: 'act1', url: './env/act1_vista_loop.mp4', preload: 'auto' },
-      { act: 2, vistaKey: 'act2', url: './env/act2_vista_loop.mp4', preload: 'metadata' },
-      { act: 3, vistaKey: 'act3', url: './env/act3_vista_loop.mp4', preload: 'metadata' },
+      { act: 1, vistaKey: 'act1', url: './env/stratosphere_vista_loop.mp4', preload: 'auto' },
+      { act: 2, vistaKey: 'act2', url: './env/act1_vista_loop.mp4', preload: 'metadata' },
+      { act: 3, vistaKey: 'act3', url: './env/act2_vista_loop.mp4', preload: 'metadata' },
+      { act: 4, vistaKey: 'act4', url: './env/act3_vista_loop.mp4', preload: 'metadata' },
     ];
 
     for (const spec of specs) {
@@ -1681,9 +1779,9 @@ export class EnvironmentSystem {
         slot.ready = true;
         this.activeTextures.set(slot.vistaKey, vtex);
         if (this.targetVistaKey === slot.vistaKey) {
-          this.cycloramaMat.uniforms.uTexB.value = vtex;
+          this.setCycloramaTexB(vtex);
           if (this.vistaBlend >= 1.0) {
-            this.cycloramaMat.uniforms.uTexA.value = vtex;
+            this.setCycloramaTexA(vtex);
           }
         }
       };
@@ -2063,8 +2161,61 @@ export class EnvironmentSystem {
     });
   }
 
-  private buildAct1Metropolis(): void {
-    // 1. Animated twilight-dawn FBM Cloud-Sea Floor (y = -15.6)
+  private buildAct1Stratosphere(): void {
+    // Pure 1080p FPV Cinema Cloud-Skimming Vista carries 100% of the clouds (zero pasted cloud stickers).
+    // Peripheral Gaussian-Tapered Stratosphere Slipstream Needles enhance supersonic air-rush parallax.
+    const slipGeo = this.createCrossedStreakGeometry();
+    const slipMat = new THREE.ShaderMaterial({
+      uniforms: {
+        uOpacity: { value: 0.34 },
+      },
+      vertexShader: DUST_VERT,
+      fragmentShader: DUST_FRAG,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    this.act1SlipstreamInst = new THREE.InstancedMesh(slipGeo, slipMat, ACT1_SLIPSTREAM_COUNT);
+    this.act1SlipstreamInst.name = 'Act1SlipstreamRibbons';
+    this.act1SlipstreamInst.frustumCulled = false;
+    const goldWispCol = new THREE.Color(0xffcfa0);
+    const iceWispCol = new THREE.Color(0x88e6ff);
+
+    for (let i = 0; i < ACT1_SLIPSTREAM_COUNT; i++) {
+      const angle = (i * 2.39996) % (Math.PI * 2);
+      const r1 = ((i * 47 + 13) % 100) / 100;
+      const r2 = ((i * 71 + 31) % 100) / 100;
+      const r3 = ((i * 29 + 59) % 100) / 100;
+      const radius = 16 + r1 * 38;
+      const x = Math.cos(angle) * radius * 1.28;
+      const y = Math.sin(angle) * radius * 0.72;
+      const state: CorridorStreakState = {
+        x,
+        y,
+        baseY: y,
+        z: -r3 * 255 + 18,
+        speedMult: 1.15 + r2 * 0.85,
+        length: 3.4 + r3 * 4.8,
+        thickness: 0.085,
+        bobPhase: r1 * Math.PI * 2,
+      };
+      this.act1Slipstreams.push(state);
+      this.dummy.position.set(state.x, state.y, state.z);
+      this.dummy.rotation.set(0, 0, 0);
+      this.dummy.scale.set(0.085, 0.085, state.length);
+      this.dummy.updateMatrix();
+      this.act1SlipstreamInst.setMatrixAt(i, this.dummy.matrix);
+      this.act1SlipstreamInst.setColorAt(i, i % 3 === 0 ? goldWispCol : iceWispCol);
+    }
+    this.act1SlipstreamInst.instanceMatrix.needsUpdate = true;
+    if (this.act1SlipstreamInst.instanceColor) this.act1SlipstreamInst.instanceColor.needsUpdate = true;
+    this.act1Group.add(this.act1SlipstreamInst);
+    this.warmupTargets.push(this.act1SlipstreamInst);
+  }
+
+  private buildAct2Metropolis(): void {
+    // 1. Animated twilight-dawn FBM Cloud-Sea Floor beneath the elevated Orbital Metropolis (y = -15.6)
     const cloudGeo = new THREE.PlaneGeometry(440, 330, 1, 1);
     cloudGeo.rotateX(-Math.PI * 0.5);
     this.cloudSeaMat = new THREE.ShaderMaterial({
@@ -2080,7 +2231,7 @@ export class EnvironmentSystem {
     const cloudSea = new THREE.Mesh(cloudGeo, this.cloudSeaMat);
     cloudSea.position.set(0, -15.6, -120);
     cloudSea.renderOrder = -20;
-    this.act1Group.add(cloudSea);
+    this.act2Group.add(cloudSea);
     this.warmupTargets.push(cloudSea);
 
     // 2. 2K Seamless Scrolling PBR Elevated Orbital Highway Deck (y = -11.2)
@@ -2097,22 +2248,16 @@ export class EnvironmentSystem {
       transparent: true,
       opacity: 0.98,
     });
-    this.highwayDeckMat.customProgramCacheKey = () => 'act1_highway_far_fade';
+    this.highwayDeckMat.customProgramCacheKey = () => 'act2_metro_highway_far_fade';
     this.highwayDeckMat.onBeforeCompile = (shader) => {
       shader.vertexShader = shader.vertexShader
-        .replace(
-          '#include <common>',
-          '#include <common>\nvarying float vDeckWorldZ;'
-        )
+        .replace('#include <common>', '#include <common>\nvarying float vDeckWorldZ;')
         .replace(
           '#include <begin_vertex>',
           '#include <begin_vertex>\nvDeckWorldZ = (modelMatrix * vec4( transformed, 1.0 )).z;'
         );
       shader.fragmentShader = shader.fragmentShader
-        .replace(
-          '#include <common>',
-          '#include <common>\nvarying float vDeckWorldZ;'
-        )
+        .replace('#include <common>', '#include <common>\nvarying float vDeckWorldZ;')
         .replace(
           '#include <dithering_fragment>',
           `float deckFarFade = smoothstep(-255.0, -155.0, vDeckWorldZ);
@@ -2123,13 +2268,12 @@ export class EnvironmentSystem {
         );
     };
     const highwayDeck = new THREE.Mesh(deckGeo, this.highwayDeckMat);
-    highwayDeck.name = 'Act1HighwayPbrDeck';
+    highwayDeck.name = 'Act2HighwayPbrDeck';
     highwayDeck.position.set(0, -11.2, -115);
     highwayDeck.renderOrder = -12;
-    this.act1Group.add(highwayDeck);
+    this.act2Group.add(highwayDeck);
     this.warmupTargets.push(highwayDeck);
 
-    // Structural highway side guard girders
     const railMat = new THREE.MeshStandardMaterial({
       color: 0x26415e,
       metalness: 0.78,
@@ -2141,10 +2285,9 @@ export class EnvironmentSystem {
     for (const side of [-1, 1]) {
       const rail = new THREE.Mesh(railGeo, railMat);
       rail.position.set(side * 14.3, -10.9, -115);
-      this.act1Group.add(rail);
+      this.act2Group.add(rail);
     }
 
-    // Side Structural Terraces (x = ±25.5, y = -10.2) flanking the orbital highway corridor
     const terraceGeo = new THREE.BoxGeometry(22.5, 1.4, 285);
     this.terraceDeckMat = new THREE.ShaderMaterial({
       uniforms: {
@@ -2159,21 +2302,20 @@ export class EnvironmentSystem {
       const terrace = new THREE.Mesh(terraceGeo, this.terraceDeckMat);
       terrace.position.set(side * 25.5, -10.2, -112);
       terrace.renderOrder = -10;
-      this.act1Group.add(terrace);
+      this.act2Group.add(terrace);
       this.warmupTargets.push(terrace);
     }
 
-    // Scrolling structural terrace pylons descending into cloud-sea
     const pylonGeo = new THREE.BoxGeometry(3.2, 10.5, 4.2);
     const pylonMat = new THREE.MeshStandardMaterial({
       color: 0x182b42,
       metalness: 0.75,
       roughness: 0.35,
     });
-    this.pylonInst = new THREE.InstancedMesh(pylonGeo, pylonMat, ACT1_PYLON_COUNT);
-    this.pylonInst.name = 'Act1TerracePylons';
+    this.pylonInst = new THREE.InstancedMesh(pylonGeo, pylonMat, ACT2_METRO_PYLON_COUNT);
+    this.pylonInst.name = 'Act2TerracePylons';
     this.pylonInst.frustumCulled = false;
-    for (let i = 0; i < ACT1_PYLON_COUNT; i++) {
+    for (let i = 0; i < ACT2_METRO_PYLON_COUNT; i++) {
       const pairIdx = Math.floor(i / 2);
       const side = i % 2 === 0 ? -1 : 1;
       const z = -pairIdx * 20 + 18;
@@ -2185,26 +2327,26 @@ export class EnvironmentSystem {
       this.pylonInst.setMatrixAt(i, this.dummy.matrix);
     }
     this.pylonInst.instanceMatrix.needsUpdate = true;
-    this.act1Group.add(this.pylonInst);
+    this.act2Group.add(this.pylonInst);
     this.warmupTargets.push(this.pylonInst);
 
-    // 3. Codex 2K Transparent Matte Layers: Overhead Sky Arches + Near Holo Pylons + Dual-Depth Megastructures
+    // 3. Codex 2K Transparent Architectural Layers: Overhead Sky Arches + Near Holo Pylons + Dual-Depth Towers
     const unitPlaneGeo = new THREE.PlaneGeometry(1, 1, 1, 1);
-    this.act1ArchMat = this.createMatteLayerMaterial({
+    this.metroArchMat = this.createMatteLayerMaterial({
       tint: 0xe6effa,
       hazeStrength: 0.32,
       opacity: 0.96,
       nearStart: 2.2,
       nearEnd: 12.2,
     });
-    this.act1HoloPylonMat = this.createMatteLayerMaterial({
+    this.metroHoloPylonMat = this.createMatteLayerMaterial({
       tint: 0xf2f8ff,
       hazeStrength: 0.24,
       opacity: 0.95,
       nearStart: 2.5,
       nearEnd: 12.8,
     });
-    this.act1TowerMatA = this.createMatteLayerMaterial({
+    this.metroTowerMatA = this.createMatteLayerMaterial({
       tint: 0xdce7f5,
       hazeStrength: 0.34,
       opacity: 0.97,
@@ -2212,7 +2354,7 @@ export class EnvironmentSystem {
       nearEnd: 9.0,
       bottomFeather: 0.14,
     });
-    this.act1TowerMatB = this.createMatteLayerMaterial({
+    this.metroTowerMatB = this.createMatteLayerMaterial({
       tint: 0xdce7f5,
       hazeStrength: 0.34,
       opacity: 0.97,
@@ -2220,7 +2362,7 @@ export class EnvironmentSystem {
       nearEnd: 9.0,
       bottomFeather: 0.14,
     });
-    this.act1FarTowerMatA = this.createMatteLayerMaterial({
+    this.metroFarTowerMatA = this.createMatteLayerMaterial({
       tint: 0xbdd0e6,
       hazeStrength: 0.58,
       opacity: 0.92,
@@ -2228,7 +2370,7 @@ export class EnvironmentSystem {
       nearEnd: 8.0,
       bottomFeather: 0.16,
     });
-    this.act1FarTowerMatB = this.createMatteLayerMaterial({
+    this.metroFarTowerMatB = this.createMatteLayerMaterial({
       tint: 0xbdd0e6,
       hazeStrength: 0.58,
       opacity: 0.92,
@@ -2237,17 +2379,16 @@ export class EnvironmentSystem {
       bottomFeather: 0.16,
     });
 
-    // 3A. 5 Monumental Overhead Sky Gantry Arches rushing past along full Z speed (roomy spacing reveals orbital elevator & vista)
-    const archSpanZ = ACT1_ARCH_COUNT * 58;
-    for (let i = 0; i < ACT1_ARCH_COUNT; i++) {
+    const archSpanZ = ACT2_METRO_ARCH_COUNT * 58;
+    for (let i = 0; i < ACT2_METRO_ARCH_COUNT; i++) {
       const z = -i * 58 - 18;
-      const archMesh = new THREE.Mesh(unitPlaneGeo, this.act1ArchMat);
-      archMesh.name = `Act1SkyArch_${i}`;
+      const archMesh = new THREE.Mesh(unitPlaneGeo, this.metroArchMat);
+      archMesh.name = `Act2SkyArch_${i}`;
       archMesh.position.set(0, 7.6, z);
       archMesh.scale.set(64, 36.0, 1);
       archMesh.renderOrder = -4;
-      this.act1Group.add(archMesh);
-      this.act1ScrollingProps.push({
+      this.act2Group.add(archMesh);
+      this.metroScrollingProps.push({
         mesh: archMesh,
         x: 0,
         y: 7.6,
@@ -2259,7 +2400,6 @@ export class EnvironmentSystem {
       if (i === 0) this.warmupTargets.push(archMesh);
     }
 
-    // 3B. 12 Near-Canyon Holographic Telemetry Pylons bolted along outer terrace shoulders
     const holoCount = 12;
     const holoSpanZ = (holoCount / 2) * 44;
     for (let i = 0; i < holoCount; i++) {
@@ -2271,13 +2411,13 @@ export class EnvironmentSystem {
       const h = w * 1.5;
       const y = -10.3 + h * 0.5;
       const z = -pairIdx * 44 - (side > 0 ? 22 : 4);
-      const pylonMesh = new THREE.Mesh(unitPlaneGeo, this.act1HoloPylonMat);
+      const pylonMesh = new THREE.Mesh(unitPlaneGeo, this.metroHoloPylonMat);
       pylonMesh.position.set(x, y, z);
       pylonMesh.rotation.y = side * -0.14;
       pylonMesh.scale.set(side < 0 ? w : -w, h, 1);
       pylonMesh.renderOrder = -4;
-      this.act1Group.add(pylonMesh);
-      this.act1ScrollingProps.push({
+      this.act2Group.add(pylonMesh);
+      this.metroScrollingProps.push({
         mesh: pylonMesh,
         x,
         y,
@@ -2289,7 +2429,6 @@ export class EnvironmentSystem {
       if (i === 0) this.warmupTargets.push(pylonMesh);
     }
 
-    // 3C. 14 Mid-Canyon AAA Sci-Fi Skyscraper Clusters (x = ±50..66)
     const midCount = 14;
     const midSpanZ = (midCount / 2) * 38;
     for (let i = 0; i < midCount; i++) {
@@ -2298,7 +2437,7 @@ export class EnvironmentSystem {
       const rA = ((i * 73 + 19) % 100) / 100;
       const rB = ((i * 37 + 53) % 100) / 100;
       const useB = i % 3 === 1 || i % 4 === 2;
-      const mat = useB ? this.act1TowerMatB : this.act1TowerMatA;
+      const mat = useB ? this.metroTowerMatB : this.metroTowerMatA;
       const x = side * (50 + rA * 16);
       const w = 34 + rB * 10;
       const h = w * 1.5;
@@ -2310,8 +2449,8 @@ export class EnvironmentSystem {
       towerMesh.rotation.y = side * -0.16;
       towerMesh.scale.set(w * flip, h, 1);
       towerMesh.renderOrder = -4;
-      this.act1Group.add(towerMesh);
-      this.act1ScrollingProps.push({
+      this.act2Group.add(towerMesh);
+      this.metroScrollingProps.push({
         mesh: towerMesh,
         x,
         y,
@@ -2323,7 +2462,6 @@ export class EnvironmentSystem {
       if (i < 2) this.warmupTargets.push(towerMesh);
     }
 
-    // 3D. 14 Distant Horizon Skyline Mega-Towers with Deep Atmospheric Perspective (x = ±78..112)
     const farCount = 14;
     const farSpanZ = (farCount / 2) * 40;
     for (let i = 0; i < farCount; i++) {
@@ -2332,7 +2470,7 @@ export class EnvironmentSystem {
       const rA = ((i * 61 + 29) % 100) / 100;
       const rB = ((i * 89 + 11) % 100) / 100;
       const useB = (i + 1) % 2 === 0;
-      const mat = useB ? this.act1FarTowerMatB : this.act1FarTowerMatA;
+      const mat = useB ? this.metroFarTowerMatB : this.metroFarTowerMatA;
       const x = side * (78 + rA * 34);
       const w = 48 + rB * 16;
       const h = w * 1.5;
@@ -2344,8 +2482,8 @@ export class EnvironmentSystem {
       farMesh.rotation.y = side * -0.18;
       farMesh.scale.set(w * flip, h, 1);
       farMesh.renderOrder = -4;
-      this.act1Group.add(farMesh);
-      this.act1ScrollingProps.push({
+      this.act2Group.add(farMesh);
+      this.metroScrollingProps.push({
         mesh: farMesh,
         x,
         y,
@@ -2357,7 +2495,7 @@ export class EnvironmentSystem {
       if (i < 2) this.warmupTargets.push(farMesh);
     }
 
-    // 4. 64 Bidirectional Aerial Highway Traffic Light Streaks outside central combat corridor (|x| >= 16.5)
+    // 4. 64 Bidirectional Aerial Highway Traffic Light Streaks outside central combat corridor
     const trafficGeo = new THREE.BoxGeometry(0.18, 0.12, 1.0);
     const trafficMat = new THREE.MeshBasicMaterial({
       color: 0xffffff,
@@ -2365,13 +2503,13 @@ export class EnvironmentSystem {
       opacity: 0.88,
       toneMapped: false,
     });
-    this.act1TrafficInst = new THREE.InstancedMesh(trafficGeo, trafficMat, ACT1_TRAFFIC_COUNT);
-    this.act1TrafficInst.name = 'Act1AerialTraffic';
-    this.act1TrafficInst.frustumCulled = false;
+    this.metroTrafficInst = new THREE.InstancedMesh(trafficGeo, trafficMat, ACT2_METRO_TRAFFIC_COUNT);
+    this.metroTrafficInst.name = 'Act2AerialTraffic';
+    this.metroTrafficInst.frustumCulled = false;
     const oncomingCol = new THREE.Color(0xffd27a);
     const outboundCol = new THREE.Color(0x45e8ff);
 
-    for (let i = 0; i < ACT1_TRAFFIC_COUNT; i++) {
+    for (let i = 0; i < ACT2_METRO_TRAFFIC_COUNT; i++) {
       const side = i % 2 === 0 ? -1 : 1;
       const r1 = ((i * 47 + 13) % 100) / 100;
       const r2 = ((i * 71 + 31) % 100) / 100;
@@ -2385,45 +2523,45 @@ export class EnvironmentSystem {
         speedMult: dirSign > 0 ? 1.45 + r2 * 0.65 : 0.42 + r1 * 0.25,
         length: 2.2 + r3 * 3.0,
       };
-      this.act1Traffic.push(state);
+      this.metroTraffic.push(state);
       this.dummy.position.set(state.x, state.y, state.z);
       this.dummy.rotation.set(0, 0, 0);
       this.dummy.scale.set(1, 1, state.length);
       this.dummy.updateMatrix();
-      this.act1TrafficInst.setMatrixAt(i, this.dummy.matrix);
-      this.act1TrafficInst.setColorAt(i, dirSign > 0 ? oncomingCol : outboundCol);
+      this.metroTrafficInst.setMatrixAt(i, this.dummy.matrix);
+      this.metroTrafficInst.setColorAt(i, dirSign > 0 ? oncomingCol : outboundCol);
     }
-    this.act1TrafficInst.instanceMatrix.needsUpdate = true;
-    if (this.act1TrafficInst.instanceColor) this.act1TrafficInst.instanceColor.needsUpdate = true;
-    this.act1Group.add(this.act1TrafficInst);
-    this.warmupTargets.push(this.act1TrafficInst);
+    this.metroTrafficInst.instanceMatrix.needsUpdate = true;
+    if (this.metroTrafficInst.instanceColor) this.metroTrafficInst.instanceColor.needsUpdate = true;
+    this.act2Group.add(this.metroTrafficInst);
+    this.warmupTargets.push(this.metroTrafficInst);
 
     // 5. Soft Golden Dawn Volumetric Sunbeams Slanting Outside the Central Corridor
     const sunBeamGeo = new THREE.CylinderGeometry(0.45, 5.4, 52, 16, 1, true);
     sunBeamGeo.translate(0, -26, 0);
-    const act1Sunbeams: Array<{ x: number; y: number; z: number; tiltZ: number; color: number }> = [
+    const metroSunbeams: Array<{ x: number; y: number; z: number; tiltZ: number; color: number }> = [
       { x: -46, y: 26, z: -58, tiltZ: 0.42, color: 0xffcf88 },
       { x: -34, y: 24, z: -118, tiltZ: 0.36, color: 0xffd79b },
       { x: 34, y: 24, z: -84, tiltZ: -0.34, color: 0x52dcff },
       { x: 46, y: 26, z: -146, tiltZ: -0.40, color: 0xffcf88 },
     ];
-    for (const cfg of act1Sunbeams) {
+    for (const cfg of metroSunbeams) {
       const beamMat = this.createVolumetricBeamMaterial(cfg.color, 0.085, false);
       const beamMesh = new THREE.Mesh(sunBeamGeo, beamMat);
       beamMesh.position.set(cfg.x, cfg.y, cfg.z);
       beamMesh.rotation.z = cfg.tiltZ;
       beamMesh.renderOrder = -3;
-      this.act1Group.add(beamMesh);
+      this.act2Group.add(beamMesh);
       this.warmupTargets.push(beamMesh);
     }
   }
 
-  private buildAct2Nebula(): void {
+  private buildAct3Nebula(): void {
     // 1. 24 Small 3D Tumbling Crystal/Asteroid Shards flanking the outer void (|x| >= 22)
     const rockGeo = this.createFacetedAsteroidGeometry();
     const crystalGeo = this.createCrystalClusterGeometry();
 
-    const metaData = new Float32Array(ACT2_DEBRIS_COUNT * 4);
+    const metaData = new Float32Array(ACT3_DEBRIS_COUNT * 4);
     this.megalithMat = new THREE.ShaderMaterial({
       uniforms: {
         uTime: { value: 0 },
@@ -2440,12 +2578,12 @@ export class EnvironmentSystem {
       metalness: 0.35,
     });
 
-    this.megalithInst = new THREE.InstancedMesh(rockGeo, this.megalithMat, ACT2_DEBRIS_COUNT);
-    this.megalithInst.name = 'Act2CrystalMegaliths';
+    this.megalithInst = new THREE.InstancedMesh(rockGeo, this.megalithMat, ACT3_DEBRIS_COUNT);
+    this.megalithInst.name = 'Act3CrystalMegaliths';
     this.megalithInst.frustumCulled = false;
 
-    this.crystalShardInst = new THREE.InstancedMesh(crystalGeo, crystalMat, ACT2_DEBRIS_COUNT);
-    this.crystalShardInst.name = 'Act2CrystalShards';
+    this.crystalShardInst = new THREE.InstancedMesh(crystalGeo, crystalMat, ACT3_DEBRIS_COUNT);
+    this.crystalShardInst.name = 'Act3CrystalShards';
     this.crystalShardInst.frustumCulled = false;
 
     const veinPalette = [
@@ -2455,7 +2593,7 @@ export class EnvironmentSystem {
       new THREE.Color(0x38bdf8),
     ];
 
-    for (let i = 0; i < ACT2_DEBRIS_COUNT; i++) {
+    for (let i = 0; i < ACT3_DEBRIS_COUNT; i++) {
       const side = i % 2 === 0 ? -1 : 1;
       const r1 = ((i * 59 + 13) % 100) / 100;
       const r2 = ((i * 83 + 29) % 100) / 100;
@@ -2509,7 +2647,7 @@ export class EnvironmentSystem {
     this.crystalShardInst.instanceMatrix.needsUpdate = true;
     if (this.crystalShardInst.instanceColor) this.crystalShardInst.instanceColor.needsUpdate = true;
 
-    this.act2Group.add(this.megalithInst, this.crystalShardInst);
+    this.act3Group.add(this.megalithInst, this.crystalShardInst);
     this.warmupTargets.push(this.megalithInst, this.crystalShardInst);
 
     // 2. Subdued Deep-Cosmic Warp Plasma River Below (y = -13.2)
@@ -2529,12 +2667,12 @@ export class EnvironmentSystem {
     const riverMesh = new THREE.Mesh(riverGeo, this.plasmaRiverMat);
     riverMesh.position.set(0, -13.2, -120);
     riverMesh.renderOrder = -15;
-    this.act2Group.add(riverMesh);
+    this.act3Group.add(riverMesh);
     this.warmupTargets.push(riverMesh);
 
     // 3. Codex 2K Transparent Layers: Fractured Warp Rings + Floating Crystal Monoliths + Derelict Station Hulks
     const unitPlaneGeo = new THREE.PlaneGeometry(1, 1, 1, 1);
-    this.act2WarpRingMat = this.createMatteLayerMaterial({
+    this.act3WarpRingMat = this.createMatteLayerMaterial({
       tint: 0xdff7ff,
       hazeColor: 0x161242,
       hazeStrength: 0.32,
@@ -2542,7 +2680,7 @@ export class EnvironmentSystem {
       nearStart: 2.0,
       nearEnd: 12.2,
     });
-    this.act2CrystalNearAMat = this.createMatteLayerMaterial({
+    this.act3CrystalNearAMat = this.createMatteLayerMaterial({
       tint: 0xe2f6ff,
       hazeColor: 0x161242,
       hazeStrength: 0.28,
@@ -2550,7 +2688,7 @@ export class EnvironmentSystem {
       nearStart: -2.0,
       nearEnd: 10.5,
     });
-    this.act2CrystalNearBMat = this.createMatteLayerMaterial({
+    this.act3CrystalNearBMat = this.createMatteLayerMaterial({
       tint: 0xe6e4ff,
       hazeColor: 0x161242,
       hazeStrength: 0.28,
@@ -2558,7 +2696,7 @@ export class EnvironmentSystem {
       nearStart: -2.0,
       nearEnd: 10.5,
     });
-    this.act2DerelictMidMat = this.createMatteLayerMaterial({
+    this.act3DerelictMidMat = this.createMatteLayerMaterial({
       tint: 0xcfdff5,
       hazeColor: 0x161242,
       hazeStrength: 0.40,
@@ -2566,7 +2704,7 @@ export class EnvironmentSystem {
       nearStart: -6.0,
       nearEnd: 9.0,
     });
-    this.act2DerelictFarMat = this.createMatteLayerMaterial({
+    this.act3DerelictFarMat = this.createMatteLayerMaterial({
       tint: 0xaabbe6,
       hazeColor: 0x161242,
       hazeStrength: 0.62,
@@ -2574,7 +2712,7 @@ export class EnvironmentSystem {
       nearStart: -10.0,
       nearEnd: 8.0,
     });
-    this.act2CrystalFarMat = this.createMatteLayerMaterial({
+    this.act3CrystalFarMat = this.createMatteLayerMaterial({
       tint: 0xaabbe6,
       hazeColor: 0x161242,
       hazeStrength: 0.62,
@@ -2583,18 +2721,17 @@ export class EnvironmentSystem {
       nearEnd: 8.0,
     });
 
-    // 3A. 5 Colossal Fractured Circular Warp Accelerator Rings with wide central clear aperture
-    const ringSpanZ = ACT2_WARP_RING_COUNT * 58;
-    for (let i = 0; i < ACT2_WARP_RING_COUNT; i++) {
+    const ringSpanZ = ACT3_WARP_RING_COUNT * 58;
+    for (let i = 0; i < ACT3_WARP_RING_COUNT; i++) {
       const z = -i * 58 - 18;
-      const ringMesh = new THREE.Mesh(unitPlaneGeo, this.act2WarpRingMat);
-      ringMesh.name = `Act2WarpRing_${i}`;
+      const ringMesh = new THREE.Mesh(unitPlaneGeo, this.act3WarpRingMat);
+      ringMesh.name = `Act3WarpRing_${i}`;
       ringMesh.position.set(0, 1.4, z);
       ringMesh.scale.set(62, 34.875, 1);
       ringMesh.rotation.z = (i * Math.PI) / 5;
       ringMesh.renderOrder = -4;
-      this.act2Group.add(ringMesh);
-      this.act2ScrollingProps.push({
+      this.act3Group.add(ringMesh);
+      this.act3ScrollingProps.push({
         mesh: ringMesh,
         x: 0,
         y: 1.4,
@@ -2607,7 +2744,6 @@ export class EnvironmentSystem {
       if (i === 0) this.warmupTargets.push(ringMesh);
     }
 
-    // 3B. 12 Near-Corridor Floating Zero-G Crystal Asteroids (|x| = 31..43)
     const nearCount = 12;
     const nearSpanZ = (nearCount / 2) * 44;
     for (let i = 0; i < nearCount; i++) {
@@ -2615,7 +2751,7 @@ export class EnvironmentSystem {
       const pairIdx = Math.floor(i / 2);
       const rA = ((i * 53 + 17) % 100) / 100;
       const rB = ((i * 79 + 29) % 100) / 100;
-      const mat = i % 2 === 0 ? this.act2CrystalNearAMat : this.act2CrystalNearBMat;
+      const mat = i % 2 === 0 ? this.act3CrystalNearAMat : this.act3CrystalNearBMat;
       const x = side * (31 + rA * 12);
       const y = -8.5 + rB * 19.0;
       const size = 14 + rA * 5.0;
@@ -2626,8 +2762,8 @@ export class EnvironmentSystem {
       mesh.rotation.z = (rB - 0.5) * 0.45;
       mesh.scale.set(size * (i % 3 === 0 ? -1 : 1), size, 1);
       mesh.renderOrder = -4;
-      this.act2Group.add(mesh);
-      this.act2ScrollingProps.push({
+      this.act3Group.add(mesh);
+      this.act3ScrollingProps.push({
         mesh,
         x,
         y,
@@ -2642,7 +2778,6 @@ export class EnvironmentSystem {
       if (i === 0) this.warmupTargets.push(mesh);
     }
 
-    // 3C. 14 Mid-Depth Shattered Space Station Derelicts & Giant Crystal Monoliths (|x| = 49..67)
     const midCount = 14;
     const midSpanZ = (midCount / 2) * 38;
     for (let i = 0; i < midCount; i++) {
@@ -2652,10 +2787,10 @@ export class EnvironmentSystem {
       const rB = ((i * 37 + 53) % 100) / 100;
       const isDerelict = i % 3 !== 1;
       const mat = isDerelict
-        ? this.act2DerelictMidMat
+        ? this.act3DerelictMidMat
         : i % 2 === 0
-          ? this.act2CrystalNearAMat
-          : this.act2CrystalNearBMat;
+          ? this.act3CrystalNearAMat
+          : this.act3CrystalNearBMat;
       const x = side * (49 + rA * 18);
       const w = isDerelict ? 29 + rB * 9 : 25 + rB * 8;
       const h = isDerelict ? w * 1.5 : w;
@@ -2668,8 +2803,8 @@ export class EnvironmentSystem {
       mesh.rotation.z = (rA - 0.5) * 0.24;
       mesh.scale.set(w * flip, h, 1);
       mesh.renderOrder = -4;
-      this.act2Group.add(mesh);
-      this.act2ScrollingProps.push({
+      this.act3Group.add(mesh);
+      this.act3ScrollingProps.push({
         mesh,
         x,
         y,
@@ -2684,7 +2819,6 @@ export class EnvironmentSystem {
       if (i < 2) this.warmupTargets.push(mesh);
     }
 
-    // 3D. 12 Distant Cosmic Horizon Derelict Spires & Mega-Monoliths (|x| = 82..115)
     const farCount = 12;
     const farSpanZ = (farCount / 2) * 44;
     for (let i = 0; i < farCount; i++) {
@@ -2693,7 +2827,7 @@ export class EnvironmentSystem {
       const rA = ((i * 61 + 29) % 100) / 100;
       const rB = ((i * 89 + 11) % 100) / 100;
       const isDerelict = i % 2 === 0;
-      const mat = isDerelict ? this.act2DerelictFarMat : this.act2CrystalFarMat;
+      const mat = isDerelict ? this.act3DerelictFarMat : this.act3CrystalFarMat;
       const x = side * (82 + rA * 33);
       const w = isDerelict ? 44 + rB * 14 : 38 + rB * 12;
       const h = isDerelict ? w * 1.5 : w;
@@ -2705,8 +2839,8 @@ export class EnvironmentSystem {
       mesh.rotation.z = (rB - 0.5) * 0.18;
       mesh.scale.set(w * (i % 2 === 0 ? -1 : 1), h, 1);
       mesh.renderOrder = -4;
-      this.act2Group.add(mesh);
-      this.act2ScrollingProps.push({
+      this.act3Group.add(mesh);
+      this.act3ScrollingProps.push({
         mesh,
         x,
         y,
@@ -2721,7 +2855,6 @@ export class EnvironmentSystem {
       if (i < 2) this.warmupTargets.push(mesh);
     }
 
-    // 4. 64 Zero-G Ionized Warp Streaks along outer corridor (|x| >= 16.5)
     const streakGeo = new THREE.BoxGeometry(0.16, 0.12, 1.0);
     const streakMat = new THREE.MeshBasicMaterial({
       color: 0xffffff,
@@ -2729,13 +2862,13 @@ export class EnvironmentSystem {
       opacity: 0.85,
       toneMapped: false,
     });
-    this.act2StreakInst = new THREE.InstancedMesh(streakGeo, streakMat, ACT2_STREAK_COUNT);
-    this.act2StreakInst.name = 'Act2IonizedWarpStreaks';
-    this.act2StreakInst.frustumCulled = false;
+    this.act3StreakInst = new THREE.InstancedMesh(streakGeo, streakMat, ACT3_STREAK_COUNT);
+    this.act3StreakInst.name = 'Act3IonizedWarpStreaks';
+    this.act3StreakInst.frustumCulled = false;
     const tealStreak = new THREE.Color(0x34f5c5);
     const violetStreak = new THREE.Color(0xc084fc);
 
-    for (let i = 0; i < ACT2_STREAK_COUNT; i++) {
+    for (let i = 0; i < ACT3_STREAK_COUNT; i++) {
       const side = i % 2 === 0 ? -1 : 1;
       const r1 = ((i * 43 + 17) % 100) / 100;
       const r2 = ((i * 67 + 31) % 100) / 100;
@@ -2749,44 +2882,43 @@ export class EnvironmentSystem {
         speedMult: i % 3 === 0 ? 1.55 + r2 * 0.55 : 0.72 + r1 * 0.35,
         length: 2.0 + r3 * 3.2,
       };
-      this.act2Streaks.push(state);
+      this.act3Streaks.push(state);
       this.dummy.position.set(state.x, state.y, state.z);
       this.dummy.rotation.set(0, 0, 0);
       this.dummy.scale.set(1, 1, state.length);
       this.dummy.updateMatrix();
-      this.act2StreakInst.setMatrixAt(i, this.dummy.matrix);
-      this.act2StreakInst.setColorAt(i, i % 2 === 0 ? tealStreak : violetStreak);
+      this.act3StreakInst.setMatrixAt(i, this.dummy.matrix);
+      this.act3StreakInst.setColorAt(i, i % 2 === 0 ? tealStreak : violetStreak);
     }
-    this.act2StreakInst.instanceMatrix.needsUpdate = true;
-    if (this.act2StreakInst.instanceColor) this.act2StreakInst.instanceColor.needsUpdate = true;
-    this.act2Group.add(this.act2StreakInst);
-    this.warmupTargets.push(this.act2StreakInst);
+    this.act3StreakInst.instanceMatrix.needsUpdate = true;
+    if (this.act3StreakInst.instanceColor) this.act3StreakInst.instanceColor.needsUpdate = true;
+    this.act3Group.add(this.act3StreakInst);
+    this.warmupTargets.push(this.act3StreakInst);
 
-    // 5. Soft Turquoise & Violet Volumetric Nebula Rays Outside Central Corridor
     const rayGeo = new THREE.CylinderGeometry(0.5, 5.8, 56, 16, 1, true);
     rayGeo.translate(0, -28, 0);
-    const act2Rays: Array<{ x: number; y: number; z: number; tiltZ: number; color: number }> = [
+    const act3Rays: Array<{ x: number; y: number; z: number; tiltZ: number; color: number }> = [
       { x: -46, y: 26, z: -64, tiltZ: 0.44, color: 0x2be0c8 },
       { x: -34, y: 24, z: -124, tiltZ: 0.36, color: 0xa855f7 },
       { x: 34, y: 24, z: -88, tiltZ: -0.36, color: 0x2be0c8 },
       { x: 46, y: 26, z: -148, tiltZ: -0.44, color: 0xc084fc },
     ];
-    for (const cfg of act2Rays) {
+    for (const cfg of act3Rays) {
       const mat = this.createVolumetricBeamMaterial(cfg.color, 0.075, false);
       const ray = new THREE.Mesh(rayGeo, mat);
       ray.position.set(cfg.x, cfg.y, cfg.z);
       ray.rotation.z = cfg.tiltZ;
       ray.renderOrder = -3;
-      this.act2Group.add(ray);
+      this.act3Group.add(ray);
       this.warmupTargets.push(ray);
     }
   }
 
-  private buildAct3Citadel(): void {
+  private buildAct4Citadel(): void {
     // 1. 2K Seamless Scrolling PBR Armored Dreadnought Dorsal Trench Hull (y = -11.4)
     const hullGeo = new THREE.PlaneGeometry(42, 290, 1, 1);
     hullGeo.rotateX(-Math.PI * 0.5);
-    this.act3HullMat = new THREE.MeshStandardMaterial({
+    this.act4HullMat = new THREE.MeshStandardMaterial({
       color: 0xdcc8c4,
       metalness: 0.46,
       roughness: 0.68,
@@ -2797,22 +2929,16 @@ export class EnvironmentSystem {
       transparent: true,
       opacity: 0.99,
     });
-    this.act3HullMat.customProgramCacheKey = () => 'act3_hull_far_fade';
-    this.act3HullMat.onBeforeCompile = (shader) => {
+    this.act4HullMat.customProgramCacheKey = () => 'act4_hull_far_fade';
+    this.act4HullMat.onBeforeCompile = (shader) => {
       shader.vertexShader = shader.vertexShader
-        .replace(
-          '#include <common>',
-          '#include <common>\nvarying float vHullWorldZ;'
-        )
+        .replace('#include <common>', '#include <common>\nvarying float vHullWorldZ;')
         .replace(
           '#include <begin_vertex>',
           '#include <begin_vertex>\nvHullWorldZ = (modelMatrix * vec4( transformed, 1.0 )).z;'
         );
       shader.fragmentShader = shader.fragmentShader
-        .replace(
-          '#include <common>',
-          '#include <common>\nvarying float vHullWorldZ;'
-        )
+        .replace('#include <common>', '#include <common>\nvarying float vHullWorldZ;')
         .replace(
           '#include <dithering_fragment>',
           `float hullFarFade = smoothstep(-255.0, -155.0, vHullWorldZ);
@@ -2822,15 +2948,14 @@ export class EnvironmentSystem {
           #include <dithering_fragment>`
         );
     };
-    const hullDeck = new THREE.Mesh(hullGeo, this.act3HullMat);
-    hullDeck.name = 'Act3DreadnoughtHullPbrDeck';
+    const hullDeck = new THREE.Mesh(hullGeo, this.act4HullMat);
+    hullDeck.name = 'Act4DreadnoughtHullPbrDeck';
     hullDeck.position.set(0, -11.4, -116);
     hullDeck.renderOrder = -12;
-    this.act3Group.add(hullDeck);
+    this.act4Group.add(hullDeck);
     this.warmupTargets.push(hullDeck);
 
-    // Armored flanking side warship wing decks & crimson containment rails (grounding flak pylons & keel piers)
-    this.act3SideDeckMat = new THREE.MeshStandardMaterial({
+    this.act4SideDeckMat = new THREE.MeshStandardMaterial({
       color: 0x1b1113,
       metalness: 0.22,
       roughness: 0.84,
@@ -2841,22 +2966,16 @@ export class EnvironmentSystem {
       transparent: true,
       opacity: 0.99,
     });
-    this.act3SideDeckMat.customProgramCacheKey = () => 'act3_side_far_fade';
-    this.act3SideDeckMat.onBeforeCompile = (shader) => {
+    this.act4SideDeckMat.customProgramCacheKey = () => 'act4_side_far_fade';
+    this.act4SideDeckMat.onBeforeCompile = (shader) => {
       shader.vertexShader = shader.vertexShader
-        .replace(
-          '#include <common>',
-          '#include <common>\nvarying float vSideWorldZ;'
-        )
+        .replace('#include <common>', '#include <common>\nvarying float vSideWorldZ;')
         .replace(
           '#include <begin_vertex>',
           '#include <begin_vertex>\nvSideWorldZ = (modelMatrix * vec4( transformed, 1.0 )).z;'
         );
       shader.fragmentShader = shader.fragmentShader
-        .replace(
-          '#include <common>',
-          '#include <common>\nvarying float vSideWorldZ;'
-        )
+        .replace('#include <common>', '#include <common>\nvarying float vSideWorldZ;')
         .replace(
           '#include <dithering_fragment>',
           `float sideFarFade = smoothstep(-255.0, -155.0, vSideWorldZ);
@@ -2886,17 +3005,16 @@ export class EnvironmentSystem {
       emissiveIntensity: 0.55,
     });
     for (const side of [-1, 1]) {
-      const wingDeck = new THREE.Mesh(wingDeckGeo, this.act3SideDeckMat);
+      const wingDeck = new THREE.Mesh(wingDeckGeo, this.act4SideDeckMat);
       wingDeck.position.set(side * 46.2, -12.12, -116);
       wingDeck.renderOrder = -12;
       const guard = new THREE.Mesh(railGuardGeo, railGuardMat);
       guard.position.set(side * 21.2, -11.0, -116);
-      this.act3Group.add(wingDeck, guard);
+      this.act4Group.add(wingDeck, guard);
     }
 
-    // 2. Codex 2K Transparent Warship Superstructure Layers: Keel Arches + Flak Pylons + Dual-Depth Bastions
     const unitPlaneGeo = new THREE.PlaneGeometry(1, 1, 1, 1);
-    this.act3KeelArchMat = this.createMatteLayerMaterial({
+    this.act4KeelArchMat = this.createMatteLayerMaterial({
       tint: 0xf0dada,
       hazeColor: 0x380f14,
       hazeStrength: 0.34,
@@ -2904,7 +3022,7 @@ export class EnvironmentSystem {
       nearStart: 2.2,
       nearEnd: 12.2,
     });
-    this.act3FlakPylonMat = this.createMatteLayerMaterial({
+    this.act4FlakPylonMat = this.createMatteLayerMaterial({
       tint: 0xf2e2e2,
       hazeColor: 0x380f14,
       hazeStrength: 0.26,
@@ -2912,7 +3030,7 @@ export class EnvironmentSystem {
       nearStart: 2.5,
       nearEnd: 12.8,
     });
-    this.act3BastionMatA = this.createMatteLayerMaterial({
+    this.act4BastionMatA = this.createMatteLayerMaterial({
       tint: 0xe6d2d2,
       hazeColor: 0x380f14,
       hazeStrength: 0.36,
@@ -2921,7 +3039,7 @@ export class EnvironmentSystem {
       nearEnd: 10.5,
       bottomFeather: 0.0,
     });
-    this.act3BastionMatB = this.createMatteLayerMaterial({
+    this.act4BastionMatB = this.createMatteLayerMaterial({
       tint: 0xe6d2d2,
       hazeColor: 0x380f14,
       hazeStrength: 0.36,
@@ -2930,7 +3048,7 @@ export class EnvironmentSystem {
       nearEnd: 10.5,
       bottomFeather: 0.0,
     });
-    this.act3FarBastionMatA = this.createMatteLayerMaterial({
+    this.act4FarBastionMatA = this.createMatteLayerMaterial({
       tint: 0xc9a3a3,
       hazeColor: 0x380f14,
       hazeStrength: 0.62,
@@ -2939,7 +3057,7 @@ export class EnvironmentSystem {
       nearEnd: 8.0,
       bottomFeather: 0.16,
     });
-    this.act3FarBastionMatB = this.createMatteLayerMaterial({
+    this.act4FarBastionMatB = this.createMatteLayerMaterial({
       tint: 0xc9a3a3,
       hazeColor: 0x380f14,
       hazeStrength: 0.62,
@@ -2949,17 +3067,16 @@ export class EnvironmentSystem {
       bottomFeather: 0.16,
     });
 
-    // 2A. 5 Monumental Overhead Dreadnought Keel Gantry Arches (grounded cleanly on side warship decks)
-    const archSpanZ = ACT3_ARCH_COUNT * 58;
-    for (let i = 0; i < ACT3_ARCH_COUNT; i++) {
+    const archSpanZ = ACT4_ARCH_COUNT * 58;
+    for (let i = 0; i < ACT4_ARCH_COUNT; i++) {
       const z = -i * 58 - 18;
-      const archMesh = new THREE.Mesh(unitPlaneGeo, this.act3KeelArchMat);
-      archMesh.name = `Act3KeelArch_${i}`;
+      const archMesh = new THREE.Mesh(unitPlaneGeo, this.act4KeelArchMat);
+      archMesh.name = `Act4KeelArch_${i}`;
       archMesh.position.set(0, 7.1, z);
       archMesh.scale.set(66, 37.125, 1);
       archMesh.renderOrder = -4;
-      this.act3Group.add(archMesh);
-      this.act3ScrollingProps.push({
+      this.act4Group.add(archMesh);
+      this.act4ScrollingProps.push({
         mesh: archMesh,
         x: 0,
         y: 7.1,
@@ -2971,7 +3088,6 @@ export class EnvironmentSystem {
       if (i === 0) this.warmupTargets.push(archMesh);
     }
 
-    // 2B. 12 Near-Trench Heavy Anti-Air Flak Turret Pylons bolted onto warship wing decks
     const flakCount = 12;
     const flakSpanZ = (flakCount / 2) * 44;
     for (let i = 0; i < flakCount; i++) {
@@ -2983,13 +3099,13 @@ export class EnvironmentSystem {
       const h = w * 1.5;
       const y = -11.4 + h * 0.5;
       const z = -pairIdx * 44 - (side > 0 ? 22 : 4);
-      const mesh = new THREE.Mesh(unitPlaneGeo, this.act3FlakPylonMat);
+      const mesh = new THREE.Mesh(unitPlaneGeo, this.act4FlakPylonMat);
       mesh.position.set(x, y, z);
       mesh.rotation.y = side * -0.14;
       mesh.scale.set(side < 0 ? w : -w, h, 1);
       mesh.renderOrder = -4;
-      this.act3Group.add(mesh);
-      this.act3ScrollingProps.push({
+      this.act4Group.add(mesh);
+      this.act4ScrollingProps.push({
         mesh,
         x,
         y,
@@ -3001,7 +3117,6 @@ export class EnvironmentSystem {
       if (i === 0) this.warmupTargets.push(mesh);
     }
 
-    // 2C. 14 Mid-Canyon Dreadnought Citadel Bastions & Furnace Towers (x = ±46..63)
     const midCount = 14;
     const midSpanZ = (midCount / 2) * 38;
     for (let i = 0; i < midCount; i++) {
@@ -3010,7 +3125,7 @@ export class EnvironmentSystem {
       const rA = ((i * 73 + 19) % 100) / 100;
       const rB = ((i * 37 + 53) % 100) / 100;
       const useB = i % 3 === 1 || i % 4 === 2;
-      const mat = useB ? this.act3BastionMatB : this.act3BastionMatA;
+      const mat = useB ? this.act4BastionMatB : this.act4BastionMatA;
       const x = side * (46 + rA * 17);
       const w = 34 + rB * 9;
       const h = w * 1.5;
@@ -3022,8 +3137,8 @@ export class EnvironmentSystem {
       mesh.rotation.y = side * -0.16;
       mesh.scale.set(w * flip, h, 1);
       mesh.renderOrder = -4;
-      this.act3Group.add(mesh);
-      this.act3ScrollingProps.push({
+      this.act4Group.add(mesh);
+      this.act4ScrollingProps.push({
         mesh,
         x,
         y,
@@ -3035,7 +3150,6 @@ export class EnvironmentSystem {
       if (i < 2) this.warmupTargets.push(mesh);
     }
 
-    // 2D. 14 Distant Dreadnought Fleet Superstructure Towers (x = ±78..112)
     const farCount = 14;
     const farSpanZ = (farCount / 2) * 40;
     for (let i = 0; i < farCount; i++) {
@@ -3044,7 +3158,7 @@ export class EnvironmentSystem {
       const rA = ((i * 61 + 29) % 100) / 100;
       const rB = ((i * 89 + 11) % 100) / 100;
       const useB = (i + 1) % 2 === 0;
-      const mat = useB ? this.act3FarBastionMatB : this.act3FarBastionMatA;
+      const mat = useB ? this.act4FarBastionMatB : this.act4FarBastionMatA;
       const x = side * (78 + rA * 34);
       const w = 48 + rB * 15;
       const h = w * 1.5;
@@ -3056,8 +3170,8 @@ export class EnvironmentSystem {
       mesh.rotation.y = side * -0.18;
       mesh.scale.set(w * flip, h, 1);
       mesh.renderOrder = -4;
-      this.act3Group.add(mesh);
-      this.act3ScrollingProps.push({
+      this.act4Group.add(mesh);
+      this.act4ScrollingProps.push({
         mesh,
         x,
         y,
@@ -3069,7 +3183,6 @@ export class EnvironmentSystem {
       if (i < 2) this.warmupTargets.push(mesh);
     }
 
-    // 3. Upward Sweeping Volumetric Anti-Air Searchlight Cones
     const coneGeo = new THREE.CylinderGeometry(4.4, 0.28, 44, 16, 1, true);
     coneGeo.translate(0, 22, 0);
 
@@ -3086,7 +3199,7 @@ export class EnvironmentSystem {
       const cone = new THREE.Mesh(coneGeo, mat);
       cone.position.set(baseX, -11.4, baseZ);
       cone.renderOrder = -3;
-      this.act3Group.add(cone);
+      this.act4Group.add(cone);
       this.warmupTargets.push(cone);
       this.searchlights.push({
         mesh: cone,
@@ -3098,7 +3211,6 @@ export class EnvironmentSystem {
       });
     }
 
-    // 4. 72 Ascending Molten Furnace Ember Streaks flanking the dreadnought trench (|x| >= 15.5)
     const emberGeo = new THREE.BoxGeometry(0.14, 0.14, 1.0);
     const emberMat = new THREE.MeshBasicMaterial({
       color: 0xffffff,
@@ -3106,13 +3218,13 @@ export class EnvironmentSystem {
       opacity: 0.88,
       toneMapped: false,
     });
-    this.act3EmberInst = new THREE.InstancedMesh(emberGeo, emberMat, ACT3_EMBER_COUNT);
-    this.act3EmberInst.name = 'Act3FurnaceEmbers';
-    this.act3EmberInst.frustumCulled = false;
+    this.act4EmberInst = new THREE.InstancedMesh(emberGeo, emberMat, ACT4_EMBER_COUNT);
+    this.act4EmberInst.name = 'Act4FurnaceEmbers';
+    this.act4EmberInst.frustumCulled = false;
     const moltenAmber = new THREE.Color(0xffaa3b);
     const crimsonSpark = new THREE.Color(0xff4757);
 
-    for (let i = 0; i < ACT3_EMBER_COUNT; i++) {
+    for (let i = 0; i < ACT4_EMBER_COUNT; i++) {
       const side = i % 2 === 0 ? -1 : 1;
       const r1 = ((i * 53 + 11) % 100) / 100;
       const r2 = ((i * 79 + 29) % 100) / 100;
@@ -3128,18 +3240,18 @@ export class EnvironmentSystem {
         vy: 1.8 + r1 * 2.6,
         bobPhase: r2 * Math.PI * 2,
       };
-      this.act3Embers.push(state);
+      this.act4Embers.push(state);
       this.dummy.position.set(state.x, state.y, state.z);
       this.dummy.rotation.set(0, 0, 0);
       this.dummy.scale.set(1, 1, state.length);
       this.dummy.updateMatrix();
-      this.act3EmberInst.setMatrixAt(i, this.dummy.matrix);
-      this.act3EmberInst.setColorAt(i, i % 3 === 0 ? crimsonSpark : moltenAmber);
+      this.act4EmberInst.setMatrixAt(i, this.dummy.matrix);
+      this.act4EmberInst.setColorAt(i, i % 3 === 0 ? crimsonSpark : moltenAmber);
     }
-    this.act3EmberInst.instanceMatrix.needsUpdate = true;
-    if (this.act3EmberInst.instanceColor) this.act3EmberInst.instanceColor.needsUpdate = true;
-    this.act3Group.add(this.act3EmberInst);
-    this.warmupTargets.push(this.act3EmberInst);
+    this.act4EmberInst.instanceMatrix.needsUpdate = true;
+    if (this.act4EmberInst.instanceColor) this.act4EmberInst.instanceColor.needsUpdate = true;
+    this.act4Group.add(this.act4EmberInst);
+    this.warmupTargets.push(this.act4EmberInst);
   }
 
   private createCrossedStreakGeometry(): THREE.BufferGeometry {
@@ -3204,24 +3316,33 @@ export class EnvironmentSystem {
   }
 
   private initDustParticles(): void {
-    const dustColor = new THREE.Color(0x9be7ff);
+    const dustColor = DUST_ACT_COLORS[0];
     for (let i = 0; i < DUST_COUNT; i++) {
       const angle = (i * 2.39996) % (Math.PI * 2);
-      const radius = 3.5 + ((i * 37) % 100) / 100 * 24;
+      const rA = ((i * 37 + 11) % 100) / 100;
+      const rB = ((i * 13 + 29) % 100) / 100;
+      const rC = ((i * 29 + 41) % 100) / 100;
+      const rD = ((i * 53 + 7) % 100) / 100;
+      const isFastNeedle = i % 5 >= 3;
+      const radius = isFastNeedle ? 10 + rA * 24 : 14 + rA * 44;
       const x = Math.cos(angle) * radius * 1.25;
       const y = Math.sin(angle) * radius * 0.72;
       const z = -((i * 19) % 210) + 18;
+      const speedMult = isFastNeedle ? 1.45 + rB * 0.90 : 0.55 + rB * 0.40;
+      const thickness = isFastNeedle ? 0.042 + rC * 0.036 : 0.055 + rC * 0.055;
+      const baseLength = isFastNeedle ? 1.7 + rD * 2.1 : 0.8 + rD * 1.0;
+
       this.dustParticles.push({
         x,
         y,
         z,
-        speedMult: 0.85 + ((i * 13) % 100) / 100 * 0.65,
-        thickness: 0.06 + ((i * 29) % 100) / 100 * 0.08,
-        baseLength: 1.1 + ((i * 53) % 100) / 100 * 1.6,
+        speedMult,
+        thickness,
+        baseLength,
       });
       this.dummy.position.set(x, y, z);
       this.dummy.rotation.set(0, 0, 0);
-      this.dummy.scale.set(0.08, 0.08, 2.0);
+      this.dummy.scale.set(thickness, thickness, baseLength);
       this.dummy.updateMatrix();
       this.dustInst.setMatrixAt(i, this.dummy.matrix);
       this.dustInst.setColorAt(i, dustColor);
@@ -3277,7 +3398,8 @@ export class EnvironmentSystem {
       }
       this.dummy.position.set(tr.x, tr.y, tr.z);
       this.dummy.rotation.set(0, 0, 0);
-      this.dummy.scale.set(1, 1, tr.length);
+      const th = tr.thickness ?? 1;
+      this.dummy.scale.set(th, th, tr.length);
       this.dummy.updateMatrix();
       inst.setMatrixAt(i, this.dummy.matrix);
     }
@@ -3285,6 +3407,18 @@ export class EnvironmentSystem {
   }
 
   private updateAct1(dt: number, elapsed: number, speed: number): void {
+    this.advanceCorridorStreaks(
+      this.act1Slipstreams,
+      this.act1SlipstreamInst,
+      dt,
+      elapsed,
+      speed,
+      24,
+      270
+    );
+  }
+
+  private updateAct2Metropolis(dt: number, elapsed: number, speed: number): void {
     this.cloudSeaMat.uniforms.uTime.value = elapsed;
     this.cloudSeaMat.uniforms.uScrollZ.value = this.scrollDistance;
     this.terraceDeckMat.uniforms.uTime.value = elapsed;
@@ -3297,7 +3431,7 @@ export class EnvironmentSystem {
     }
 
     // Scroll terrace support pylons
-    for (let i = 0; i < ACT1_PYLON_COUNT; i++) {
+    for (let i = 0; i < ACT2_METRO_PYLON_COUNT; i++) {
       this.pylonZ[i] += speed * dt;
       if (this.pylonZ[i] > 28) {
         this.pylonZ[i] -= 280;
@@ -3311,17 +3445,17 @@ export class EnvironmentSystem {
     }
     this.pylonInst.instanceMatrix.needsUpdate = true;
 
-    this.advanceScrollingProps(this.act1ScrollingProps, dt, elapsed, speed);
-    this.advanceCorridorStreaks(this.act1Traffic, this.act1TrafficInst, dt, elapsed, speed, 24, 270);
+    this.advanceScrollingProps(this.metroScrollingProps, dt, elapsed, speed);
+    this.advanceCorridorStreaks(this.metroTraffic, this.metroTrafficInst, dt, elapsed, speed, 24, 270);
   }
 
-  private updateAct2(dt: number, elapsed: number, speed: number): void {
+  private updateAct3Nebula(dt: number, elapsed: number, speed: number): void {
     this.megalithMat.uniforms.uTime.value = elapsed;
     this.plasmaRiverMat.uniforms.uTime.value = elapsed;
     this.plasmaRiverMat.uniforms.uScrollZ.value = this.scrollDistance;
 
     const rockSpeed = speed * 0.85;
-    for (let i = 0; i < ACT2_DEBRIS_COUNT; i++) {
+    for (let i = 0; i < ACT3_DEBRIS_COUNT; i++) {
       const m = this.megaliths[i];
       m.z += rockSpeed * dt;
       if (m.z > 28) {
@@ -3345,19 +3479,19 @@ export class EnvironmentSystem {
     this.megalithInst.instanceMatrix.needsUpdate = true;
     this.crystalShardInst.instanceMatrix.needsUpdate = true;
 
-    this.advanceScrollingProps(this.act2ScrollingProps, dt, elapsed, speed);
-    this.advanceCorridorStreaks(this.act2Streaks, this.act2StreakInst, dt, elapsed, speed, 24, 270);
+    this.advanceScrollingProps(this.act3ScrollingProps, dt, elapsed, speed);
+    this.advanceCorridorStreaks(this.act3Streaks, this.act3StreakInst, dt, elapsed, speed, 24, 270);
   }
 
-  private updateAct3(dt: number, elapsed: number, speed: number): void {
+  private updateAct4Citadel(dt: number, elapsed: number, speed: number): void {
     // Scroll 2K PBR dreadnought hull textures at exact 1:1 world speed (7 tiles across 290m deck)
     const hullUvOffset = (this.scrollDistance * 7) / 290;
-    for (let i = 0; i < this.act3HullPbrTextures.length; i++) {
-      this.act3HullPbrTextures[i].offset.y = hullUvOffset % 1;
+    for (let i = 0; i < this.act4HullPbrTextures.length; i++) {
+      this.act4HullPbrTextures[i].offset.y = hullUvOffset % 1;
     }
 
-    this.advanceScrollingProps(this.act3ScrollingProps, dt, elapsed, speed);
-    this.advanceCorridorStreaks(this.act3Embers, this.act3EmberInst, dt, elapsed, speed, 24, 270);
+    this.advanceScrollingProps(this.act4ScrollingProps, dt, elapsed, speed);
+    this.advanceCorridorStreaks(this.act4Embers, this.act4EmberInst, dt, elapsed, speed, 24, 270);
 
     // Sweep searchlight cones upward and across the trench
     for (const s of this.searchlights) {
@@ -3371,13 +3505,8 @@ export class EnvironmentSystem {
   private updateDustParticles(dt: number, speed: number): void {
     if (!this.dustInst.visible) return;
 
-    const stretch = THREE.MathUtils.clamp(speed / 28, 0.7, 3.2);
-    const dustColors = [
-      new THREE.Color(0x88e8ff),
-      new THREE.Color(0xb8fff0),
-      new THREE.Color(0xffb56b),
-    ];
-    const tint = dustColors[Math.max(0, Math.min(2, this.currentAct - 1))];
+    const stretch = THREE.MathUtils.clamp(speed / 26, 0.75, 3.6);
+    const tint = DUST_ACT_COLORS[Math.max(0, Math.min(3, this.currentAct - 1))];
 
     for (let i = 0; i < DUST_COUNT; i++) {
       const p = this.dustParticles[i];

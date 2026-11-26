@@ -3,6 +3,7 @@ export type ModelKey =
   | 'ship_opus'
   | 'ship_morph'
   | 'ship_aero'
+  | 'boss_act1_skywing'
   | 'boss_act1_mech'
   | 'boss_act2_crab'
   | 'boss_act3_carrier'
@@ -16,7 +17,7 @@ export type ModelKey =
   | 'prop_gate';
 
 export type ShipId = 'astra' | 'opus' | 'morph' | 'aero';
-export type BossId = 'act1' | 'act2' | 'act3';
+export type BossId = 'act1' | 'act2' | 'act3' | 'act4';
 
 export interface OrientationOffset {
   yaw: number;
@@ -76,7 +77,15 @@ export interface BossPartSpec {
   labelZh: string;
   hp: number;
   hitRadius: number;
-  weaponEffectKey: 'leftCannon' | 'rightCannon' | 'leftClaw' | 'rightClaw' | 'dorsalTurret' | 'bowCrane';
+  weaponEffectKey:
+    | 'leftWingPod'
+    | 'rightWingPod'
+    | 'leftCannon'
+    | 'rightCannon'
+    | 'leftClaw'
+    | 'rightClaw'
+    | 'dorsalTurret'
+    | 'bowCrane';
 }
 
 export interface BossConfig {
@@ -123,24 +132,39 @@ export const MODEL_ASSETS: Record<ModelKey, ModelAssetSpec> = {
     targetSize: 3.0,
     orientation: { yaw: Math.PI },
   },
+  boss_act1_skywing: {
+    key: 'boss_act1_skywing',
+    url: './models/enemy_foldwing.glb',
+    bootLog: '[INTEL] 第 1 战区高空指挥目标特征已载入：云穹折翼指挥舰',
+    targetSize: 12.4,
+    orientation: { yaw: 0 },
+    stripNodes: [
+      'LandingGear_Main_L',
+      'LandingGear_Main_R',
+      'LandingGear_Tail',
+      'Wheel_Main_L',
+      'Wheel_Main_R',
+      'Wheel_Tail',
+    ],
+  },
   boss_act1_mech: {
     key: 'boss_act1_mech',
     url: './models/boss_act1_mech.glb',
-    bootLog: '[INTEL] 第 1 战区高危目标特征已载入：铁幕四足重炮机甲',
+    bootLog: '[INTEL] 第 2 战区高危目标特征已载入：铁幕四足重炮机甲',
     targetSize: 9.5,
     orientation: { yaw: 0 },
   },
   boss_act2_crab: {
     key: 'boss_act2_crab',
     url: './models/boss_act2_crab.glb',
-    bootLog: '[INTEL] 第 2 战区高危目标特征已载入：深渊巨钳螃蟹机甲',
+    bootLog: '[INTEL] 第 3 战区高危目标特征已载入：深渊巨钳螃蟹机甲',
     targetSize: 10.5,
     orientation: { yaw: 0 },
   },
   boss_act3_carrier: {
     key: 'boss_act3_carrier',
     url: './models/boss_act3_carrier.glb',
-    bootLog: '[INTEL] 第 3 战区旗舰级目标特征已载入：龙骨桁架星际母舰',
+    bootLog: '[INTEL] 第 4 战区旗舰级目标特征已载入：龙骨桁架星际母舰',
     targetSize: 14.5,
     orientation: { yaw: 0 },
     stripNodes: ['Stand_DisplayBase', 'Stand_Pylons'],
@@ -344,13 +368,44 @@ export const BOSSES: Record<BossId, BossConfig> = {
   act1: {
     id: 'act1',
     act: 1,
+    modelKey: 'boss_act1_skywing',
+    nameZh: '云穹折翼指挥舰',
+    codeName: 'SKYWARD VALKYRIE',
+    subtitle: '第 1 幕关底 · 平流层空优突击指挥舰',
+    threatTag: '威胁 III 级 · 苍穹指挥舰',
+    tacticalIntel: '战术弱点：优先击毁左右折翼涡轮核，瓦解高速扇形电浆齐射',
+    maxHp: 820,
+    accentColor: '#38e8ff',
+    accentHex: 0x38e8ff,
+    destructibleParts: [
+      {
+        id: 'wing_pod_l',
+        nodeName: 'BossWingPod_L',
+        labelZh: '左折翼涡轮核',
+        hp: 200,
+        hitRadius: 2.35,
+        weaponEffectKey: 'leftWingPod',
+      },
+      {
+        id: 'wing_pod_r',
+        nodeName: 'BossWingPod_R',
+        labelZh: '右折翼涡轮核',
+        hp: 200,
+        hitRadius: 2.35,
+        weaponEffectKey: 'rightWingPod',
+      },
+    ],
+  },
+  act2: {
+    id: 'act2',
+    act: 2,
     modelKey: 'boss_act1_mech',
     nameZh: '铁幕四足重炮机甲',
     codeName: 'IRONCLAD MK-IV',
-    subtitle: '第 1 幕关底 · 轨道城重装防卫要塞',
+    subtitle: '第 2 幕关底 · 轨道城重装防卫要塞',
     threatTag: '威胁 IV 级 · 重装要塞',
     tacticalIntel: '战术弱点：优先摧毁左右肩部重炮，瓦解交叉火力封锁',
-    maxHp: 950,
+    maxHp: 1120,
     accentColor: '#ff9f43',
     accentHex: 0xff9f43,
     destructibleParts: [
@@ -358,7 +413,7 @@ export const BOSSES: Record<BossId, BossConfig> = {
         id: 'cannon_l',
         nodeName: 'Cannon_L',
         labelZh: '左肩重炮',
-        hp: 230,
+        hp: 250,
         hitRadius: 1.9,
         weaponEffectKey: 'leftCannon',
       },
@@ -366,22 +421,22 @@ export const BOSSES: Record<BossId, BossConfig> = {
         id: 'cannon_r',
         nodeName: 'Cannon_R',
         labelZh: '右肩重炮',
-        hp: 230,
+        hp: 250,
         hitRadius: 1.9,
         weaponEffectKey: 'rightCannon',
       },
     ],
   },
-  act2: {
-    id: 'act2',
-    act: 2,
+  act3: {
+    id: 'act3',
+    act: 3,
     modelKey: 'boss_act2_crab',
     nameZh: '深渊巨钳螃蟹机甲',
     codeName: 'ABYSSAL MK-V',
-    subtitle: '第 2 幕关底 · 碎星门廊电磁风暴守卫',
+    subtitle: '第 3 幕关底 · 碎星门廊电磁风暴守卫',
     threatTag: '威胁 V 级 · 裂隙机兵',
     tacticalIntel: '战术弱点：集中火力击碎双侧电弧巨钳，阻断高能等离子齐射',
-    maxHp: 1550,
+    maxHp: 1650,
     accentColor: '#00f0ff',
     accentHex: 0x00f0ff,
     destructibleParts: [
@@ -389,7 +444,7 @@ export const BOSSES: Record<BossId, BossConfig> = {
         id: 'claw_l',
         nodeName: 'Claw_L',
         labelZh: '左电弧巨钳',
-        hp: 350,
+        hp: 360,
         hitRadius: 2.3,
         weaponEffectKey: 'leftClaw',
       },
@@ -397,22 +452,22 @@ export const BOSSES: Record<BossId, BossConfig> = {
         id: 'claw_r',
         nodeName: 'Claw_R',
         labelZh: '右电弧巨钳',
-        hp: 350,
+        hp: 360,
         hitRadius: 2.3,
         weaponEffectKey: 'rightClaw',
       },
     ],
   },
-  act3: {
-    id: 'act3',
-    act: 3,
+  act4: {
+    id: 'act4',
+    act: 4,
     modelKey: 'boss_act3_carrier',
     nameZh: '龙骨桁架星际母舰',
     codeName: 'OVERLORD FLAGSHIP',
-    subtitle: '第 3 幕终极决战 · 深空封锁舰队旗舰',
+    subtitle: '第 4 幕终极决战 · 深空封锁舰队旗舰',
     threatTag: '终极威胁 · 封锁旗舰',
     tacticalIntel: '战术弱点：优先击破背脊防空主炮与舰首投射臂，瘫痪舰载机投送',
-    maxHp: 2450,
+    maxHp: 2550,
     accentColor: '#ff4757',
     accentHex: 0xff4757,
     destructibleParts: [
@@ -420,7 +475,7 @@ export const BOSSES: Record<BossId, BossConfig> = {
         id: 'dorsal_turret',
         nodeName: 'DorsalTurret',
         labelZh: '背脊防空主炮',
-        hp: 480,
+        hp: 490,
         hitRadius: 2.5,
         weaponEffectKey: 'dorsalTurret',
       },
@@ -428,7 +483,7 @@ export const BOSSES: Record<BossId, BossConfig> = {
         id: 'bow_crane',
         nodeName: 'BowCraneArms',
         labelZh: '舰首投射臂',
-        hp: 430,
+        hp: 440,
         hitRadius: 2.6,
         weaponEffectKey: 'bowCrane',
       },
@@ -449,7 +504,16 @@ export interface ActTheme {
 export const ACT_THEMES: ActTheme[] = [
   {
     act: 1,
-    titleZh: 'ACT I · 轨道城峡谷',
+    titleZh: 'ACT I · 平流层云海空域',
+    subtitle: 'STRATOSPHERE CLOUDFRONT',
+    fogColor: 0x0a1e3e,
+    bgColor: 0x07152e,
+    gridColor: 0x164e63,
+    accentColor: 0x38e8ff,
+  },
+  {
+    act: 2,
+    titleZh: 'ACT II · 轨道城峡谷',
     subtitle: 'ORBITAL METROPOLIS CORRIDOR',
     fogColor: 0x0d2847,
     bgColor: 0x0a1e38,
@@ -457,8 +521,8 @@ export const ACT_THEMES: ActTheme[] = [
     accentColor: 0x00f0ff,
   },
   {
-    act: 2,
-    titleZh: 'ACT II · 碎星跃迁门廊',
+    act: 3,
+    titleZh: 'ACT III · 碎星跃迁门廊',
     subtitle: 'FRACTURED WARP GATEWAY',
     fogColor: 0x18133d,
     bgColor: 0x110d2e,
@@ -466,8 +530,8 @@ export const ACT_THEMES: ActTheme[] = [
     accentColor: 0xc084fc,
   },
   {
-    act: 3,
-    titleZh: 'ACT III · 龙骨母舰空域',
+    act: 4,
+    titleZh: 'ACT IV · 龙骨母舰空域',
     subtitle: 'CRIMSON DREADNOUGHT CITADEL',
     fogColor: 0x2d0f16,
     bgColor: 0x21090e,

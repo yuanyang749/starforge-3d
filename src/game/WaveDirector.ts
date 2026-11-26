@@ -41,6 +41,8 @@ export interface BossPartRuntime {
   hitRadius: number;
   destroyed: boolean;
   weaponEffectKey:
+    | 'leftWingPod'
+    | 'rightWingPod'
     | 'leftCannon'
     | 'rightCannon'
     | 'leftClaw'
@@ -65,6 +67,14 @@ export interface ActiveBoss {
   flashTimer: number;
   parts: BossPartRuntime[];
   disabledParts: Set<string>;
+  entering: boolean;
+  introElapsed: number;
+  introDuration: number;
+  introStartPos: THREE.Vector3;
+  introHoverPos: THREE.Vector3;
+  introSweepSign: -1 | 1;
+  introBurstDone: boolean;
+  introMidSparkDone: boolean;
   dying: boolean;
   deathTimer: number;
   detachQueue: THREE.Object3D[];
@@ -522,22 +532,22 @@ export class WaveDirector {
     this.envGroup.visible = true;
     this.endlessMode = true;
     this.endlessWave = 1;
-    this.currentAct = 2;
+    this.currentAct = 1;
     this.waveInAct = 1;
     this.bossScaleFactor = 1.35;
     this.gateSpawnCooldown = 4.0;
     this.boostRingTimer = 5.5;
-    this.applyActTheme(2, false);
-    return this.beginWave(2, 1);
+    this.applyActTheme(1, false);
+    return this.beginWave(1, 1);
   }
 
-  forceSpawnBoss(act: 1 | 2 | 3): WaveEvent {
+  forceSpawnBoss(act: 1 | 2 | 3 | 4): WaveEvent {
     this.clearCombatEntities();
     this.combatActive = true;
     this.envGroup.visible = true;
     this.currentAct = act;
     this.waveInAct = 3;
-    if (act >= 2) {
+    if (act >= 3) {
       this.gateSpawnCooldown = 2.0;
     }
     this.applyActTheme(act, false);
@@ -548,7 +558,7 @@ export class WaveDirector {
     if (this.phaseState !== 'awaiting_upgrade') return null;
     if (this.endlessMode) {
       this.endlessWave += 1;
-      const themeAct = ((this.endlessWave - 1) % 3) + 1;
+      const themeAct = ((this.endlessWave - 1) % 4) + 1;
       this.currentAct = themeAct;
       this.bossScaleFactor = 1 + this.endlessWave * 0.22;
       this.applyActTheme(themeAct, false);
@@ -583,10 +593,10 @@ export class WaveDirector {
       };
     }
 
-    if (this.currentAct < 3) {
+    if (this.currentAct < 4) {
       this.currentAct += 1;
       this.waveInAct = 1;
-      if (this.currentAct === 2) {
+      if (this.currentAct === 3) {
         this.gateSpawnCooldown = Math.min(this.gateSpawnCooldown, 3.5);
       }
       this.applyActTheme(this.currentAct, false);
@@ -597,7 +607,7 @@ export class WaveDirector {
     this.combatActive = false;
     return {
       type: 'campaign_victory',
-      act: 3,
+      act: 4,
       waveInAct: 3,
       endlessWave: 0,
     };
@@ -631,7 +641,7 @@ export class WaveDirector {
   private beginBossWave(act: number): WaveEvent {
     this.phaseState = 'boss_fight';
     this.waveInAct = 3;
-    const bossId: BossId = act === 1 ? 'act1' : act === 2 ? 'act2' : 'act3';
+    const bossId: BossId = act === 1 ? 'act1' : act === 2 ? 'act2' : act === 3 ? 'act3' : 'act4';
     const cfg = BOSSES[bossId];
     const inst = this.loader.acquire(cfg.modelKey, true);
     const rig = new AnimationRig(cfg.modelKey, inst.modelRoot, inst.animations, 'combat');
@@ -639,7 +649,23 @@ export class WaveDirector {
     const scale = this.bossScaleFactor;
     const scaledMaxHp = Math.round(cfg.maxHp * scale);
 
-    inst.root.position.set(0, 2.5, -145);
+    const introStartPos =
+      act === 1
+        ? new THREE.Vector3(0, 24.5, -138)
+        : act === 2
+          ? new THREE.Vector3(0, 17.5, -124)
+          : act === 3
+            ? new THREE.Vector3(-15, 7.5, -132)
+            : new THREE.Vector3(0, 5.2, -148);
+    const introHoverPos =
+      act === 4
+        ? new THREE.Vector3(0, 2.2, -40)
+        : act === 1
+          ? new THREE.Vector3(0, 2.1, -36)
+          : new THREE.Vector3(0, 1.8, -37);
+    const introSweepSign: -1 | 1 = act % 2 === 1 ? 1 : -1;
+
+    inst.root.position.copy(introStartPos);
     this.scene.add(inst.root);
 
     const parts: BossPartRuntime[] = cfg.destructibleParts.map((spec) => {
@@ -665,7 +691,8 @@ export class WaveDirector {
 
     // Collect top-most detachable part subtrees without pushing nested descendants of already-queued ancestors
     const detachQueue: THREE.Object3D[] = [];
-    const detachRegex = /leg_|cannon_|claw_|turret|fighter_|bowcranearms|dorsalturret|antenna|eye_/i;
+    const detachRegex =
+      /leg_|cannon_|claw_|turret|fighter_|bowcranearms|dorsalturret|antenna|eye_|bosswingpod|wingfold_pivot/i;
     const collectDetachable = (node: THREE.Object3D): void => {
       if (detachQueue.length >= 16) return;
       if (node !== inst.modelRoot && node.name && detachRegex.test(node.name)) {
@@ -685,15 +712,23 @@ export class WaveDirector {
       rig,
       hp: scaledMaxHp,
       maxHp: scaledMaxHp,
-      hitRadius: act === 3 ? 6.2 : 4.8,
+      hitRadius: act === 4 ? 6.2 : act === 1 ? 5.2 : 4.8,
       pos: inst.root.position,
       age: 0,
-      fireTimer: 1.8,
+      fireTimer: 1.5,
       specialTimer: 5.5,
       escortTimer: 7.5,
       flashTimer: 0,
       parts,
       disabledParts: new Set<string>(),
+      entering: true,
+      introElapsed: 0,
+      introDuration: 2.65,
+      introStartPos,
+      introHoverPos,
+      introSweepSign,
+      introBurstDone: false,
+      introMidSparkDone: false,
       dying: false,
       deathTimer: 0,
       detachQueue,
@@ -759,8 +794,8 @@ export class WaveDirector {
       }
     }
 
-    // Periodic Warp Gateway (prop_gate) in Act 2 and Act 3
-    if (this.combatActive && this.currentAct >= 2 && this.phaseState !== 'idle') {
+    // Periodic Warp Gateway (prop_gate) in Act 3 and Act 4
+    if (this.combatActive && this.currentAct >= 3 && this.phaseState !== 'idle') {
       this.gateSpawnCooldown -= dt;
       if (this.gateSpawnCooldown <= 0) {
         this.gateSpawnCooldown = 16.5;

@@ -935,8 +935,8 @@ async function runTests() {
     await assertVisibleImagesLoaded(page, 'hud-after-upgrade');
     passedChecks += 1;
 
-    // ==================== STAGE 5: Act 1/2/3 Bosses, Biomes & Part Destruction ====================
-    console.log('[e2e] Stage 5: Act 1/2/3 Bosses, Biome Differentiation & Destructible Parts...');
+    // ==================== STAGE 5: 4-Act Bosses, Slow-Mo Intro Cinema, Biomes & Part Destruction ====================
+    console.log('[e2e] Stage 5: 4-Act Bosses, Slow-Mo Intro Cinema, Biome Differentiation & Destructible Parts...');
 
     // Wait for background BGM tracks (act2, act3, boss) to finish decoding cleanly
     await page
@@ -950,18 +950,93 @@ async function runTests() {
       )
       .catch(() => {});
 
-    // Act 1 Boss & Biome sampling
-    await page.evaluate(() => window.__STARFORGE__.spawnBossNow(1));
+    // Act 1 Boss (Skyward Valkyrie) with full 3-Beat Cinema Slow-Mo Entrance!
+    await page.evaluate(() => window.__STARFORGE__.spawnBossNow(1, { playIntro: true }));
     await page.waitForFunction(
       () => {
         const s = window.__STARFORGE__.getSnapshot();
-        return s.boss && s.boss.act === 1 && !document.getElementById('boss-hud')?.hidden;
+        const ov = document.getElementById('boss-cinema-overlay');
+        return Boolean(
+          s.bossIntroActive &&
+            s.boss?.entering &&
+            ov &&
+            !ov.hidden &&
+            ov.classList.contains('is-card-visible')
+        );
       },
       null,
-      { timeout: 5000 }
+      { timeout: 4000 }
     );
     await sleep(320);
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+    const introCinemaInfo = await page.evaluate(() => {
+      const ov = document.getElementById('boss-cinema-overlay');
+      const card = document.getElementById('boss-cinema-card');
+      const r = card ? card.getBoundingClientRect() : null;
+      return {
+        snap: window.__STARFORGE__.getSnapshot(),
+        overlayHidden: ov?.hidden ?? true,
+        isActive: ov?.classList.contains('is-active') ?? false,
+        isCardVisible: ov?.classList.contains('is-card-visible') ?? false,
+        bossHudHidden: document.getElementById('boss-hud')?.hidden ?? false,
+        cinemaName: document.getElementById('boss-cinema-name')?.textContent?.trim() || '',
+        cinemaText: ov?.innerText || '',
+        cardRect: r ? { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height } : null,
+      };
+    });
+    console.log(
+      `[e2e] Boss Slow-Mo Intro Beat 2: timeScale=${introCinemaInfo.snap.timeScale}, fov=${introCinemaInfo.snap.cameraFov}, progress=${introCinemaInfo.snap.boss?.introProgress}`
+    );
+    check(
+      introCinemaInfo.snap.bossIntroActive === true && introCinemaInfo.snap.boss?.entering === true,
+      `Expected active Boss slow-mo entrance state, got ${JSON.stringify(introCinemaInfo.snap.boss)}`
+    );
+    check(
+      introCinemaInfo.snap.timeScale > 0 && introCinemaInfo.snap.timeScale < 0.45,
+      `Expected bullet-time slow-mo timeScale < 0.45 during Boss intro, got ${introCinemaInfo.snap.timeScale}`
+    );
+    check(
+      introCinemaInfo.snap.cameraFov < 56,
+      `Expected telephoto cinema FOV < 56 during Boss close-up sweep, got ${introCinemaInfo.snap.cameraFov}`
+    );
+    check(
+      !introCinemaInfo.overlayHidden && introCinemaInfo.isActive && introCinemaInfo.isCardVisible,
+      `Expected visible widescreen letterbox & title slam card during Beat 2, got ${JSON.stringify(introCinemaInfo)}`
+    );
+    check(
+      introCinemaInfo.bossHudHidden === true,
+      'Expected top #boss-hud hidden during widescreen Boss entrance Beat 2'
+    );
+    check(
+      introCinemaInfo.cinemaName.includes('云穹折翼指挥舰'),
+      `Expected Act 1 Boss cinema name 云穹折翼指挥舰, got "${introCinemaInfo.cinemaName}"`
+    );
+    await assertRectFitsViewport(introCinemaInfo.cardRect, 1440, 900, 'Boss cinema title card at 1440x900');
+    assertImmersionPurity(introCinemaInfo.cinemaText, 'boss-cinema-overlay');
+    passedChecks += 2;
+
+    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'v4_05b_boss_intro_slowmo.png') });
+    console.log('[e2e] Saved v4_05b_boss_intro_slowmo.png');
+
+    // Wait for 3-beat Boss entrance (~2.65s) to snap back cleanly into active combat
+    await page.waitForFunction(
+      () => {
+        const s = window.__STARFORGE__.getSnapshot();
+        return (
+          s.boss &&
+          s.boss.act === 1 &&
+          !s.bossIntroActive &&
+          !s.boss.entering &&
+          !document.getElementById('boss-hud')?.hidden
+        );
+      },
+      null,
+      { timeout: 6000 }
+    );
+    await sleep(320);
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+
     const act1BossInfo = await page.evaluate(() => ({
       snap: window.__STARFORGE__.getSnapshot(),
       partPills: document.querySelectorAll('#boss-parts-row .boss-part-pill').length,
@@ -972,8 +1047,13 @@ async function runTests() {
     }));
     check(
       act1BossInfo.snap.audio?.loadedBgmCount === act1BossInfo.snap.audio?.totalBgmCount &&
-        act1BossInfo.snap.audio?.activeBgm === 'boss',
-      `Expected all BGM tracks loaded and activeBgm='boss', got ${JSON.stringify(act1BossInfo.snap.audio)}`
+        act1BossInfo.snap.audio?.activeBgm === 'boss' &&
+        act1BossInfo.snap.audio?.muffled === false,
+      `Expected all BGM tracks loaded, activeBgm='boss' and muffled=false after intro, got ${JSON.stringify(act1BossInfo.snap.audio)}`
+    );
+    check(
+      act1BossInfo.snap.timeScale >= 0.95,
+      `Expected timeScale restored to ~1.0 after Boss intro, got ${act1BossInfo.snap.timeScale}`
     );
     check(
       act1BossInfo.hasBossHpGhost,
@@ -984,7 +1064,7 @@ async function runTests() {
       `Act 1 boss HUD mismatch: ${JSON.stringify(act1BossInfo)}`
     );
     check(
-      act1BossInfo.threatBadge.includes('威胁 IV 级'),
+      act1BossInfo.threatBadge.includes('威胁 III 级'),
       `Expected Act 1 #boss-hud-threat-badge, got "${act1BossInfo.threatBadge}"`
     );
     check(
@@ -1000,12 +1080,54 @@ async function runTests() {
       `Expected Act 1 Boss full-canvas meanLuma > 24, got ${act1BossFull.meanLuma.toFixed(2)}`
     );
 
-    // Act 2 Boss, Nebula Biome & Opening Warp Gate (spawns at 2.0s dt, opens at z>=-165)
+    // Act 2 Boss (Restored Orbital Metropolis Corridor + Ironclad Mech)
     await page.evaluate(() => window.__STARFORGE__.spawnBossNow(2));
     await page.waitForFunction(
       () => {
         const s = window.__STARFORGE__.getSnapshot();
         return s.boss && s.boss.act === 2 && !document.getElementById('boss-hud')?.hidden;
+      },
+      null,
+      { timeout: 5000 }
+    );
+    await sleep(320);
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+    const act2BossInfo = await page.evaluate(() => ({
+      snap: window.__STARFORGE__.getSnapshot(),
+      partPills: document.querySelectorAll('#boss-parts-row .boss-part-pill').length,
+      threatBadge: document.getElementById('boss-hud-threat-badge')?.textContent?.trim() || '',
+      intelLine: document.getElementById('boss-hud-intel')?.textContent?.trim() || '',
+      hudText: document.getElementById('boss-hud')?.innerText || '',
+    }));
+    check(
+      act2BossInfo.snap.boss?.act === 2 && act2BossInfo.partPills === 2,
+      `Act 2 boss HUD mismatch: ${JSON.stringify(act2BossInfo)}`
+    );
+    check(
+      act2BossInfo.threatBadge.includes('威胁 IV 级'),
+      `Expected Act 2 #boss-hud-threat-badge, got "${act2BossInfo.threatBadge}"`
+    );
+    check(
+      act2BossInfo.intelLine.includes('战术弱点'),
+      `Expected Act 2 #boss-hud-intel, got "${act2BossInfo.intelLine}"`
+    );
+    assertImmersionPurity(act2BossInfo.hudText, 'boss-hud-act2');
+    passedChecks += 1;
+    const act2CanvasBuf = await page.locator('#game-canvas').screenshot();
+    const act2Full = await analyzeFullCanvasPixels(act2CanvasBuf);
+    console.log(`[e2e] Act 2 (Orbital Metropolis) full-canvas meanLuma=${act2Full.meanLuma.toFixed(2)}`);
+    check(
+      act2Full.meanLuma > 24,
+      `Expected Act 2 full-canvas meanLuma > 24, got ${act2Full.meanLuma.toFixed(2)}`
+    );
+
+    // Act 3 Boss, Nebula Biome & Opening Warp Gate (spawns at 2.0s dt, opens at z>=-195)
+    await page.evaluate(() => window.__STARFORGE__.spawnBossNow(3));
+    await page.waitForFunction(
+      () => {
+        const s = window.__STARFORGE__.getSnapshot();
+        return s.boss && s.boss.act === 3 && !document.getElementById('boss-hud')?.hidden;
       },
       null,
       { timeout: 5000 }
@@ -1037,7 +1159,7 @@ async function runTests() {
     await page.mouse.move(720, 450);
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 
-    const act2BossInfo = await page.evaluate(() => ({
+    const act3BossInfo = await page.evaluate(() => ({
       snap: window.__STARFORGE__.getSnapshot(),
       partPills: document.querySelectorAll('#boss-parts-row .boss-part-pill').length,
       threatBadge: document.getElementById('boss-hud-threat-badge')?.textContent?.trim() || '',
@@ -1045,33 +1167,33 @@ async function runTests() {
       hudText: document.getElementById('boss-hud')?.innerText || '',
     }));
     check(
-      act2BossInfo.snap.boss?.act === 2 && act2BossInfo.partPills === 2,
-      `Act 2 boss HUD mismatch: ${JSON.stringify(act2BossInfo)}`
+      act3BossInfo.snap.boss?.act === 3 && act3BossInfo.partPills === 2,
+      `Act 3 boss HUD mismatch: ${JSON.stringify(act3BossInfo)}`
     );
     check(
-      act2BossInfo.threatBadge.includes('威胁 V 级'),
-      `Expected Act 2 #boss-hud-threat-badge, got "${act2BossInfo.threatBadge}"`
+      act3BossInfo.threatBadge.includes('威胁 V 级'),
+      `Expected Act 3 #boss-hud-threat-badge, got "${act3BossInfo.threatBadge}"`
     );
     check(
-      act2BossInfo.intelLine.includes('战术弱点'),
-      `Expected Act 2 #boss-hud-intel, got "${act2BossInfo.intelLine}"`
+      act3BossInfo.intelLine.includes('战术弱点'),
+      `Expected Act 3 #boss-hud-intel, got "${act3BossInfo.intelLine}"`
     );
-    assertImmersionPurity(act2BossInfo.hudText, 'boss-hud-act2');
+    assertImmersionPurity(act3BossInfo.hudText, 'boss-hud-act3');
     passedChecks += 1;
-    const act2CanvasBuf = await page.locator('#game-canvas').screenshot();
-    const act2Full = await analyzeFullCanvasPixels(act2CanvasBuf);
-    console.log(`[e2e] Act 2 full-canvas meanLuma=${act2Full.meanLuma.toFixed(2)}`);
+    const act3CanvasBuf = await page.locator('#game-canvas').screenshot();
+    const act3Full = await analyzeFullCanvasPixels(act3CanvasBuf);
+    console.log(`[e2e] Act 3 (Warp Gateway) full-canvas meanLuma=${act3Full.meanLuma.toFixed(2)}`);
     check(
-      act2Full.meanLuma > 24,
-      `Expected Act 2 full-canvas meanLuma > 24, got ${act2Full.meanLuma.toFixed(2)}`
+      act3Full.meanLuma > 24,
+      `Expected Act 3 full-canvas meanLuma > 24, got ${act3Full.meanLuma.toFixed(2)}`
     );
 
-    // Act 3 Boss, Dreadnought Trench Biome & Destructible Part Break
-    await page.evaluate(() => window.__STARFORGE__.spawnBossNow(3));
+    // Act 4 Boss, Dreadnought Trench Biome & Destructible Part Break
+    await page.evaluate(() => window.__STARFORGE__.spawnBossNow(4));
     await page.waitForFunction(
       () => {
         const s = window.__STARFORGE__.getSnapshot();
-        return s.boss && s.boss.act === 3 && !document.getElementById('boss-hud')?.hidden;
+        return s.boss && s.boss.act === 4 && !document.getElementById('boss-hud')?.hidden;
       },
       null,
       { timeout: 5000 }
@@ -1079,7 +1201,7 @@ async function runTests() {
     await sleep(320);
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 
-    const act3BeforeInfo = await page.evaluate(() => ({
+    const act4BeforeInfo = await page.evaluate(() => ({
       snap: window.__STARFORGE__.getSnapshot(),
       partPills: document.querySelectorAll('#boss-parts-row .boss-part-pill').length,
       threatBadge: document.getElementById('boss-hud-threat-badge')?.textContent?.trim() || '',
@@ -1087,43 +1209,45 @@ async function runTests() {
       hudText: document.getElementById('boss-hud')?.innerText || '',
     }));
     check(
-      act3BeforeInfo.snap.boss?.act === 3 && act3BeforeInfo.partPills === 2,
-      `Act 3 boss HUD mismatch: ${JSON.stringify(act3BeforeInfo)}`
+      act4BeforeInfo.snap.boss?.act === 4 && act4BeforeInfo.partPills === 2,
+      `Act 4 boss HUD mismatch: ${JSON.stringify(act4BeforeInfo)}`
     );
     check(
-      act3BeforeInfo.threatBadge.includes('终极威胁'),
-      `Expected Act 3 #boss-hud-threat-badge, got "${act3BeforeInfo.threatBadge}"`
+      act4BeforeInfo.threatBadge.includes('终极威胁'),
+      `Expected Act 4 #boss-hud-threat-badge, got "${act4BeforeInfo.threatBadge}"`
     );
     check(
-      act3BeforeInfo.intelLine.includes('战术弱点'),
-      `Expected Act 3 #boss-hud-intel, got "${act3BeforeInfo.intelLine}"`
+      act4BeforeInfo.intelLine.includes('战术弱点'),
+      `Expected Act 4 #boss-hud-intel, got "${act4BeforeInfo.intelLine}"`
     );
-    assertImmersionPurity(act3BeforeInfo.hudText, 'boss-hud-act3');
+    assertImmersionPurity(act4BeforeInfo.hudText, 'boss-hud-act4');
     passedChecks += 1;
 
-    const act3CanvasBuf = await page.locator('#game-canvas').screenshot();
-    const act3Full = await analyzeFullCanvasPixels(act3CanvasBuf);
-    console.log(`[e2e] Act 3 full-canvas meanLuma=${act3Full.meanLuma.toFixed(2)}`);
+    const act4CanvasBuf = await page.locator('#game-canvas').screenshot();
+    const act4Full = await analyzeFullCanvasPixels(act4CanvasBuf);
+    console.log(`[e2e] Act 4 (Dreadnought Citadel) full-canvas meanLuma=${act4Full.meanLuma.toFixed(2)}`);
     check(
-      act3Full.meanLuma > 24,
-      `Expected Act 3 full-canvas meanLuma > 24, got ${act3Full.meanLuma.toFixed(2)}`
+      act4Full.meanLuma > 24,
+      `Expected Act 4 full-canvas meanLuma > 24, got ${act4Full.meanLuma.toFixed(2)}`
     );
 
     const diff12 = meanPixelDiff(act1Full, act2Full);
     const diff23 = meanPixelDiff(act2Full, act3Full);
-    const diff13 = meanPixelDiff(act1Full, act3Full);
+    const diff34 = meanPixelDiff(act3Full, act4Full);
+    const diff14 = meanPixelDiff(act1Full, act4Full);
     console.log(
-      `[e2e] Multi-Act differentiation meanDiff: Act1-2=${diff12.toFixed(2)}, Act2-3=${diff23.toFixed(2)}, Act1-3=${diff13.toFixed(2)}`
+      `[e2e] 4-Act differentiation meanDiff: Act1-2=${diff12.toFixed(2)}, Act2-3=${diff23.toFixed(2)}, Act3-4=${diff34.toFixed(2)}, Act1-4=${diff14.toFixed(2)}`
     );
     check(diff12 > 6.0, `Expected Act 1 vs Act 2 meanDiff > 6.0, got ${diff12.toFixed(2)}`);
     check(diff23 > 6.0, `Expected Act 2 vs Act 3 meanDiff > 6.0, got ${diff23.toFixed(2)}`);
-    check(diff13 > 6.0, `Expected Act 1 vs Act 3 meanDiff > 6.0, got ${diff13.toFixed(2)}`);
+    check(diff34 > 6.0, `Expected Act 3 vs Act 4 meanDiff > 6.0, got ${diff34.toFixed(2)}`);
+    check(diff14 > 6.0, `Expected Act 1 vs Act 4 meanDiff > 6.0, got ${diff14.toFixed(2)}`);
 
-    const act3Before = act3BeforeInfo.snap;
-    const targetPart = act3Before.boss.parts[0];
+    const act4Before = act4BeforeInfo.snap;
+    const targetPart = act4Before.boss.parts[0];
     const targetPartId = targetPart.id;
     const partKillDmg = targetPart.maxHp + 40;
-    const hpBefore = act3Before.boss.hp;
+    const hpBefore = act4Before.boss.hp;
 
     const partDamaged = await page.evaluate(
       ({ pid, dmg }) => window.__STARFORGE__.damageBossPart(pid, dmg),
@@ -1132,25 +1256,25 @@ async function runTests() {
     check(partDamaged === true, `Expected damageBossPart(${targetPartId}) to return true`);
     await sleep(160);
 
-    const act3AfterPart = await page.evaluate(() => ({
+    const act4AfterPart = await page.evaluate(() => ({
       snap: window.__STARFORGE__.getSnapshot(),
       brokenPills: document.querySelectorAll('#boss-parts-row .boss-part-pill.is-broken').length,
     }));
     check(
-      act3AfterPart.snap.boss.parts[0].destroyed === true,
-      `Expected part ${targetPartId} destroyed, got ${JSON.stringify(act3AfterPart.snap.boss.parts[0])}`
+      act4AfterPart.snap.boss.parts[0].destroyed === true,
+      `Expected part ${targetPartId} destroyed, got ${JSON.stringify(act4AfterPart.snap.boss.parts[0])}`
     );
     check(
-      act3AfterPart.brokenPills >= 1,
-      `Expected >=1 .boss-part-pill.is-broken in HUD, got ${act3AfterPart.brokenPills}`
+      act4AfterPart.brokenPills >= 1,
+      `Expected >=1 .boss-part-pill.is-broken in HUD, got ${act4AfterPart.brokenPills}`
     );
     check(
-      act3AfterPart.snap.boss.hp > 0 && act3AfterPart.snap.boss.hp < hpBefore,
-      `Expected boss alive with reduced HP after part break (0 < ${act3AfterPart.snap.boss.hp} < ${hpBefore})`
+      act4AfterPart.snap.boss.hp > 0 && act4AfterPart.snap.boss.hp < hpBefore,
+      `Expected boss alive with reduced HP after part break (0 < ${act4AfterPart.snap.boss.hp} < ${hpBefore})`
     );
     check(
-      act3AfterPart.snap.boss.dying === false,
-      `Expected boss.dying === false after breaking single part, got ${act3AfterPart.snap.boss.dying}`
+      act4AfterPart.snap.boss.dying === false,
+      `Expected boss.dying === false after breaking single part, got ${act4AfterPart.snap.boss.dying}`
     );
     await assertVisibleImagesLoaded(page, 'boss-hud');
     passedChecks += 1;
@@ -1264,7 +1388,7 @@ async function runTests() {
 
     // ==================== STAGE 6b: Warp Gate Safe Passage vs Solid Door Crash ====================
     console.log('[e2e] Stage 6b: Warp Gate Safe Passage vs Solid Door Crash Destruction...');
-    await page.evaluate(() => window.__STARFORGE__.spawnBossNow(2));
+    await page.evaluate(() => window.__STARFORGE__.spawnBossNow(3));
     await page.mouse.move(720, 450);
     await sleep(320);
 
@@ -1323,7 +1447,7 @@ async function runTests() {
     // ==================== STAGE 7: 1280x720 Responsive Bounds Check ====================
     console.log('[e2e] Stage 7: 1280x720 Responsive Bounds & Overlap Checks...');
     await page.setViewportSize({ width: 1280, height: 720 });
-    await page.evaluate(() => window.__STARFORGE__.spawnBossNow(3));
+    await page.evaluate(() => window.__STARFORGE__.spawnBossNow(4));
     await sleep(350);
 
     const hudLayout720 = await page.evaluate(() => {
