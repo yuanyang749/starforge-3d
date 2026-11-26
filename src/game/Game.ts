@@ -485,6 +485,7 @@ export class Game {
     this.scene.add(hemi, this.keyLight, rimCyan, fillWarm, this.accentPointLight);
 
     this.envSystem = new EnvironmentSystem(this.scene, this.renderer);
+    this.envSystem.bindSceneLights(hemi, rimCyan, fillWarm);
     this.projectileVisuals = new ProjectileVisuals(this.scene);
     this.vfx = new VfxSystem(this.scene);
     this.waves = new WaveDirector(this.scene, this.loader);
