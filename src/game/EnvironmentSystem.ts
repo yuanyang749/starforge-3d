@@ -2,7 +2,7 @@ import * as THREE from 'three';
 
 export type EnvMode = 'boot' | 'hangar' | 'combat';
 
-type VistaKey = 'hangar' | 'act1' | 'act2' | 'act3' | 'act4';
+type VistaKey = 'hangar' | 'act1' | 'act2' | 'act3' | 'act4' | 'act5';
 
 interface SkyPalette {
   zenith: THREE.Color;
@@ -61,20 +61,21 @@ interface CorridorStreakState {
 }
 
 interface ActVideoSlot {
-  act: 1 | 2 | 3 | 4;
-  vistaKey: 'act1' | 'act2' | 'act3' | 'act4';
+  act: 1 | 2 | 3 | 4 | 5;
+  vistaKey: 'act1' | 'act2' | 'act3' | 'act4' | 'act5';
   video: HTMLVideoElement;
   tex: THREE.VideoTexture | null;
   ready: boolean;
 }
 
-interface SearchlightState {
-  mesh: THREE.Mesh;
-  baseX: number;
-  baseZ: number;
-  side: number;
+interface TrenchBeaconState {
+  group: THREE.Group;
+  lensMat: THREE.MeshBasicMaterial;
+  glowMat: THREE.MeshBasicMaterial;
+  baseColor: THREE.Color;
+  z: number;
+  spanZ: number;
   phase: number;
-  speed: number;
 }
 
 interface DustParticle {
@@ -132,15 +133,26 @@ const SKY_PALETTES: Record<VistaKey, SkyPalette> = {
     auroraIntensity: 0.45,
   },
   act4: {
-    zenith: new THREE.Color(0x24090f),
-    mid: new THREE.Color(0x561517),
+    zenith: new THREE.Color(0x021f48),
+    mid: new THREE.Color(0x052d62),
+    horizon: new THREE.Color(0xc87f36),
+    nadir: new THREE.Color(0x3a2010),
+    auroraA: new THREE.Color(0x0c3d7a),
+    auroraB: new THREE.Color(0x164c8c),
+    sunColor: new THREE.Color(0xffe099),
+    starIntensity: 0.25,
+    auroraIntensity: 0.08,
+  },
+  act5: {
+    zenith: new THREE.Color(0x0c0407),
+    mid: new THREE.Color(0x2a0b0f),
     horizon: new THREE.Color(0xd96b28),
-    nadir: new THREE.Color(0x220a0d),
+    nadir: new THREE.Color(0x160609),
     auroraA: new THREE.Color(0xffb347),
     auroraB: new THREE.Color(0xe63946),
     sunColor: new THREE.Color(0xffc46b),
     starIntensity: 0.55,
-    auroraIntensity: 0.35,
+    auroraIntensity: 0.22,
   },
 };
 
@@ -198,6 +210,16 @@ const SCENE_LIGHT_PRESETS: Record<
     envIntensity: 1.15,
   },
   act4: {
+    hemiSky: new THREE.Color(0xffe4b5),
+    hemiGround: new THREE.Color(0x4a2412),
+    hemiIntensity: 0.86,
+    rimColor: new THREE.Color(0xffc966),
+    rimIntensity: 1.85,
+    fillColor: new THREE.Color(0x38e8ff),
+    fillIntensity: 0.82,
+    envIntensity: 1.38,
+  },
+  act5: {
     hemiSky: new THREE.Color(0x8a5248),
     hemiGround: new THREE.Color(0x1a080a),
     hemiIntensity: 0.56,
@@ -214,6 +236,7 @@ const DUST_ACT_COLORS = [
   new THREE.Color(0x94ecff),
   new THREE.Color(0x6de8ff),
   new THREE.Color(0xb8fff0),
+  new THREE.Color(0xffd27a),
   new THREE.Color(0xffb56b),
 ] as const;
 const ACT1_SLIPSTREAM_COUNT = 48;
@@ -223,7 +246,7 @@ const ACT2_METRO_TRAFFIC_COUNT = 64;
 const ACT3_DEBRIS_COUNT = 24;
 const ACT3_WARP_RING_COUNT = 5;
 const ACT3_STREAK_COUNT = 64;
-const ACT4_ARCH_COUNT = 5;
+const ACT4_DESERT_WIND_COUNT = 52;
 const ACT4_EMBER_COUNT = 72;
 
 const SKY_VERT = `
@@ -362,6 +385,8 @@ const CYCLORAMA_FRAG = `
   uniform sampler2D uTexB;
   uniform float uTexAIsVideo;
   uniform float uTexBIsVideo;
+  uniform vec2 uUvScaleA;
+  uniform vec2 uUvScaleB;
   uniform float uTexMix;
   uniform float uBrightness;
   uniform float uEdgeFeather;
@@ -376,20 +401,35 @@ const CYCLORAMA_FRAG = `
     return mix(high, low, step(c, vec3(0.04045)));
   }
 
+  float vistaMask(vec2 uv, float hFeather, float topFeather, float botFeather) {
+    float hMask = smoothstep(0.0, hFeather, uv.x) * (1.0 - smoothstep(1.0 - hFeather, 1.0, uv.x));
+    float vMask = smoothstep(0.0, botFeather, uv.y) * (1.0 - smoothstep(1.0 - topFeather, 1.0, uv.y));
+    float cornerDist = length((uv - 0.5) * vec2(1.92, 1.98));
+    float cornerMask = 1.0 - smoothstep(0.88, 1.10, cornerDist);
+    return clamp(hMask * vMask * cornerMask, 0.0, 1.0);
+  }
+
   void main() {
     // Flip horizontal UV because BackSide sphere faces inward toward -Z
-    vec2 texUv = vec2(1.0 - vUv.x, vUv.y);
-    vec3 colA = texture2D(uTexA, texUv).rgb;
+    vec2 baseUv = vec2(1.0 - vUv.x, vUv.y);
+    vec2 uvA = (baseUv - 0.5) * uUvScaleA + 0.5;
+    vec2 uvB = (baseUv - 0.5) * uUvScaleB + 0.5;
+    vec3 colA = texture2D(uTexA, clamp(uvA, 0.001, 0.999)).rgb;
     if (uTexAIsVideo > 0.5) colA = decodeVideoSrgb(colA);
-    vec3 colB = texture2D(uTexB, texUv).rgb;
+    vec3 colB = texture2D(uTexB, clamp(uvB, 0.001, 0.999)).rgb;
     if (uTexBIsVideo > 0.5) colB = decodeVideoSrgb(colB);
     vec3 vista = mix(colA, colB, uTexMix) * uBrightness;
 
-    float hMask = smoothstep(0.0, uEdgeFeather, vUv.x) * (1.0 - smoothstep(1.0 - uEdgeFeather, 1.0, vUv.x));
-    float vMask = smoothstep(0.0, uVertFeatherBottom, vUv.y) * (1.0 - smoothstep(1.0 - uVertFeatherTop, 1.0, vUv.y));
-    float cornerDist = length((vUv - 0.5) * vec2(1.92, 1.98));
-    float cornerMask = 1.0 - smoothstep(0.86, 1.08, cornerDist);
-    float alpha = clamp(hMask * vMask * cornerMask * uOpacity, 0.0, 1.0);
+    float featherA = uUvScaleA.x > 1.05 ? 0.035 : uEdgeFeather;
+    float featherB = uUvScaleB.x > 1.05 ? 0.035 : uEdgeFeather;
+    float vTopA = uUvScaleA.y > 1.05 ? 0.085 : uVertFeatherTop;
+    float vTopB = uUvScaleB.y > 1.05 ? 0.085 : uVertFeatherTop;
+    float vBotA = uUvScaleA.y > 1.05 ? 0.035 : uVertFeatherBottom;
+    float vBotB = uUvScaleB.y > 1.05 ? 0.035 : uVertFeatherBottom;
+
+    float mA = vistaMask(uvA, featherA, vTopA, vBotA);
+    float mB = vistaMask(uvB, featherB, vTopB, vBotB);
+    float alpha = clamp(mix(mA, mB, uTexMix) * uOpacity, 0.0, 1.0);
     if (!(alpha >= 0.004)) discard;
     gl_FragColor = vec4(vista, alpha);
   }
@@ -807,6 +847,7 @@ export class EnvironmentSystem {
   private readonly act2Group = new THREE.Group();
   private readonly act3Group = new THREE.Group();
   private readonly act4Group = new THREE.Group();
+  private readonly act5Group = new THREE.Group();
 
   private readonly skySphere: THREE.Mesh;
   private readonly skyMat: THREE.ShaderMaterial;
@@ -817,7 +858,7 @@ export class EnvironmentSystem {
   private readonly ambientFillLight: THREE.HemisphereLight;
 
   private readonly volumetricBeams: THREE.ShaderMaterial[] = [];
-  private readonly searchlights: SearchlightState[] = [];
+  private readonly trenchBeacons: TrenchBeaconState[] = [];
 
   private act1SlipstreamInst!: THREE.InstancedMesh;
   private readonly act1Slipstreams: CorridorStreakState[] = [];
@@ -856,11 +897,14 @@ export class EnvironmentSystem {
   private act3StreakInst!: THREE.InstancedMesh;
   private readonly act3Streaks: CorridorStreakState[] = [];
 
-  // Act 4: Crimson Dreadnought Citadel
+  // Act 4: Solar Canyon Sandstorm (Pure 1080p panoramic vista + subtle crosswind sand streaks)
+  private act4DesertWindInst!: THREE.InstancedMesh;
+  private readonly act4DesertWinds: CorridorStreakState[] = [];
+
+  // Act 5: Crimson Dreadnought Citadel
   private act4HullMat!: THREE.MeshStandardMaterial;
   private act4SideDeckMat!: THREE.MeshStandardMaterial;
   private readonly act4HullPbrTextures: THREE.Texture[] = [];
-  private act4KeelArchMat!: THREE.ShaderMaterial;
   private act4FlakPylonMat!: THREE.ShaderMaterial;
   private act4BastionMatA!: THREE.ShaderMaterial;
   private act4BastionMatB!: THREE.ShaderMaterial;
@@ -883,7 +927,7 @@ export class EnvironmentSystem {
   private hangarVideoReady = false;
   private hangarVideoUnlockHandler: (() => void) | null = null;
 
-  private readonly actVideos = new Map<1 | 2 | 3 | 4, ActVideoSlot>();
+  private readonly actVideos = new Map<1 | 2 | 3 | 4 | 5, ActVideoSlot>();
 
   private readonly dustParticles: DustParticle[] = [];
   private readonly dummy = new THREE.Object3D();
@@ -936,14 +980,16 @@ export class EnvironmentSystem {
     this.act1Group.name = 'EnvAct1Stratosphere';
     this.act2Group.name = 'EnvAct2Metropolis';
     this.act3Group.name = 'EnvAct3Nebula';
-    this.act4Group.name = 'EnvAct4Citadel';
+    this.act4Group.name = 'EnvAct4Desert';
+    this.act5Group.name = 'EnvAct5Citadel';
 
     this.fallbackTextures = {
       hangar: createFallbackTexture(0x28679e),
       act1: createFallbackTexture(0x1e4e7a),
       act2: createFallbackTexture(0x3a7ca5),
       act3: createFallbackTexture(0x2d488f),
-      act4: createFallbackTexture(0x8c2f24),
+      act4: createFallbackTexture(0x9e5c26),
+      act5: createFallbackTexture(0x8c2f24),
     };
     const alphaData = new Uint8Array([0, 0, 0, 0]);
     this.transparentFallbackTex = new THREE.DataTexture(alphaData, 1, 1, THREE.RGBAFormat);
@@ -953,6 +999,7 @@ export class EnvironmentSystem {
     this.activeTextures.set('act2', this.fallbackTextures.act2);
     this.activeTextures.set('act3', this.fallbackTextures.act3);
     this.activeTextures.set('act4', this.fallbackTextures.act4);
+    this.activeTextures.set('act5', this.fallbackTextures.act5);
 
     this.ambientFillLight = new THREE.HemisphereLight(0x8be9ff, 0x1b2e4d, 0.55);
     this.envRoot.add(this.ambientFillLight);
@@ -998,6 +1045,8 @@ export class EnvironmentSystem {
         uTexB: { value: this.fallbackTextures.hangar },
         uTexAIsVideo: { value: 0.0 },
         uTexBIsVideo: { value: 0.0 },
+        uUvScaleA: { value: new THREE.Vector2(1.0, 1.0) },
+        uUvScaleB: { value: new THREE.Vector2(1.0, 1.0) },
         uTexMix: { value: 1.0 },
         uBrightness: { value: 1.05 },
         uEdgeFeather: { value: 0.08 },
@@ -1019,12 +1068,13 @@ export class EnvironmentSystem {
     this.envRoot.add(this.cyclorama);
     this.warmupTargets.push(this.cyclorama);
 
-    // 3. Build 3D Hangar Bay & 4 Combat Biomes
+    // 3. Build 3D Hangar Bay & 5 Combat Biomes
     this.buildHangarBay();
     this.buildAct1Stratosphere();
     this.buildAct2Metropolis();
     this.buildAct3Nebula();
-    this.buildAct4Citadel();
+    this.buildAct4Desert();
+    this.buildAct5Citadel();
 
     // 4. Velocity-Stretched Space Dust Streaks (340 soft Gaussian streaks)
     const dustGeo = this.createCrossedStreakGeometry();
@@ -1051,7 +1101,8 @@ export class EnvironmentSystem {
       this.act1Group,
       this.act2Group,
       this.act3Group,
-      this.act4Group
+      this.act4Group,
+      this.act5Group
     );
     this.scene.add(this.envRoot);
 
@@ -1178,7 +1229,7 @@ export class EnvironmentSystem {
     }
 
     // Bind loaded 2K panoramic vista textures
-    const keys: VistaKey[] = ['hangar', 'act1', 'act2', 'act3', 'act4'];
+    const keys: VistaKey[] = ['hangar', 'act1', 'act2', 'act3', 'act4', 'act5'];
     for (const k of keys) {
       const tex = loadedTextures?.get(k);
       if (tex) {
@@ -1293,12 +1344,12 @@ export class EnvironmentSystem {
       this.act3DerelictFarMat.uniforms.uMap.value = derelictTex;
     }
 
-    // Bind Act 4 Dreadnought Citadel 2K PBR hull & Codex transparent superstructure layers
+    // Bind Act 5 Dreadnought Citadel 2K PBR hull & Codex transparent superstructure layers
     this.act4HullPbrTextures.length = 0;
-    const hullAlbedo = loadedTextures?.get('act4_hull_albedo');
-    const hullNormal = loadedTextures?.get('act4_hull_normal');
-    const hullRough = loadedTextures?.get('act4_hull_roughness');
-    const hullEmissive = loadedTextures?.get('act4_hull_emissive');
+    const hullAlbedo = loadedTextures?.get('act5_hull_albedo');
+    const hullNormal = loadedTextures?.get('act5_hull_normal');
+    const hullRough = loadedTextures?.get('act5_hull_roughness');
+    const hullEmissive = loadedTextures?.get('act5_hull_emissive');
     for (const ht of [hullAlbedo, hullNormal, hullRough, hullEmissive]) {
       if (ht) {
         ht.wrapS = THREE.RepeatWrapping;
@@ -1314,16 +1365,14 @@ export class EnvironmentSystem {
     if (hullEmissive) this.act4HullMat.emissiveMap = hullEmissive;
     this.act4HullMat.needsUpdate = true;
 
-    const keelArchTex = loadedTextures?.get('act4_keel_arch');
-    if (keelArchTex) this.act4KeelArchMat.uniforms.uMap.value = keelArchTex;
-    const flakTex = loadedTextures?.get('act4_flak_pylon');
+    const flakTex = loadedTextures?.get('act5_flak_pylon');
     if (flakTex) this.act4FlakPylonMat.uniforms.uMap.value = flakTex;
-    const bastionATex = loadedTextures?.get('act4_bastion_a');
+    const bastionATex = loadedTextures?.get('act5_bastion_a');
     if (bastionATex) {
       this.act4BastionMatA.uniforms.uMap.value = bastionATex;
       this.act4FarBastionMatA.uniforms.uMap.value = bastionATex;
     }
-    const bastionBTex = loadedTextures?.get('act4_bastion_b');
+    const bastionBTex = loadedTextures?.get('act5_bastion_b');
     if (bastionBTex) {
       this.act4BastionMatB.uniforms.uMap.value = bastionBTex;
       this.act4FarBastionMatB.uniforms.uMap.value = bastionBTex;
@@ -1333,8 +1382,8 @@ export class EnvironmentSystem {
     this.initActVideos();
 
     const activeTex = this.getVistaTexture(this.targetVistaKey);
-    this.setCycloramaTexA(activeTex);
-    this.setCycloramaTexB(activeTex);
+    this.setCycloramaTexA(activeTex, this.targetVistaKey);
+    this.setCycloramaTexB(activeTex, this.targetVistaKey);
     this.cycloramaMat.uniforms.uTexMix.value = 1.0;
     this.currentVistaKey = this.targetVistaKey;
     this.vistaBlend = 1.0;
@@ -1349,7 +1398,7 @@ export class EnvironmentSystem {
   }
 
   setAct(act: number, immediate = false): void {
-    const clampedAct = Math.max(1, Math.min(4, Math.round(act)));
+    const clampedAct = Math.max(1, Math.min(5, Math.round(act)));
     this.currentAct = clampedAct;
     this.syncVisibility();
     this.updateVistaTarget(immediate);
@@ -1374,8 +1423,15 @@ export class EnvironmentSystem {
     if (!isHangar) {
       // Keep sky dome and spherical panorama cap concentric on camera with subtle per-act pitch
       this.skySphere.position.copy(camera.position);
-      const targetPitch = this.currentAct === 1 ? -0.135 : this.currentAct === 4 ? 0.02 : 0.0;
-      const targetBright = this.currentAct === 1 ? 1.05 : 1.0;
+      const targetPitch =
+        this.currentAct === 1
+          ? -0.135
+          : this.currentAct === 4
+            ? -0.185
+            : this.currentAct === 5
+              ? -0.125
+              : 0.0;
+      const targetBright = this.currentAct === 1 ? 1.05 : this.currentAct === 4 ? 1.04 : 1.0;
       this.cycloramaPitch = THREE.MathUtils.lerp(
         this.cycloramaPitch,
         targetPitch,
@@ -1402,7 +1458,7 @@ export class EnvironmentSystem {
       this.skyMat.uniforms.uScroll.value = this.scrollDistance;
 
       // Sync active combat vista video playback rate smoothly with flight speed / boost / slow-mo
-      const activeSlot = this.actVideos.get(this.currentAct as 1 | 2 | 3 | 4);
+      const activeSlot = this.actVideos.get(this.currentAct as 1 | 2 | 3 | 4 | 5);
       if (activeSlot && activeSlot.ready && !activeSlot.video.paused) {
         const rawFactor = speed > 0.5 ? (speed / 36) * timeScale : timeScale;
         const minRate = timeScale < 0.75 ? 0.22 : 0.85;
@@ -1433,8 +1489,10 @@ export class EnvironmentSystem {
         this.updateAct2Metropolis(safeDt, elapsed, speed);
       } else if (this.currentAct === 3) {
         this.updateAct3Nebula(safeDt, elapsed, speed);
+      } else if (this.currentAct === 4) {
+        this.updateAct4Desert(safeDt, elapsed, speed);
       } else {
-        this.updateAct4Citadel(safeDt, elapsed, speed);
+        this.updateAct5Citadel(safeDt, elapsed, speed);
       }
     }
 
@@ -1485,14 +1543,31 @@ export class EnvironmentSystem {
     this.warmupTargets.length = 0;
   }
 
-  private setCycloramaTexA(tex: THREE.Texture): void {
-    this.cycloramaMat.uniforms.uTexA.value = tex;
-    this.cycloramaMat.uniforms.uTexAIsVideo.value = (tex as THREE.VideoTexture).isVideoTexture ? 1.0 : 0.0;
+  private getVistaUvScale(key: VistaKey): [number, number] {
+    // Act 4 desert panorama frames full 16:9 composition (upper-left ringed gas giant + twin cliff solar arrays)
+    // inside ~111deg x 71deg so all landmarks stay cleanly visible below HUD at super-sampled 1080p sharpness.
+    // Act 5 citadel frames the unobstructed black hole, solar corona & Dyson rings cleanly above the open hull deck.
+    if (key === 'act4') return [1.35, 1.26];
+    if (key === 'act5') return [1.32, 1.28];
+    return [1.0, 1.0];
   }
 
-  private setCycloramaTexB(tex: THREE.Texture): void {
+  private setCycloramaTexA(tex: THREE.Texture, key?: VistaKey): void {
+    this.cycloramaMat.uniforms.uTexA.value = tex;
+    this.cycloramaMat.uniforms.uTexAIsVideo.value = (tex as THREE.VideoTexture).isVideoTexture ? 1.0 : 0.0;
+    if (key) {
+      const [sx, sy] = this.getVistaUvScale(key);
+      (this.cycloramaMat.uniforms.uUvScaleA.value as THREE.Vector2).set(sx, sy);
+    }
+  }
+
+  private setCycloramaTexB(tex: THREE.Texture, key?: VistaKey): void {
     this.cycloramaMat.uniforms.uTexB.value = tex;
     this.cycloramaMat.uniforms.uTexBIsVideo.value = (tex as THREE.VideoTexture).isVideoTexture ? 1.0 : 0.0;
+    if (key) {
+      const [sx, sy] = this.getVistaUvScale(key);
+      (this.cycloramaMat.uniforms.uUvScaleB.value as THREE.Vector2).set(sx, sy);
+    }
   }
 
   private getVistaTexture(key: VistaKey): THREE.Texture {
@@ -1504,6 +1579,7 @@ export class EnvironmentSystem {
     if (this.currentAct === 2) return 'act2';
     if (this.currentAct === 3) return 'act3';
     if (this.currentAct === 4) return 'act4';
+    if (this.currentAct === 5) return 'act5';
     return 'act1';
   }
 
@@ -1535,8 +1611,8 @@ export class EnvironmentSystem {
       this.syncPaletteUniforms();
 
       const tex = this.getVistaTexture(nextKey);
-      this.setCycloramaTexA(tex);
-      this.setCycloramaTexB(tex);
+      this.setCycloramaTexA(tex, nextKey);
+      this.setCycloramaTexB(tex, nextKey);
       this.cycloramaMat.uniforms.uTexMix.value = 1.0;
       this.currentVistaKey = nextKey;
       this.targetVistaKey = nextKey;
@@ -1547,9 +1623,18 @@ export class EnvironmentSystem {
           : this.currentAct === 1
             ? -0.135
             : this.currentAct === 4
-              ? 0.02
-              : 0.0;
-      this.cycloramaMat.uniforms.uBrightness.value = this.currentAct === 1 && this.mode === 'combat' ? 1.05 : 1.0;
+              ? -0.185
+              : this.currentAct === 5
+                ? -0.125
+                : 0.0;
+      this.cycloramaMat.uniforms.uBrightness.value =
+        this.mode === 'combat'
+          ? this.currentAct === 1
+            ? 1.05
+            : this.currentAct === 4
+              ? 1.04
+              : 1.0
+          : 1.0;
       this.cyclorama.rotation.x = this.cycloramaPitch;
       return;
     }
@@ -1559,8 +1644,8 @@ export class EnvironmentSystem {
       const fromTex = this.getVistaTexture(fromKey);
       const toTex = this.getVistaTexture(nextKey);
       this.currentVistaKey = fromKey;
-      this.setCycloramaTexA(fromTex);
-      this.setCycloramaTexB(toTex);
+      this.setCycloramaTexA(fromTex, fromKey);
+      this.setCycloramaTexB(toTex, nextKey);
       this.cycloramaMat.uniforms.uTexMix.value = 0.0;
       this.targetVistaKey = nextKey;
       this.vistaBlend = 0.0;
@@ -1651,6 +1736,7 @@ export class EnvironmentSystem {
     this.act2Group.visible = this.mode === 'combat' && this.currentAct === 2;
     this.act3Group.visible = this.mode === 'combat' && this.currentAct === 3;
     this.act4Group.visible = this.mode === 'combat' && this.currentAct === 4;
+    this.act5Group.visible = this.mode === 'combat' && this.currentAct === 5;
     this.dustInst.visible = this.mode === 'combat';
     this.syncHangarVideoPlayback();
     this.syncActVideosPlayback();
@@ -1660,7 +1746,7 @@ export class EnvironmentSystem {
     return this.actVideos.get(1)?.ready ?? false;
   }
 
-  isActVideoReady(act: 1 | 2 | 3 | 4): boolean {
+  isActVideoReady(act: 1 | 2 | 3 | 4 | 5): boolean {
     return this.actVideos.get(act)?.ready ?? false;
   }
 
@@ -1735,15 +1821,16 @@ export class EnvironmentSystem {
     if (typeof document === 'undefined' || this.actVideos.size > 0) return;
 
     const specs: Array<{
-      act: 1 | 2 | 3 | 4;
-      vistaKey: 'act1' | 'act2' | 'act3' | 'act4';
+      act: 1 | 2 | 3 | 4 | 5;
+      vistaKey: 'act1' | 'act2' | 'act3' | 'act4' | 'act5';
       url: string;
       preload: 'auto' | 'metadata';
     }> = [
       { act: 1, vistaKey: 'act1', url: './env/stratosphere_vista_loop.mp4', preload: 'auto' },
       { act: 2, vistaKey: 'act2', url: './env/act1_vista_loop.mp4', preload: 'metadata' },
       { act: 3, vistaKey: 'act3', url: './env/act2_vista_loop.mp4', preload: 'metadata' },
-      { act: 4, vistaKey: 'act4', url: './env/act3_vista_loop.mp4', preload: 'metadata' },
+      { act: 4, vistaKey: 'act4', url: './env/act4_desert_vista_loop.mp4', preload: 'metadata' },
+      { act: 5, vistaKey: 'act5', url: './env/act3_vista_loop.mp4', preload: 'metadata' },
     ];
 
     for (const spec of specs) {
@@ -1779,9 +1866,9 @@ export class EnvironmentSystem {
         slot.ready = true;
         this.activeTextures.set(slot.vistaKey, vtex);
         if (this.targetVistaKey === slot.vistaKey) {
-          this.setCycloramaTexB(vtex);
+          this.setCycloramaTexB(vtex, slot.vistaKey);
           if (this.vistaBlend >= 1.0) {
-            this.setCycloramaTexA(vtex);
+            this.setCycloramaTexA(vtex, slot.vistaKey);
           }
         }
       };
@@ -2914,7 +3001,64 @@ export class EnvironmentSystem {
     }
   }
 
-  private buildAct4Citadel(): void {
+  private buildAct4Desert(): void {
+    // Pure 1080p living panoramic desert canyon vista (Option B) — zero fake 2D terrain standees!
+    // Only subtle outer-rim sunlit blowing-sand wind streaks drifting left-to-right + toward camera
+    // to amplify aerial flight speed while keeping the 1080p sandstorm vista 100% unobstructed.
+    const windGeo = this.createCrossedStreakGeometry();
+    const windMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.42,
+      blending: THREE.AdditiveBlending,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      toneMapped: false,
+    });
+    this.act4DesertWindInst = new THREE.InstancedMesh(windGeo, windMat, ACT4_DESERT_WIND_COUNT);
+    this.act4DesertWindInst.name = 'Act4DesertWindStreaks';
+    this.act4DesertWindInst.frustumCulled = false;
+
+    const goldenSandCol = new THREE.Color(0xffcf70);
+    const warmAmberCol = new THREE.Color(0xf59e38);
+    const cyanGlintCol = new THREE.Color(0x67e8f9);
+
+    for (let i = 0; i < ACT4_DESERT_WIND_COUNT; i++) {
+      const angle = (i * 2.39996) % (Math.PI * 2);
+      const r1 = ((i * 53 + 17) % 100) / 100;
+      const r2 = ((i * 79 + 29) % 100) / 100;
+      const r3 = ((i * 31 + 61) % 100) / 100;
+      const radius = 17 + r1 * 36;
+      const x = Math.cos(angle) * radius * 1.32;
+      const y = -3.5 + Math.sin(angle) * radius * 0.62;
+      const state: CorridorStreakState = {
+        x,
+        y,
+        baseY: y,
+        z: -r3 * 245 + 18,
+        speedMult: 1.25 + r2 * 0.9,
+        length: 2.8 + r3 * 4.4,
+        thickness: 0.08,
+        bobPhase: r1 * Math.PI * 2,
+      };
+      this.act4DesertWinds.push(state);
+      this.dummy.position.set(state.x, state.y, state.z);
+      this.dummy.rotation.set(0, 0.24, 0);
+      this.dummy.scale.set(0.08, 0.08, state.length);
+      this.dummy.updateMatrix();
+      this.act4DesertWindInst.setMatrixAt(i, this.dummy.matrix);
+      this.act4DesertWindInst.setColorAt(
+        i,
+        i % 9 === 0 ? cyanGlintCol : i % 3 === 0 ? warmAmberCol : goldenSandCol
+      );
+    }
+    this.act4DesertWindInst.instanceMatrix.needsUpdate = true;
+    if (this.act4DesertWindInst.instanceColor) this.act4DesertWindInst.instanceColor.needsUpdate = true;
+    this.act4Group.add(this.act4DesertWindInst);
+    this.warmupTargets.push(this.act4DesertWindInst);
+  }
+
+  private buildAct5Citadel(): void {
     // 1. 2K Seamless Scrolling PBR Armored Dreadnought Dorsal Trench Hull (y = -11.4)
     const hullGeo = new THREE.PlaneGeometry(42, 290, 1, 1);
     hullGeo.rotateX(-Math.PI * 0.5);
@@ -2929,7 +3073,7 @@ export class EnvironmentSystem {
       transparent: true,
       opacity: 0.99,
     });
-    this.act4HullMat.customProgramCacheKey = () => 'act4_hull_far_fade';
+    this.act4HullMat.customProgramCacheKey = () => 'act5_hull_far_fade';
     this.act4HullMat.onBeforeCompile = (shader) => {
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nvarying float vHullWorldZ;')
@@ -2949,10 +3093,10 @@ export class EnvironmentSystem {
         );
     };
     const hullDeck = new THREE.Mesh(hullGeo, this.act4HullMat);
-    hullDeck.name = 'Act4DreadnoughtHullPbrDeck';
+    hullDeck.name = 'Act5DreadnoughtHullPbrDeck';
     hullDeck.position.set(0, -11.4, -116);
     hullDeck.renderOrder = -12;
-    this.act4Group.add(hullDeck);
+    this.act5Group.add(hullDeck);
     this.warmupTargets.push(hullDeck);
 
     this.act4SideDeckMat = new THREE.MeshStandardMaterial({
@@ -2966,7 +3110,7 @@ export class EnvironmentSystem {
       transparent: true,
       opacity: 0.99,
     });
-    this.act4SideDeckMat.customProgramCacheKey = () => 'act4_side_far_fade';
+    this.act4SideDeckMat.customProgramCacheKey = () => 'act5_side_far_fade';
     this.act4SideDeckMat.onBeforeCompile = (shader) => {
       shader.vertexShader = shader.vertexShader
         .replace('#include <common>', '#include <common>\nvarying float vSideWorldZ;')
@@ -3010,18 +3154,10 @@ export class EnvironmentSystem {
       wingDeck.renderOrder = -12;
       const guard = new THREE.Mesh(railGuardGeo, railGuardMat);
       guard.position.set(side * 21.2, -11.0, -116);
-      this.act4Group.add(wingDeck, guard);
+      this.act5Group.add(wingDeck, guard);
     }
 
     const unitPlaneGeo = new THREE.PlaneGeometry(1, 1, 1, 1);
-    this.act4KeelArchMat = this.createMatteLayerMaterial({
-      tint: 0xf0dada,
-      hazeColor: 0x380f14,
-      hazeStrength: 0.34,
-      opacity: 0.97,
-      nearStart: 2.2,
-      nearEnd: 12.2,
-    });
     this.act4FlakPylonMat = this.createMatteLayerMaterial({
       tint: 0xf2e2e2,
       hazeColor: 0x380f14,
@@ -3067,27 +3203,6 @@ export class EnvironmentSystem {
       bottomFeather: 0.16,
     });
 
-    const archSpanZ = ACT4_ARCH_COUNT * 58;
-    for (let i = 0; i < ACT4_ARCH_COUNT; i++) {
-      const z = -i * 58 - 18;
-      const archMesh = new THREE.Mesh(unitPlaneGeo, this.act4KeelArchMat);
-      archMesh.name = `Act4KeelArch_${i}`;
-      archMesh.position.set(0, 7.1, z);
-      archMesh.scale.set(66, 37.125, 1);
-      archMesh.renderOrder = -4;
-      this.act4Group.add(archMesh);
-      this.act4ScrollingProps.push({
-        mesh: archMesh,
-        x: 0,
-        y: 7.1,
-        z,
-        speedMult: 1.0,
-        spanZ: archSpanZ,
-        wrapZ: 22,
-      });
-      if (i === 0) this.warmupTargets.push(archMesh);
-    }
-
     const flakCount = 12;
     const flakSpanZ = (flakCount / 2) * 44;
     for (let i = 0; i < flakCount; i++) {
@@ -3104,7 +3219,7 @@ export class EnvironmentSystem {
       mesh.rotation.y = side * -0.14;
       mesh.scale.set(side < 0 ? w : -w, h, 1);
       mesh.renderOrder = -4;
-      this.act4Group.add(mesh);
+      this.act5Group.add(mesh);
       this.act4ScrollingProps.push({
         mesh,
         x,
@@ -3137,7 +3252,7 @@ export class EnvironmentSystem {
       mesh.rotation.y = side * -0.16;
       mesh.scale.set(w * flip, h, 1);
       mesh.renderOrder = -4;
-      this.act4Group.add(mesh);
+      this.act5Group.add(mesh);
       this.act4ScrollingProps.push({
         mesh,
         x,
@@ -3170,7 +3285,7 @@ export class EnvironmentSystem {
       mesh.rotation.y = side * -0.18;
       mesh.scale.set(w * flip, h, 1);
       mesh.renderOrder = -4;
-      this.act4Group.add(mesh);
+      this.act5Group.add(mesh);
       this.act4ScrollingProps.push({
         mesh,
         x,
@@ -3183,31 +3298,89 @@ export class EnvironmentSystem {
       if (i < 2) this.warmupTargets.push(mesh);
     }
 
-    const coneGeo = new THREE.CylinderGeometry(4.4, 0.28, 44, 16, 1, true);
-    coneGeo.translate(0, 22, 0);
+    // Grounded armored trench strobe fixtures bolted onto left/right rail guards (scrolling 1:1 with hull deck)
+    const beaconHousingGeo = new THREE.BoxGeometry(1.15, 0.68, 1.65);
+    const beaconCapGeo = new THREE.BoxGeometry(1.32, 0.16, 1.82);
+    const beaconLensGeo = new THREE.BoxGeometry(0.18, 0.28, 1.12);
+    const beaconHousingMat = new THREE.MeshStandardMaterial({
+      color: 0x1e1417,
+      metalness: 0.84,
+      roughness: 0.34,
+      emissive: 0x26080b,
+      emissiveIntensity: 0.28,
+    });
 
-    for (let i = 0; i < 8; i++) {
+    // Soft radial Gaussian glow sprite texture (zero hard cone edges)
+    let glowTex: THREE.Texture | null = null;
+    if (typeof document !== 'undefined') {
+      const c = document.createElement('canvas');
+      c.width = 64;
+      c.height = 64;
+      const ctx = c.getContext('2d');
+      if (ctx) {
+        const g = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+        g.addColorStop(0.0, 'rgba(255, 235, 195, 0.85)');
+        g.addColorStop(0.28, 'rgba(255, 145, 70, 0.42)');
+        g.addColorStop(0.65, 'rgba(220, 58, 42, 0.10)');
+        g.addColorStop(1.0, 'rgba(0, 0, 0, 0.0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(0, 0, 64, 64);
+      }
+      const ct = new THREE.CanvasTexture(c);
+      ct.colorSpace = THREE.SRGBColorSpace;
+      ct.needsUpdate = true;
+      glowTex = ct;
+    }
+    const beaconGlowGeo = new THREE.PlaneGeometry(5.6, 5.6);
+
+    const beaconPairs = 7;
+    const beaconStepZ = 38;
+    const beaconSpanZ = beaconPairs * beaconStepZ;
+    for (let i = 0; i < beaconPairs * 2; i++) {
       const side = i % 2 === 0 ? -1 : 1;
       const pairIdx = Math.floor(i / 2);
-      const baseX = side * (22 + (pairIdx % 2) * 6);
-      const baseZ = -26 - pairIdx * 36;
-      const mat = this.createVolumetricBeamMaterial(
-        i % 3 === 0 ? 0xff4757 : 0xffaa3b,
-        0.22,
-        true
-      );
-      const cone = new THREE.Mesh(coneGeo, mat);
-      cone.position.set(baseX, -11.4, baseZ);
-      cone.renderOrder = -3;
-      this.act4Group.add(cone);
-      this.warmupTargets.push(cone);
-      this.searchlights.push({
-        mesh: cone,
-        baseX,
-        baseZ,
-        side,
-        phase: i * 1.15,
-        speed: 0.75 + (i % 3) * 0.25,
+      const z = -pairIdx * beaconStepZ - 14;
+      const isCrimson = pairIdx % 2 === 0;
+      const baseColor = new THREE.Color(isCrimson ? 0xff4b3e : 0xff9f38);
+
+      const beaconGroup = new THREE.Group();
+      beaconGroup.position.set(side * 21.2, -10.35, z);
+
+      const housing = new THREE.Mesh(beaconHousingGeo, beaconHousingMat);
+      const cap = new THREE.Mesh(beaconCapGeo, beaconHousingMat);
+      cap.position.y = 0.36;
+
+      const lensMat = new THREE.MeshBasicMaterial({
+        color: baseColor.clone(),
+        toneMapped: false,
+      });
+      const lens = new THREE.Mesh(beaconLensGeo, lensMat);
+      lens.position.set(-side * 0.56, 0.04, 0);
+
+      const glowMat = new THREE.MeshBasicMaterial({
+        color: baseColor.clone(),
+        map: glowTex,
+        transparent: true,
+        opacity: 0.24,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      const glow = new THREE.Mesh(beaconGlowGeo, glowMat);
+      glow.position.set(-side * 0.82, 0.25, 0);
+      glow.renderOrder = -3;
+
+      beaconGroup.add(housing, cap, lens, glow);
+      this.act5Group.add(beaconGroup);
+      if (i < 2) this.warmupTargets.push(housing, glow);
+      this.trenchBeacons.push({
+        group: beaconGroup,
+        lensMat,
+        glowMat,
+        baseColor,
+        z,
+        spanZ: beaconSpanZ,
+        phase: pairIdx * 0.92,
       });
     }
 
@@ -3219,7 +3392,7 @@ export class EnvironmentSystem {
       toneMapped: false,
     });
     this.act4EmberInst = new THREE.InstancedMesh(emberGeo, emberMat, ACT4_EMBER_COUNT);
-    this.act4EmberInst.name = 'Act4FurnaceEmbers';
+    this.act4EmberInst.name = 'Act5FurnaceEmbers';
     this.act4EmberInst.frustumCulled = false;
     const moltenAmber = new THREE.Color(0xffaa3b);
     const crimsonSpark = new THREE.Color(0xff4757);
@@ -3250,7 +3423,7 @@ export class EnvironmentSystem {
     }
     this.act4EmberInst.instanceMatrix.needsUpdate = true;
     if (this.act4EmberInst.instanceColor) this.act4EmberInst.instanceColor.needsUpdate = true;
-    this.act4Group.add(this.act4EmberInst);
+    this.act5Group.add(this.act4EmberInst);
     this.warmupTargets.push(this.act4EmberInst);
   }
 
@@ -3483,7 +3656,30 @@ export class EnvironmentSystem {
     this.advanceCorridorStreaks(this.act3Streaks, this.act3StreakInst, dt, elapsed, speed, 24, 270);
   }
 
-  private updateAct4Citadel(dt: number, elapsed: number, speed: number): void {
+  private updateAct4Desert(dt: number, elapsed: number, speed: number): void {
+    // Subtle left-to-right crosswind sand streaks matching the 1080p desert sandstorm direction
+    for (let i = 0; i < this.act4DesertWinds.length; i++) {
+      const tr = this.act4DesertWinds[i];
+      tr.z += speed * tr.speedMult * dt;
+      tr.x += (11.5 + (i % 5) * 2.2) * dt;
+      if (tr.z > 24) {
+        tr.z -= 265;
+      }
+      if (tr.x > 64) {
+        tr.x -= 128;
+      }
+      tr.y = tr.baseY + Math.sin(elapsed * 1.6 + (tr.bobPhase ?? 0)) * 0.32;
+      this.dummy.position.set(tr.x, tr.y, tr.z);
+      this.dummy.rotation.set(0, 0.24, 0);
+      const th = tr.thickness ?? 0.08;
+      this.dummy.scale.set(th, th, tr.length);
+      this.dummy.updateMatrix();
+      this.act4DesertWindInst.setMatrixAt(i, this.dummy.matrix);
+    }
+    this.act4DesertWindInst.instanceMatrix.needsUpdate = true;
+  }
+
+  private updateAct5Citadel(dt: number, elapsed: number, speed: number): void {
     // Scroll 2K PBR dreadnought hull textures at exact 1:1 world speed (7 tiles across 290m deck)
     const hullUvOffset = (this.scrollDistance * 7) / 290;
     for (let i = 0; i < this.act4HullPbrTextures.length; i++) {
@@ -3493,12 +3689,17 @@ export class EnvironmentSystem {
     this.advanceScrollingProps(this.act4ScrollingProps, dt, elapsed, speed);
     this.advanceCorridorStreaks(this.act4Embers, this.act4EmberInst, dt, elapsed, speed, 24, 270);
 
-    // Sweep searchlight cones upward and across the trench
-    for (const s of this.searchlights) {
-      s.mesh.position.set(s.baseX, -11.4, s.baseZ);
-      const t = elapsed * s.speed + s.phase;
-      s.mesh.rotation.z = -s.side * (0.26 + Math.sin(t) * 0.24);
-      s.mesh.rotation.x = Math.cos(t * 0.85) * 0.22;
+    // Scroll grounded rail-mounted trench beacons 1:1 with the hull deck and pulse sequentially
+    for (const b of this.trenchBeacons) {
+      b.z += speed * dt;
+      if (b.z > 24) {
+        b.z -= b.spanZ;
+      }
+      b.group.position.z = b.z;
+      const pulse = 0.55 + 0.45 * Math.sin(elapsed * 4.2 - b.phase);
+      const farFade = THREE.MathUtils.smoothstep(b.z, -245, -145);
+      b.lensMat.color.copy(b.baseColor).multiplyScalar((0.55 + 0.65 * pulse) * farFade);
+      b.glowMat.opacity = (0.12 + 0.18 * pulse) * farFade;
     }
   }
 
@@ -3506,7 +3707,7 @@ export class EnvironmentSystem {
     if (!this.dustInst.visible) return;
 
     const stretch = THREE.MathUtils.clamp(speed / 26, 0.75, 3.6);
-    const tint = DUST_ACT_COLORS[Math.max(0, Math.min(3, this.currentAct - 1))];
+    const tint = DUST_ACT_COLORS[Math.max(0, Math.min(4, this.currentAct - 1))];
 
     for (let i = 0; i < DUST_COUNT; i++) {
       const p = this.dustParticles[i];

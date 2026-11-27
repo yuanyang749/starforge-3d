@@ -33,6 +33,7 @@
         display: block;
       }
       .fps-hud:not(:popover-open),
+      .trophy-toast:not(:popover-open),
       .boot-door,
       .boot-seam-flash,
       .boot-airlock-seal {
@@ -85,6 +86,55 @@
   <body>
     <canvas id="game-canvas" aria-label="星穹战翼 3D 战场画布"></canvas>
     <div id="damage-vignette" class="damage-vignette" aria-hidden="true"></div>
+    <p class="sr-only">荣誉奖杯实时播报提示</p>
+    <div id="trophy-live-region" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+    <div id="trophy-toast-region" class="trophy-toast-region" role="region" aria-label="荣誉奖杯实时播报">
+      <aside
+        id="trophy-toast"
+        class="trophy-toast is-bronze"
+        popover="manual"
+        aria-labelledby="trophy-toast-title"
+      >
+        <div class="trophy-toast-sheen" aria-hidden="true"></div>
+        <div class="trophy-toast-emblem-wrap">
+          <img
+            id="trophy-toast-medal"
+            src="./ui/trophies/medal_combat_ace.webp"
+            class="trophy-toast-medal"
+            alt=""
+            width="96"
+            height="96"
+          />
+        </div>
+        <div class="trophy-toast-body">
+          <div class="trophy-toast-kicker-row">
+            <img
+              id="trophy-toast-tier-icon"
+              src="./ui/trophies/tier_bronze.webp"
+              class="trophy-toast-tier-icon"
+              alt=""
+              width="32"
+              height="32"
+            />
+            <span id="trophy-toast-kicker" class="trophy-toast-kicker">青铜奖杯</span>
+          </div>
+          <strong id="trophy-toast-title" class="trophy-toast-title">初露锋芒</strong>
+        </div>
+        <button
+          id="trophy-toast-close"
+          type="button"
+          class="trophy-toast-close"
+          popovertarget="trophy-toast"
+          popovertargetaction="hide"
+          aria-label="关闭奖杯播报"
+        >
+          ✕
+        </button>
+        <div class="trophy-toast-progress" aria-hidden="true">
+          <div id="trophy-toast-progress-bar" class="trophy-toast-progress-bar"></div>
+        </div>
+      </aside>
+    </div>
     <aside id="fps-hud" class="fps-hud" popover="manual" aria-label="实时帧率与渲染模式">
       <button
         id="fps-hud-btn"
@@ -303,6 +353,34 @@
             <span class="topbar-chip-sep" aria-hidden="true"></span>
             <span id="hangar-career-stats" class="career-pill">总击坠 0 · 出击 0 次</span>
           </div>
+          <button
+            id="hangar-trophy-btn"
+            type="button"
+            class="topbar-action-btn is-trophy-btn"
+            data-spotlight
+            aria-label="打开荣誉奖杯陈列室"
+            title="荣誉奖杯陈列室 (20 枚)"
+          >
+            <img
+              src="./ui/frames/btn_tactical_frame.webp"
+              class="topbar-btn-frame"
+              alt=""
+              aria-hidden="true"
+              width="512"
+              height="218"
+            />
+            <span class="ui-spotlight is-amber" aria-hidden="true"></span>
+            <img
+              src="./ui/trophies/icon_trophy.webp"
+              class="topbar-btn-icon is-trophy-icon"
+              alt=""
+              aria-hidden="true"
+              width="256"
+              height="256"
+            />
+            <span class="topbar-btn-label">奖杯</span>
+            <span id="hangar-trophy-count" class="topbar-trophy-count">0/20</span>
+          </button>
         </div>
 
         <div class="topbar-center-crest">
@@ -463,10 +541,10 @@
           <span class="ui-spotlight" aria-hidden="true"></span>
           <span class="mode-dock-top">
             <span class="mode-dock-code">ARCADE</span>
-            <span id="hangar-mode-arcade-badge" class="mode-dock-badge">4 幕战役</span>
+            <span id="hangar-mode-arcade-badge" class="mode-dock-badge">5 幕战役</span>
           </span>
           <span class="mode-dock-title">街机战役</span>
-          <span class="mode-dock-desc">四幕首领推进 · 芯片构筑通关</span>
+          <span class="mode-dock-desc">五幕首领推进 · 芯片构筑通关</span>
         </button>
 
         <button
@@ -1135,6 +1213,7 @@
           <h2 id="result-dialog-title">战役凯旋 · CAMPAIGN CLEARED</h2>
           <p id="result-subtitle" class="result-subtitle"></p>
           <div id="result-stats-grid" class="result-stats-grid"></div>
+          <div id="result-trophies-strip" class="result-trophies-strip" hidden></div>
           <form method="dialog" class="dialog-actions">
             <button id="result-endless-btn" value="endless" class="btn-amber-launch" data-spotlight hidden>
               <span class="ui-spotlight is-amber" aria-hidden="true"></span>
@@ -1467,6 +1546,111 @@
             <button value="close" class="btn-primary-launch" data-spotlight autofocus>
               <span class="ui-spotlight" aria-hidden="true"></span>
               <span>我已掌握 · 返回机库 (READY)</span>
+            </button>
+          </form>
+        </div>
+      </div>
+    </dialog>
+
+    <dialog id="trophy-dialog" closedby="any" aria-labelledby="trophy-dialog-title">
+      <div class="dialog-shell trophy-shell framed-shell" data-spotlight>
+        <img
+          src="./ui/frames/modal_frame_sci_fi.webp"
+          class="ui-frame-bg"
+          alt=""
+          aria-hidden="true"
+          width="960"
+          height="640"
+        />
+        <span class="ui-spotlight is-amber" aria-hidden="true"></span>
+        <div class="dialog-inner trophy-inner">
+          <div class="dialog-top-bar">
+            <div class="dialog-header">
+              <img
+                src="./ui/trophies/icon_trophy.webp"
+                class="dialog-header-icon"
+                alt=""
+                aria-hidden="true"
+                width="256"
+                height="256"
+              />
+              <div>
+                <div class="dialog-kicker">天盾轨道司令部 · 荣耀勋章档案</div>
+                <h1 id="trophy-dialog-title" class="trophy-modal-h1">荣誉奖杯陈列室 · TROPHIES</h1>
+              </div>
+            </div>
+            <form method="dialog">
+              <button value="close" class="dialog-close-x" aria-label="关闭奖杯陈列室">✕</button>
+            </form>
+          </div>
+
+          <div class="trophy-summary-banner">
+            <div class="trophy-ring-block">
+              <div class="trophy-ring-wrap" aria-hidden="true">
+                <svg viewBox="0 0 84 84" class="trophy-ring-svg">
+                  <circle class="trophy-ring-track" cx="42" cy="42" r="35" />
+                  <circle id="trophy-ring-arc" class="trophy-ring-arc" cx="42" cy="42" r="35" />
+                </svg>
+                <strong id="trophy-pct-val" class="trophy-pct-val">0%</strong>
+              </div>
+              <div class="trophy-summary-copy">
+                <div class="trophy-summary-kicker">远征达成进度</div>
+                <div class="trophy-summary-main">
+                  <strong id="trophy-unlocked-count">0</strong>
+                  <span>/ 20 枚奖杯</span>
+                </div>
+                <div id="trophy-points-val" class="trophy-points-sub">荣誉点数 0 / 900 PTS</div>
+              </div>
+            </div>
+
+            <div class="trophy-tier-counters" aria-label="各级奖杯达成统计">
+              <div class="trophy-tier-stat is-platinum">
+                <img src="./ui/trophies/tier_platinum.webp" alt="白金奖杯" width="48" height="48" />
+                <div>
+                  <span>白金</span>
+                  <strong id="trophy-cnt-platinum">0 / 1</strong>
+                </div>
+              </div>
+              <div class="trophy-tier-stat is-gold">
+                <img src="./ui/trophies/tier_gold.webp" alt="黄金奖杯" width="48" height="48" />
+                <div>
+                  <span>黄金</span>
+                  <strong id="trophy-cnt-gold">0 / 3</strong>
+                </div>
+              </div>
+              <div class="trophy-tier-stat is-silver">
+                <img src="./ui/trophies/tier_silver.webp" alt="白银奖杯" width="48" height="48" />
+                <div>
+                  <span>白银</span>
+                  <strong id="trophy-cnt-silver">0 / 6</strong>
+                </div>
+              </div>
+              <div class="trophy-tier-stat is-bronze">
+                <img src="./ui/trophies/tier_bronze.webp" alt="青铜奖杯" width="48" height="48" />
+                <div>
+                  <span>青铜</span>
+                  <strong id="trophy-cnt-bronze">0 / 10</strong>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div id="trophy-filter-tabs" class="trophy-filter-tabs" role="tablist" aria-label="筛选奖杯等级或状态">
+            <button type="button" role="tab" class="trophy-filter-btn is-active" data-trophy-filter="all" aria-selected="true">全部 20</button>
+            <button type="button" role="tab" class="trophy-filter-btn" data-trophy-filter="unlocked" aria-selected="false">已解锁</button>
+            <button type="button" role="tab" class="trophy-filter-btn" data-trophy-filter="locked" aria-selected="false">未解锁</button>
+            <button type="button" role="tab" class="trophy-filter-btn is-platinum" data-trophy-filter="platinum" aria-selected="false">白金</button>
+            <button type="button" role="tab" class="trophy-filter-btn is-gold" data-trophy-filter="gold" aria-selected="false">黄金</button>
+            <button type="button" role="tab" class="trophy-filter-btn is-silver" data-trophy-filter="silver" aria-selected="false">白银</button>
+            <button type="button" role="tab" class="trophy-filter-btn is-bronze" data-trophy-filter="bronze" aria-selected="false">青铜</button>
+          </div>
+
+          <div id="trophy-cards-grid" class="trophy-cards-grid" role="tabpanel" aria-label="奖杯列表"></div>
+
+          <form method="dialog" class="dialog-actions trophy-dialog-actions">
+            <button value="close" class="btn-primary-launch" data-spotlight autofocus>
+              <span class="ui-spotlight" aria-hidden="true"></span>
+              <span>返回星港机库 (RETURN)</span>
             </button>
           </form>
         </div>

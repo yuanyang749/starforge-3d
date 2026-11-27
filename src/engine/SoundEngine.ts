@@ -986,6 +986,58 @@ export class SoundEngine {
     }
   }
 
+  playTrophyUnlock(tier: 'bronze' | 'silver' | 'gold' | 'platinum'): void {
+    if (!this.canPlaySfx() || !this.ctx || !this.sfxGain) return;
+    const now = this.ctx.currentTime;
+    const notes =
+      tier === 'platinum'
+        ? [1046.5, 1318.51, 1567.98, 1975.53, 2349.32, 2637.02]
+        : tier === 'gold'
+          ? [1046.5, 1318.51, 1567.98, 2093.0]
+          : tier === 'silver'
+            ? [1046.5, 1567.98, 2093.0]
+            : [1046.5, 1567.98];
+    const spacing = tier === 'platinum' ? 0.085 : 0.075;
+    const decay = tier === 'platinum' ? 1.15 : tier === 'gold' ? 0.85 : 0.62;
+    const baseVol = tier === 'platinum' ? 0.22 : tier === 'gold' ? 0.19 : 0.16;
+
+    try {
+      notes.forEach((freq, idx) => {
+        if (!this.ctx || !this.sfxGain) return;
+        const t0 = now + idx * spacing;
+
+        // Primary crystalline bell fundamental
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, t0);
+        gain.gain.setValueAtTime(0.0001, t0);
+        gain.gain.linearRampToValueAtTime(baseVol, t0 + 0.012);
+        gain.gain.exponentialRampToValueAtTime(0.0008, t0 + decay);
+        osc.connect(gain);
+        gain.connect(this.sfxGain);
+        osc.start(t0);
+        osc.stop(t0 + decay + 0.03);
+
+        // Shimmering harmonic overtone (octave + slight chorus detune)
+        const over = this.ctx.createOscillator();
+        const oGain = this.ctx.createGain();
+        over.type = 'triangle';
+        over.frequency.setValueAtTime(freq * 2, t0);
+        over.detune.setValueAtTime(idx % 2 === 0 ? 5 : -5, t0);
+        oGain.gain.setValueAtTime(0.0001, t0);
+        oGain.gain.linearRampToValueAtTime(baseVol * 0.34, t0 + 0.01);
+        oGain.gain.exponentialRampToValueAtTime(0.0005, t0 + decay * 0.72);
+        over.connect(oGain);
+        oGain.connect(this.sfxGain);
+        over.start(t0);
+        over.stop(t0 + decay * 0.75 + 0.02);
+      });
+    } catch {
+      // Safe no-op
+    }
+  }
+
   private playToneSweep(
     fromHz: number,
     toHz: number,

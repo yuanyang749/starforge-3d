@@ -47,6 +47,8 @@ export interface BossPartRuntime {
     | 'rightCannon'
     | 'leftClaw'
     | 'rightClaw'
+    | 'leftSolarCannon'
+    | 'rightSolarCannon'
     | 'dorsalTurret'
     | 'bowCrane';
   worldPos: THREE.Vector3;
@@ -205,6 +207,16 @@ export interface WaveEvent {
   bossConfig?: BossConfig;
 }
 
+export interface CombatScalingSnapshot {
+  enemyHpMult: number;
+  bossHpMult: number;
+  enemyFireRateMult: number;
+  enemyBulletSpeedMult: number;
+  enemyDamageMult: number;
+  scoreMult: number;
+  playerUpgradeStacks: number;
+}
+
 export type GateHitKind = 'door' | 'frame' | null;
 
 // Analytical prop_gate dimensions derived from GLB bounds (maxDim=4.52, targetSize=44).
@@ -274,6 +286,7 @@ export class WaveDirector {
   readonly activeEnemies: ActiveEnemy[] = [];
   activeBoss: ActiveBoss | null = null;
   private bossScaleFactor = 1.0;
+  private playerUpgradeStacks = 0;
 
   private currentFogColor = new THREE.Color(ACT_THEMES[0].fogColor);
   private targetFogColor = new THREE.Color(ACT_THEMES[0].fogColor);
@@ -509,6 +522,46 @@ export class WaveDirector {
     return this.endlessWave;
   }
 
+  setPlayerUpgradeStacks(totalStacks: number): void {
+    this.playerUpgradeStacks = Math.max(0, Math.floor(Number.isFinite(totalStacks) ? totalStacks : 0));
+    if (this.endlessMode) {
+      this.bossScaleFactor = this.getCombatScaling().bossHpMult;
+    }
+  }
+
+  getCombatScaling(): CombatScalingSnapshot {
+    if (!this.endlessMode) {
+      const actStep = Math.max(0, this.currentAct - 1);
+      return {
+        enemyHpMult: +(1 + actStep * 0.25).toFixed(2),
+        bossHpMult: 1.0,
+        enemyFireRateMult: +(1 + actStep * 0.14).toFixed(2),
+        enemyBulletSpeedMult: +(1 + actStep * 0.14).toFixed(2),
+        enemyDamageMult: 1.0,
+        scoreMult: 1.0,
+        playerUpgradeStacks: this.playerUpgradeStacks,
+      };
+    }
+
+    const step = Math.max(0, this.endlessWave - 1);
+    const u = this.playerUpgradeStacks;
+    // Matches multiplicative chip DPS growth (overcharge × prism × crit × missiles × tesla)
+    const gearFactor = 1 + u * 0.15 + u * u * 0.015;
+    const gearBlend = 0.45 + 0.55 * gearFactor;
+    const waveHpCurve = 1.2 + step * 0.34 + Math.pow(step, 1.62) * 0.09;
+    const bossWaveCurve = 1.28 + step * 0.36 + Math.pow(step, 1.58) * 0.095;
+
+    return {
+      enemyHpMult: +(waveHpCurve * gearBlend).toFixed(2),
+      bossHpMult: +(bossWaveCurve * gearBlend).toFixed(2),
+      enemyFireRateMult: +Math.min(2.3, 1.12 + step * 0.085).toFixed(2),
+      enemyBulletSpeedMult: +Math.min(1.85, 1.08 + step * 0.055).toFixed(2),
+      enemyDamageMult: +Math.min(2.5, 1.0 + step * 0.095).toFixed(2),
+      scoreMult: +(1 + step * 0.25).toFixed(2),
+      playerUpgradeStacks: u,
+    };
+  }
+
   startCampaign(): WaveEvent {
     this.clearCombatEntities();
 
@@ -534,20 +587,45 @@ export class WaveDirector {
     this.endlessWave = 1;
     this.currentAct = 1;
     this.waveInAct = 1;
-    this.bossScaleFactor = 1.35;
+    this.bossScaleFactor = this.getCombatScaling().bossHpMult;
     this.gateSpawnCooldown = 4.0;
     this.boostRingTimer = 5.5;
     this.applyActTheme(1, false);
     return this.beginWave(1, 1);
   }
 
-  forceSpawnBoss(act: 1 | 2 | 3 | 4): WaveEvent {
+  forceSetEndlessWaveForQa(wave: number, upgradeStacks?: number): WaveEvent {
+    this.clearCombatEntities();
+    this.combatActive = true;
+    this.envGroup.visible = true;
+    this.endlessMode = true;
+    this.endlessWave = Math.max(1, Math.floor(wave));
+    if (typeof upgradeStacks === 'number' && Number.isFinite(upgradeStacks)) {
+      this.playerUpgradeStacks = Math.max(0, Math.floor(upgradeStacks));
+    }
+    const themeAct = ((this.endlessWave - 1) % 5) + 1;
+    this.currentAct = themeAct;
+    this.bossScaleFactor = this.getCombatScaling().bossHpMult;
+    this.applyActTheme(themeAct, false);
+    if (this.endlessWave % 3 === 0) {
+      this.waveInAct = 3;
+      return this.beginBossWave(themeAct);
+    }
+    this.waveInAct = 2;
+    const ev = this.beginWave(themeAct, 2);
+    // Spawn an immediate enemy sample for deterministic inspection
+    this.spawnEnemyInstance('enemy_drone', 0, 0, -128);
+    this.spawnedInWave += 1;
+    return ev;
+  }
+
+  forceSpawnBoss(act: 1 | 2 | 3 | 4 | 5): WaveEvent {
     this.clearCombatEntities();
     this.combatActive = true;
     this.envGroup.visible = true;
     this.currentAct = act;
     this.waveInAct = 3;
-    if (act >= 3) {
+    if (act === 3 || act === 5) {
       this.gateSpawnCooldown = 2.0;
     }
     this.applyActTheme(act, false);
@@ -558,9 +636,9 @@ export class WaveDirector {
     if (this.phaseState !== 'awaiting_upgrade') return null;
     if (this.endlessMode) {
       this.endlessWave += 1;
-      const themeAct = ((this.endlessWave - 1) % 4) + 1;
+      const themeAct = ((this.endlessWave - 1) % 5) + 1;
       this.currentAct = themeAct;
-      this.bossScaleFactor = 1 + this.endlessWave * 0.22;
+      this.bossScaleFactor = this.getCombatScaling().bossHpMult;
       this.applyActTheme(themeAct, false);
       if (this.endlessWave % 3 === 0) {
         this.waveInAct = 3;
@@ -593,10 +671,10 @@ export class WaveDirector {
       };
     }
 
-    if (this.currentAct < 4) {
+    if (this.currentAct < 5) {
       this.currentAct += 1;
       this.waveInAct = 1;
-      if (this.currentAct === 3) {
+      if (this.currentAct === 3 || this.currentAct === 5) {
         this.gateSpawnCooldown = Math.min(this.gateSpawnCooldown, 3.5);
       }
       this.applyActTheme(this.currentAct, false);
@@ -607,7 +685,7 @@ export class WaveDirector {
     this.combatActive = false;
     return {
       type: 'campaign_victory',
-      act: 4,
+      act: 5,
       waveInAct: 3,
       endlessWave: 0,
     };
@@ -618,7 +696,7 @@ export class WaveDirector {
     this.spawnedInWave = 0;
     this.spawnTimer = 0.6;
     this.targetSpawnsInWave = this.endlessMode
-      ? 9 + this.endlessWave * 2
+      ? Math.min(34, 10 + this.endlessWave * 2)
       : 6 + act * 2 + waveInAct * 2;
 
     if (this.endlessMode) {
@@ -641,13 +719,18 @@ export class WaveDirector {
   private beginBossWave(act: number): WaveEvent {
     this.phaseState = 'boss_fight';
     this.waveInAct = 3;
-    const bossId: BossId = act === 1 ? 'act1' : act === 2 ? 'act2' : act === 3 ? 'act3' : 'act4';
+    const bossId: BossId =
+      act === 1 ? 'act1' : act === 2 ? 'act2' : act === 3 ? 'act3' : act === 4 ? 'act4' : 'act5';
     const cfg = BOSSES[bossId];
     const inst = this.loader.acquire(cfg.modelKey, true);
     const rig = new AnimationRig(cfg.modelKey, inst.modelRoot, inst.animations, 'combat');
 
-    const scale = this.bossScaleFactor;
-    const scaledMaxHp = Math.round(cfg.maxHp * scale);
+    const scaling = this.getCombatScaling();
+    const scale = this.endlessMode ? scaling.bossHpMult : this.bossScaleFactor;
+    // Prevent Endless bosses on Act 1/2 rotation (Wave 6, 9, ...) from dropping below Wave 3's base HP floor
+    const effectiveBaseHp = this.endlessMode ? Math.max(cfg.maxHp, 1280) : cfg.maxHp;
+    const partBaseScale = effectiveBaseHp / Math.max(1, cfg.maxHp);
+    const scaledMaxHp = Math.round(effectiveBaseHp * scale);
 
     const introStartPos =
       act === 1
@@ -656,13 +739,17 @@ export class WaveDirector {
           ? new THREE.Vector3(0, 17.5, -124)
           : act === 3
             ? new THREE.Vector3(-15, 7.5, -132)
-            : new THREE.Vector3(0, 5.2, -148);
+            : act === 4
+              ? new THREE.Vector3(0, 16.5, -138)
+              : new THREE.Vector3(0, 5.2, -148);
     const introHoverPos =
-      act === 4
+      act === 5
         ? new THREE.Vector3(0, 2.2, -40)
-        : act === 1
-          ? new THREE.Vector3(0, 2.1, -36)
-          : new THREE.Vector3(0, 1.8, -37);
+        : act === 4
+          ? new THREE.Vector3(0, 2.0, -37.5)
+          : act === 1
+            ? new THREE.Vector3(0, 2.1, -36)
+            : new THREE.Vector3(0, 1.8, -37);
     const introSweepSign: -1 | 1 = act % 2 === 1 ? 1 : -1;
 
     inst.root.position.copy(introStartPos);
@@ -680,8 +767,8 @@ export class WaveDirector {
         nodeName: spec.nodeName,
         labelZh: spec.labelZh,
         node,
-        hp: Math.round(spec.hp * scale),
-        maxHp: Math.round(spec.hp * scale),
+        hp: Math.round(spec.hp * partBaseScale * scale),
+        maxHp: Math.round(spec.hp * partBaseScale * scale),
         hitRadius: spec.hitRadius,
         destroyed: false,
         weaponEffectKey: spec.weaponEffectKey,
@@ -692,7 +779,7 @@ export class WaveDirector {
     // Collect top-most detachable part subtrees without pushing nested descendants of already-queued ancestors
     const detachQueue: THREE.Object3D[] = [];
     const detachRegex =
-      /leg_|cannon_|claw_|turret|fighter_|bowcranearms|dorsalturret|antenna|eye_|bosswingpod|wingfold_pivot/i;
+      /leg_|cannon_|solarcannon_|solarwing_|mandible_|thruster_|claw_|turret|fighter_|bowcranearms|dorsalturret|antenna|eye_|bosswingpod|wingfold_pivot/i;
     const collectDetachable = (node: THREE.Object3D): void => {
       if (detachQueue.length >= 16) return;
       if (node !== inst.modelRoot && node.name && detachRegex.test(node.name)) {
@@ -712,7 +799,7 @@ export class WaveDirector {
       rig,
       hp: scaledMaxHp,
       maxHp: scaledMaxHp,
-      hitRadius: act === 4 ? 6.2 : act === 1 ? 5.2 : 4.8,
+      hitRadius: act === 5 ? 6.2 : act === 4 ? 5.4 : act === 1 ? 5.2 : 4.8,
       pos: inst.root.position,
       age: 0,
       fireTimer: 1.5,
@@ -794,8 +881,12 @@ export class WaveDirector {
       }
     }
 
-    // Periodic Warp Gateway (prop_gate) in Act 3 and Act 4
-    if (this.combatActive && this.currentAct >= 3 && this.phaseState !== 'idle') {
+    // Periodic Warp Gateway (prop_gate) in Act 3 and Act 5 (keep Act 4 Desert pure open panoramic canyon)
+    if (
+      this.combatActive &&
+      (this.currentAct === 3 || this.currentAct === 5) &&
+      this.phaseState !== 'idle'
+    ) {
       this.gateSpawnCooldown -= dt;
       if (this.gateSpawnCooldown <= 0) {
         this.gateSpawnCooldown = 16.5;
@@ -966,7 +1057,9 @@ export class WaveDirector {
       this.spawnTimer -= dt;
       if (this.spawnTimer <= 0 && this.spawnedInWave < this.targetSpawnsInWave) {
         this.spawnEnemyByWavePlan();
-        this.spawnTimer = Math.max(0.75, 1.85 - this.currentAct * 0.25);
+        this.spawnTimer = this.endlessMode
+          ? Math.max(0.46, 1.38 - Math.min(0.92, Math.max(0, this.endlessWave - 1) * 0.075))
+          : Math.max(0.75, 1.85 - this.currentAct * 0.25);
       }
       if (this.spawnedInWave >= this.targetSpawnsInWave && this.activeEnemies.length === 0) {
         if (this.endlessMode) {
@@ -1002,20 +1095,38 @@ export class WaveDirector {
     return c;
   }
 
+  private getEnemyCap(kind: EnemyKind): number {
+    if (!this.endlessMode) return ENEMY_CAPS[kind];
+    const extra = kind === 'enemy_rover'
+      ? Math.min(2, Math.floor(this.endlessWave / 4))
+      : Math.min(4, Math.floor(this.endlessWave / 3));
+    return ENEMY_CAPS[kind] + extra;
+  }
+
   private pickAllowedEnemyKind(): EnemyKind {
     const candidates: EnemyKind[] =
-      this.currentAct === 1
+      this.currentAct === 1 && !this.endlessMode
         ? ['enemy_drone', 'enemy_turret', 'enemy_rover', 'enemy_foldwing']
         : ['enemy_foldwing', 'enemy_turret', 'enemy_rover', 'enemy_drone'];
 
     const weighted: EnemyKind[] = [];
+    const heavyEndless = this.endlessMode && this.endlessWave >= 3;
+    const lateEndless = this.endlessMode && this.endlessWave >= 6;
     for (const k of candidates) {
-      if (this.countKind(k) >= ENEMY_CAPS[k]) continue;
-      if (k === 'enemy_drone') weighted.push(k, k, k);
-      else if (k === 'enemy_turret') weighted.push(k, k);
-      else if (k === 'enemy_foldwing') weighted.push(k, k);
-      else if (k === 'enemy_rover' && (this.currentAct >= 2 || this.waveInAct >= 2)) {
+      if (this.countKind(k) >= this.getEnemyCap(k)) continue;
+      if (k === 'enemy_drone') {
+        if (lateEndless) weighted.push(k);
+        else if (heavyEndless) weighted.push(k, k);
+        else weighted.push(k, k, k);
+      } else if (k === 'enemy_turret') {
+        weighted.push(k, k);
+        if (heavyEndless) weighted.push(k);
+      } else if (k === 'enemy_foldwing') {
+        weighted.push(k, k);
+        if (heavyEndless) weighted.push(k);
+      } else if (k === 'enemy_rover' && (this.endlessMode || this.currentAct >= 2 || this.waveInAct >= 2)) {
         weighted.push(k);
+        if (lateEndless) weighted.push(k);
       }
     }
 
@@ -1024,17 +1135,23 @@ export class WaveDirector {
   }
 
   spawnEscortEnemy(kind: EnemyKind, originPos: THREE.Vector3): void {
-    if (this.countKind(kind) >= ENEMY_CAPS[kind]) return;
+    if (this.countKind(kind) >= this.getEnemyCap(kind)) return;
     const clampedX = THREE.MathUtils.clamp(originPos.x + (Math.random() - 0.5) * 9, -11.5, 11.5);
     const clampedY = THREE.MathUtils.clamp(originPos.y, -6.2, 6.2);
     this.spawnEnemyInstance(kind, clampedX, clampedY, originPos.z + 4);
   }
 
   private spawnEnemyByWavePlan(): void {
-    const batch = this.waveInAct === 2 || this.currentAct >= 2 ? 2 : 1;
+    const batch = this.endlessMode
+      ? this.endlessWave >= 7
+        ? 3
+        : 2
+      : this.waveInAct === 2 || this.currentAct >= 2
+        ? 2
+        : 1;
     for (let i = 0; i < batch && this.spawnedInWave < this.targetSpawnsInWave; i++) {
       const kind = this.pickAllowedEnemyKind();
-      if (this.countKind(kind) >= ENEMY_CAPS[kind]) continue;
+      if (this.countKind(kind) >= this.getEnemyCap(kind)) continue;
       const x = (Math.random() - 0.5) * 20;
       const y =
         kind === 'enemy_rover'
@@ -1049,7 +1166,8 @@ export class WaveDirector {
     const inst = this.loader.acquire(kind as ModelKey, true);
     const rig = new AnimationRig(kind, inst.modelRoot, inst.animations, 'combat');
 
-    const scale = this.endlessMode ? 1 + this.endlessWave * 0.18 : 1 + (this.currentAct - 1) * 0.25;
+    const scaling = this.getCombatScaling();
+    const scale = scaling.enemyHpMult;
     let baseHp = 45;
     let hitRadius = 1.8;
     let score = 120;
@@ -1077,6 +1195,7 @@ export class WaveDirector {
     }
 
     const hp = Math.round(baseHp * scale);
+    const scaledScore = Math.round(score * scaling.scoreMult);
     inst.root.position.set(x, y, z);
     this.scene.add(inst.root);
 
@@ -1088,13 +1207,13 @@ export class WaveDirector {
       hp,
       maxHp: hp,
       hitRadius,
-      scoreValue: score,
+      scoreValue: scaledScore,
       pos: inst.root.position,
       baseX: THREE.MathUtils.clamp(x, -11.5, 11.5),
       baseY: THREE.MathUtils.clamp(y, -6.2, 6.2),
       targetZ: targetZ + (Math.random() - 0.5) * 9,
       age: 0,
-      fireTimer: 0.9 + Math.random() * 1.1,
+      fireTimer: Math.max(0.55, (0.9 + Math.random() * 1.1) / scaling.enemyFireRateMult),
       phase: Math.random() * Math.PI * 2,
       flashTimer: 0,
       isElite,

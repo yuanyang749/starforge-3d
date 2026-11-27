@@ -1188,7 +1188,7 @@ async function runTests() {
       `Expected Act 3 full-canvas meanLuma > 24, got ${act3Full.meanLuma.toFixed(2)}`
     );
 
-    // Act 4 Boss, Dreadnought Trench Biome & Destructible Part Break
+    // Act 4 Boss (NEW): Solar Canyon Sandstorm pure 1080p vista + Solar Scarab Blender GLB & Destructible Cannon
     await page.evaluate(() => window.__STARFORGE__.spawnBossNow(4));
     await page.waitForFunction(
       () => {
@@ -1198,10 +1198,10 @@ async function runTests() {
       null,
       { timeout: 5000 }
     );
-    await sleep(320);
+    await sleep(650);
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
 
-    const act4BeforeInfo = await page.evaluate(() => ({
+    const act4DesertInfo = await page.evaluate(() => ({
       snap: window.__STARFORGE__.getSnapshot(),
       partPills: document.querySelectorAll('#boss-parts-row .boss-part-pill').length,
       threatBadge: document.getElementById('boss-hud-threat-badge')?.textContent?.trim() || '',
@@ -1209,45 +1209,117 @@ async function runTests() {
       hudText: document.getElementById('boss-hud')?.innerText || '',
     }));
     check(
-      act4BeforeInfo.snap.boss?.act === 4 && act4BeforeInfo.partPills === 2,
-      `Act 4 boss HUD mismatch: ${JSON.stringify(act4BeforeInfo)}`
+      act4DesertInfo.snap.boss?.act === 4 && act4DesertInfo.partPills === 2,
+      `Act 4 (Desert) boss HUD mismatch: ${JSON.stringify(act4DesertInfo)}`
     );
     check(
-      act4BeforeInfo.threatBadge.includes('终极威胁'),
-      `Expected Act 4 #boss-hud-threat-badge, got "${act4BeforeInfo.threatBadge}"`
+      act4DesertInfo.threatBadge.includes('威胁 VI 级'),
+      `Expected Act 4 #boss-hud-threat-badge, got "${act4DesertInfo.threatBadge}"`
     );
     check(
-      act4BeforeInfo.intelLine.includes('战术弱点'),
-      `Expected Act 4 #boss-hud-intel, got "${act4BeforeInfo.intelLine}"`
+      act4DesertInfo.intelLine.includes('战术弱点'),
+      `Expected Act 4 #boss-hud-intel, got "${act4DesertInfo.intelLine}"`
     );
-    assertImmersionPurity(act4BeforeInfo.hudText, 'boss-hud-act4');
+    assertImmersionPurity(act4DesertInfo.hudText, 'boss-hud-act4-desert');
     passedChecks += 1;
 
     const act4CanvasBuf = await page.locator('#game-canvas').screenshot();
     const act4Full = await analyzeFullCanvasPixels(act4CanvasBuf);
-    console.log(`[e2e] Act 4 (Dreadnought Citadel) full-canvas meanLuma=${act4Full.meanLuma.toFixed(2)}`);
+    console.log(`[e2e] Act 4 (Solar Canyon Sandstorm) full-canvas meanLuma=${act4Full.meanLuma.toFixed(2)}`);
     check(
       act4Full.meanLuma > 24,
-      `Expected Act 4 full-canvas meanLuma > 24, got ${act4Full.meanLuma.toFixed(2)}`
+      `Expected Act 4 (Desert) full-canvas meanLuma > 24, got ${act4Full.meanLuma.toFixed(2)}`
+    );
+    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'v5_act4_desert_boss_1440x900.png') });
+    console.log('[e2e] Saved v5_act4_desert_boss_1440x900.png');
+
+    // Verify Act 4 Desert Boss destructible SolarCannon_L part break
+    const scarabPart0 = act4DesertInfo.snap.boss.parts[0];
+    const scarabHpBefore = act4DesertInfo.snap.boss.hp;
+    const scarabPartBroken = await page.evaluate(
+      ({ pid, dmg }) => window.__STARFORGE__.damageBossPart(pid, dmg),
+      { pid: scarabPart0.id, dmg: scarabPart0.maxHp + 40 }
+    );
+    check(scarabPartBroken === true, `Expected damageBossPart(${scarabPart0.id}) to return true on Act 4 Solar Scarab`);
+    await sleep(160);
+    const act4AfterPart = await page.evaluate(() => ({
+      snap: window.__STARFORGE__.getSnapshot(),
+      brokenPills: document.querySelectorAll('#boss-parts-row .boss-part-pill.is-broken').length,
+    }));
+    check(
+      act4AfterPart.snap.boss.parts[0].destroyed === true && act4AfterPart.brokenPills >= 1,
+      `Expected Act 4 Solar Scarab part ${scarabPart0.id} destroyed, got ${JSON.stringify(act4AfterPart)}`
+    );
+    check(
+      act4AfterPart.snap.boss.hp > 0 && act4AfterPart.snap.boss.hp < scarabHpBefore,
+      `Expected Act 4 Solar Scarab alive with reduced HP after cannon break (${act4AfterPart.snap.boss.hp}/${scarabHpBefore})`
+    );
+    passedChecks += 1;
+
+    // Act 5 Boss (Shifted Finale), Dreadnought Trench Biome & Destructible Part Break
+    await page.evaluate(() => window.__STARFORGE__.spawnBossNow(5));
+    await page.waitForFunction(
+      () => {
+        const s = window.__STARFORGE__.getSnapshot();
+        return s.boss && s.boss.act === 5 && !document.getElementById('boss-hud')?.hidden;
+      },
+      null,
+      { timeout: 5000 }
+    );
+    await sleep(320);
+    await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+
+    const act5BeforeInfo = await page.evaluate(() => ({
+      snap: window.__STARFORGE__.getSnapshot(),
+      partPills: document.querySelectorAll('#boss-parts-row .boss-part-pill').length,
+      threatBadge: document.getElementById('boss-hud-threat-badge')?.textContent?.trim() || '',
+      intelLine: document.getElementById('boss-hud-intel')?.textContent?.trim() || '',
+      hudText: document.getElementById('boss-hud')?.innerText || '',
+    }));
+    check(
+      act5BeforeInfo.snap.boss?.act === 5 && act5BeforeInfo.partPills === 2,
+      `Act 5 boss HUD mismatch: ${JSON.stringify(act5BeforeInfo)}`
+    );
+    check(
+      act5BeforeInfo.threatBadge.includes('终极威胁'),
+      `Expected Act 5 #boss-hud-threat-badge, got "${act5BeforeInfo.threatBadge}"`
+    );
+    check(
+      act5BeforeInfo.intelLine.includes('战术弱点'),
+      `Expected Act 5 #boss-hud-intel, got "${act5BeforeInfo.intelLine}"`
+    );
+    assertImmersionPurity(act5BeforeInfo.hudText, 'boss-hud-act5');
+    passedChecks += 1;
+
+    const act5CanvasBuf = await page.locator('#game-canvas').screenshot();
+    const act5Full = await analyzeFullCanvasPixels(act5CanvasBuf);
+    console.log(`[e2e] Act 5 (Dreadnought Citadel) full-canvas meanLuma=${act5Full.meanLuma.toFixed(2)}`);
+    check(
+      act5Full.meanLuma > 24,
+      `Expected Act 5 full-canvas meanLuma > 24, got ${act5Full.meanLuma.toFixed(2)}`
     );
 
     const diff12 = meanPixelDiff(act1Full, act2Full);
     const diff23 = meanPixelDiff(act2Full, act3Full);
     const diff34 = meanPixelDiff(act3Full, act4Full);
+    const diff45 = meanPixelDiff(act4Full, act5Full);
     const diff14 = meanPixelDiff(act1Full, act4Full);
+    const diff15 = meanPixelDiff(act1Full, act5Full);
     console.log(
-      `[e2e] 4-Act differentiation meanDiff: Act1-2=${diff12.toFixed(2)}, Act2-3=${diff23.toFixed(2)}, Act3-4=${diff34.toFixed(2)}, Act1-4=${diff14.toFixed(2)}`
+      `[e2e] 5-Act differentiation meanDiff: Act1-2=${diff12.toFixed(2)}, Act2-3=${diff23.toFixed(2)}, Act3-4=${diff34.toFixed(2)}, Act4-5=${diff45.toFixed(2)}, Act1-4=${diff14.toFixed(2)}, Act1-5=${diff15.toFixed(2)}`
     );
     check(diff12 > 6.0, `Expected Act 1 vs Act 2 meanDiff > 6.0, got ${diff12.toFixed(2)}`);
     check(diff23 > 6.0, `Expected Act 2 vs Act 3 meanDiff > 6.0, got ${diff23.toFixed(2)}`);
     check(diff34 > 6.0, `Expected Act 3 vs Act 4 meanDiff > 6.0, got ${diff34.toFixed(2)}`);
+    check(diff45 > 6.0, `Expected Act 4 vs Act 5 meanDiff > 6.0, got ${diff45.toFixed(2)}`);
     check(diff14 > 6.0, `Expected Act 1 vs Act 4 meanDiff > 6.0, got ${diff14.toFixed(2)}`);
+    check(diff15 > 6.0, `Expected Act 1 vs Act 5 meanDiff > 6.0, got ${diff15.toFixed(2)}`);
 
-    const act4Before = act4BeforeInfo.snap;
-    const targetPart = act4Before.boss.parts[0];
+    const act5Before = act5BeforeInfo.snap;
+    const targetPart = act5Before.boss.parts[0];
     const targetPartId = targetPart.id;
     const partKillDmg = targetPart.maxHp + 40;
-    const hpBefore = act4Before.boss.hp;
+    const hpBefore = act5Before.boss.hp;
 
     const partDamaged = await page.evaluate(
       ({ pid, dmg }) => window.__STARFORGE__.damageBossPart(pid, dmg),
@@ -1256,25 +1328,25 @@ async function runTests() {
     check(partDamaged === true, `Expected damageBossPart(${targetPartId}) to return true`);
     await sleep(160);
 
-    const act4AfterPart = await page.evaluate(() => ({
+    const act5AfterPart = await page.evaluate(() => ({
       snap: window.__STARFORGE__.getSnapshot(),
       brokenPills: document.querySelectorAll('#boss-parts-row .boss-part-pill.is-broken').length,
     }));
     check(
-      act4AfterPart.snap.boss.parts[0].destroyed === true,
-      `Expected part ${targetPartId} destroyed, got ${JSON.stringify(act4AfterPart.snap.boss.parts[0])}`
+      act5AfterPart.snap.boss.parts[0].destroyed === true,
+      `Expected part ${targetPartId} destroyed, got ${JSON.stringify(act5AfterPart.snap.boss.parts[0])}`
     );
     check(
-      act4AfterPart.brokenPills >= 1,
-      `Expected >=1 .boss-part-pill.is-broken in HUD, got ${act4AfterPart.brokenPills}`
+      act5AfterPart.brokenPills >= 1,
+      `Expected >=1 .boss-part-pill.is-broken in HUD, got ${act5AfterPart.brokenPills}`
     );
     check(
-      act4AfterPart.snap.boss.hp > 0 && act4AfterPart.snap.boss.hp < hpBefore,
-      `Expected boss alive with reduced HP after part break (0 < ${act4AfterPart.snap.boss.hp} < ${hpBefore})`
+      act5AfterPart.snap.boss.hp > 0 && act5AfterPart.snap.boss.hp < hpBefore,
+      `Expected boss alive with reduced HP after part break (0 < ${act5AfterPart.snap.boss.hp} < ${hpBefore})`
     );
     check(
-      act4AfterPart.snap.boss.dying === false,
-      `Expected boss.dying === false after breaking single part, got ${act4AfterPart.snap.boss.dying}`
+      act5AfterPart.snap.boss.dying === false,
+      `Expected boss.dying === false after breaking single part, got ${act5AfterPart.snap.boss.dying}`
     );
     await assertVisibleImagesLoaded(page, 'boss-hud');
     passedChecks += 1;
@@ -1385,6 +1457,42 @@ async function runTests() {
       endlessSnap.snap.audio?.activeBgm === 'act3',
       `Expected activeBgm='act3' in Endless Mode, got ${JSON.stringify(endlessSnap.snap.audio)}`
     );
+
+    // Stage 6a: Endless Mode Superlinear + Gear-Coupled Scaling Verification (W1 -> W5 Act5 -> W6 Act1 wrap -> W9 Boss)
+    const endlessScalingCheck = await page.evaluate(() => {
+      window.__STARFORGE__.setEndlessWaveForQa(1, 0);
+      const w1 = window.__STARFORGE__.getSnapshot();
+      window.__STARFORGE__.setEndlessWaveForQa(5, 4);
+      const w5 = window.__STARFORGE__.getSnapshot();
+      window.__STARFORGE__.setEndlessWaveForQa(6, 5);
+      const w6 = window.__STARFORGE__.getSnapshot();
+      window.__STARFORGE__.setEndlessWaveForQa(10, 9);
+      const w10 = window.__STARFORGE__.getSnapshot();
+      window.__STARFORGE__.setEndlessWaveForQa(9, 8);
+      const w9Boss = window.__STARFORGE__.getSnapshot();
+      return { w1, w5, w6, w10, w9Boss };
+    });
+    check(
+      endlessScalingCheck.w5.act === 5 &&
+        endlessScalingCheck.w6.act === 1 &&
+        endlessScalingCheck.w5.combatScaling.enemyHpMult > endlessScalingCheck.w1.combatScaling.enemyHpMult * 3.0 &&
+        endlessScalingCheck.w5.combatScaling.enemyFireRateMult > endlessScalingCheck.w1.combatScaling.enemyFireRateMult &&
+        endlessScalingCheck.w5.combatScaling.enemyDamageMult > endlessScalingCheck.w1.combatScaling.enemyDamageMult &&
+        endlessScalingCheck.w5.enemyMaxHpSample >= 200,
+      `Expected Endless W5 (Act 5, 4 chips) & W6 (Act 1 wrap) monotonic HP/fireRate/damage scaling, got w1=${JSON.stringify(endlessScalingCheck.w1.combatScaling)} w5=${JSON.stringify(endlessScalingCheck.w5.combatScaling)} w5.act=${endlessScalingCheck.w5.act} w6.act=${endlessScalingCheck.w6.act} sampleHp=${endlessScalingCheck.w5.enemyMaxHpSample}`
+    );
+    check(
+      endlessScalingCheck.w10.combatScaling.enemyHpMult > endlessScalingCheck.w5.combatScaling.enemyHpMult * 3.0 &&
+        endlessScalingCheck.w10.enemyMaxHpSample >= 700,
+      `Expected Endless W10 (9 chips) superlinear enemy HP scaling to counter stacked upgrades, got w10=${JSON.stringify(endlessScalingCheck.w10.combatScaling)} sampleHp=${endlessScalingCheck.w10.enemyMaxHpSample}`
+    );
+    check(
+      Boolean(endlessScalingCheck.w9Boss.boss) &&
+        endlessScalingCheck.w9Boss.boss.act === 4 &&
+        endlessScalingCheck.w9Boss.boss.maxHp >= 14000,
+      `Expected Endless W9 Boss (Act 4 Solar Scarab rotation) floor-normalized scaled HP >= 14000, got ${JSON.stringify(endlessScalingCheck.w9Boss.boss)}`
+    );
+    passedChecks += 3;
 
     // ==================== STAGE 6b: Warp Gate Safe Passage vs Solid Door Crash ====================
     console.log('[e2e] Stage 6b: Warp Gate Safe Passage vs Solid Door Crash Destruction...');
@@ -1560,7 +1668,27 @@ async function runTests() {
       Boolean(hangarMuteRect720) && !rectsOverlap(hangarFpsRect720, hangarMuteRect720),
       'Hangar #fps-hud overlaps #hangar-mute-btn at 1280x720'
     );
-    passedChecks += 9;
+    const hangarTrophy720 = await page.evaluate(() => {
+      const t = document.getElementById('hangar-trophy-btn')?.getBoundingClientRect();
+      const c = document.querySelector('.topbar-center-crest')?.getBoundingClientRect();
+      const chip = document.querySelector('.topbar-telemetry-chip')?.getBoundingClientRect();
+      const box = (r) =>
+        r ? { left: r.left, top: r.top, right: r.right, bottom: r.bottom, width: r.width, height: r.height } : null;
+      return { trophy: box(t), crest: box(c), chip: box(chip) };
+    });
+    check(
+      Boolean(hangarTrophy720.trophy) && hangarTrophy720.trophy.width > 80,
+      'Expected #hangar-trophy-btn visible at 1280x720'
+    );
+    check(
+      !rectsOverlap(hangarTrophy720.trophy, hangarTrophy720.crest),
+      `Hangar #hangar-trophy-btn overlaps center crest at 1280x720: ${JSON.stringify(hangarTrophy720)}`
+    );
+    check(
+      !rectsOverlap(hangarTrophy720.trophy, hangarTrophy720.chip),
+      `Hangar #hangar-trophy-btn overlaps telemetry chip at 1280x720: ${JSON.stringify(hangarTrophy720)}`
+    );
+    passedChecks += 12;
 
     // 4K UHD (3840x2160) Hardware Detection & 5-Tier Manual Resolution Switching Checks
     console.log('[e2e] Stage 7b: 4K UHD (3840x2160) Hardware Detection & Manual Resolution Picker...');
@@ -1641,6 +1769,207 @@ async function runTests() {
 
     await page.setViewportSize({ width: 1440, height: 900 });
     await sleep(120);
+
+    // ==================== STAGE 7c: PS5-Style 20-Trophy System, Real-Time Broadcast & Dedup ====================
+    console.log('[e2e] Stage 7c: PS5-Style 20-Trophy System, Live Broadcast, Dedup & Gallery...');
+    await page.evaluate(() => {
+      window.__STARFORGE__.resetTrophiesForQa();
+      window.__STARFORGE__.startSortie('arcade');
+    });
+    await sleep(360);
+
+    // 1. Trigger a real-time bronze trophy unlock during active combat -> must immediately pop toast
+    const firstUnlock = await page.evaluate(() => window.__STARFORGE__.unlockTrophyForQa('first_blood'));
+    check(firstUnlock === true, 'Expected first unlock of first_blood to return true');
+    await sleep(220);
+
+    const toastAfterFirst = await page.evaluate(() => {
+      const toastEl = document.getElementById('trophy-toast');
+      const rect = toastEl?.getBoundingClientRect();
+      const telRect = document.querySelector('.hud-top-telemetry')?.getBoundingClientRect();
+      return {
+        snap: window.__STARFORGE__.getSnapshot(),
+        title: document.getElementById('trophy-toast-title')?.textContent?.trim() || '',
+        kicker: document.getElementById('trophy-toast-kicker')?.textContent?.trim() || '',
+        toastText: toastEl?.innerText || '',
+        rect: rect
+          ? {
+              left: Math.round(rect.left),
+              top: Math.round(rect.top),
+              right: Math.round(rect.right),
+              bottom: Math.round(rect.bottom),
+              width: Math.round(rect.width),
+              height: Math.round(rect.height),
+              centerX: Math.round(rect.left + rect.width / 2),
+            }
+          : null,
+        telBottom: telRect ? Math.round(telRect.bottom) : 0,
+        viewportW: window.innerWidth,
+        rawStore: localStorage.getItem('starforge_trophies_v1'),
+      };
+    });
+    check(
+      toastAfterFirst.snap.trophies.total === 20,
+      `Expected exactly 20 trophies configured, got ${toastAfterFirst.snap.trophies.total}`
+    );
+    check(
+      toastAfterFirst.snap.trophies.unlockedCount === 1,
+      `Expected unlockedCount=1 after first_blood, got ${toastAfterFirst.snap.trophies.unlockedCount}`
+    );
+    check(
+      toastAfterFirst.snap.trophies.toastVisible === true,
+      'Expected real-time PS5 #trophy-toast visible immediately in combat'
+    );
+    check(
+      toastAfterFirst.snap.trophies.broadcastCount === 1 &&
+        toastAfterFirst.snap.trophies.lastBroadcastId === 'first_blood',
+      `Expected broadcastCount=1 for first_blood, got ${JSON.stringify(toastAfterFirst.snap.trophies)}`
+    );
+    check(
+      toastAfterFirst.title === '初露锋芒',
+      `Expected toast title "初露锋芒", got "${toastAfterFirst.title}"`
+    );
+    check(
+      Boolean(toastAfterFirst.rect) &&
+        toastAfterFirst.rect.width <= 280 &&
+        toastAfterFirst.rect.height <= 64 &&
+        Math.abs(toastAfterFirst.rect.centerX - toastAfterFirst.viewportW / 2) <= 4 &&
+        toastAfterFirst.rect.top >= toastAfterFirst.telBottom + 4 &&
+        !toastAfterFirst.toastText.includes('击坠第 1 架'),
+      `Expected compact centered trophy toast below top telemetry without details, got rect=${JSON.stringify(toastAfterFirst.rect)} telBottom=${toastAfterFirst.telBottom}`
+    );
+    assertImmersionPurity(toastAfterFirst.toastText, 'trophy-toast');
+    check(Boolean(toastAfterFirst.rawStore), 'Expected starforge_trophies_v1 persisted in localStorage');
+    await assertVisibleImagesLoaded(page, 'trophy-toast-live');
+    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'v4_08_trophy_live_toast.png') });
+    console.log('[e2e] Saved v4_08_trophy_live_toast.png');
+
+    // 2. Duplicate unlock MUST return false and MUST NOT re-broadcast or enqueue
+    const dupUnlock = await page.evaluate(() => window.__STARFORGE__.unlockTrophyForQa('first_blood'));
+    check(dupUnlock === false, 'Expected duplicate unlock of first_blood to return false');
+    await sleep(160);
+    const afterDup = await page.evaluate(() => window.__STARFORGE__.getSnapshot().trophies);
+    check(
+      afterDup.broadcastCount === 1 && afterDup.queuedCount === 0 && afterDup.unlockedCount === 1,
+      `Duplicate trophy unlock must NOT re-broadcast or enqueue, got ${JSON.stringify(afterDup)}`
+    );
+
+    // 3. Unlocking remaining 18 non-platinum trophies MUST auto-award platinum_starforge (20/20, 100%)
+    const platCheck = await page.evaluate(() => {
+      const rest = [
+        'barrel_parry',
+        'overdrive_unleash',
+        'slipstream_ace',
+        'chip_architect',
+        'part_breaker',
+        'act1_clear',
+        'act2_clear',
+        'act3_clear',
+        'field_medic',
+        'combo_master',
+        'parry_virtuoso',
+        'arsenal_breaker',
+        'ace_squadron',
+        'century_hunter',
+        'act4_victory',
+        'untouchable_boss',
+        'score_legend',
+        'endless_voyager',
+      ];
+      for (const id of rest) {
+        window.__STARFORGE__.unlockTrophyForQa(id);
+      }
+      // Verify duplicate platinum unlock also does nothing
+      const dupPlat = window.__STARFORGE__.unlockTrophyForQa('platinum_starforge');
+      return {
+        dupPlat,
+        trophies: window.__STARFORGE__.getSnapshot().trophies,
+      };
+    });
+    check(platCheck.dupPlat === false, 'Expected duplicate platinum unlock to return false');
+    check(
+      platCheck.trophies.unlockedCount === 20 &&
+        platCheck.trophies.percent === 100 &&
+        platCheck.trophies.unlockedIds.includes('platinum_starforge'),
+      `Expected automatic Platinum trophy unlock at 20/20 (100%), got ${JSON.stringify(platCheck.trophies)}`
+    );
+
+    // 4. Open PS5 Trophy Showcase Gallery Dialog, verify all 20 cards, Codex images, filters & immersion purity
+    await page.evaluate(() => window.__STARFORGE__.openTrophyDialog());
+    await sleep(280);
+    const galleryInfo = await page.evaluate(() => {
+      const dlg = document.getElementById('trophy-dialog');
+      const cards = Array.from(document.querySelectorAll('#trophy-cards-grid .trophy-card'));
+      return {
+        open: dlg?.hasAttribute('open') ?? false,
+        cardCount: cards.length,
+        pctText: document.getElementById('trophy-pct-val')?.textContent?.trim() || '',
+        unlockedText: document.getElementById('trophy-unlocked-count')?.textContent?.trim() || '',
+        dialogText: dlg?.innerText || '',
+        toastSuppressed: window.__STARFORGE__.getSnapshot().trophies.toastVisible === false,
+      };
+    });
+    check(galleryInfo.open === true, 'Expected #trophy-dialog open');
+    check(galleryInfo.cardCount === 20, `Expected 20 trophy cards in gallery, got ${galleryInfo.cardCount}`);
+    check(galleryInfo.pctText === '100%', `Expected gallery completion 100%, got "${galleryInfo.pctText}"`);
+    check(galleryInfo.unlockedText === '20', `Expected unlocked count 20, got "${galleryInfo.unlockedText}"`);
+    check(
+      galleryInfo.toastSuppressed === true,
+      'Expected active trophy toast suppressed while modal #trophy-dialog is open'
+    );
+    assertImmersionPurity(galleryInfo.dialogText, 'trophy-dialog');
+    await assertVisibleImagesLoaded(page, 'trophy-dialog');
+    await page.screenshot({ path: path.join(SCREENSHOT_DIR, 'v4_09_trophy_gallery.png') });
+    console.log('[e2e] Saved v4_09_trophy_gallery.png');
+
+    // Test tier filter tabs -> verify exact counts AND strictly invariant fixed dialog height + inner cyan frame clearance!
+    const galleryBoundsAll = await page.evaluate(() => {
+      const shell = document.querySelector('#trophy-dialog .trophy-shell')?.getBoundingClientRect();
+      const topBar = document.querySelector('#trophy-dialog .dialog-top-bar')?.getBoundingClientRect();
+      const closeX = document.querySelector('#trophy-dialog .dialog-close-x')?.getBoundingClientRect();
+      const returnBtn = document.querySelector('#trophy-dialog .trophy-dialog-actions button')?.getBoundingClientRect();
+      return {
+        shellH: shell ? Math.round(shell.height) : 0,
+        topMarginPct: shell && topBar ? +(((topBar.top - shell.top) / shell.height) * 100).toFixed(1) : 0,
+        closeRightPct: shell && closeX ? +(((shell.right - closeX.right) / shell.width) * 100).toFixed(1) : 0,
+        botMarginPct: shell && returnBtn ? +(((shell.bottom - returnBtn.bottom) / shell.height) * 100).toFixed(1) : 0,
+      };
+    });
+    check(
+      galleryBoundsAll.topMarginPct >= 13.5 &&
+        galleryBoundsAll.botMarginPct >= 13.5 &&
+        galleryBoundsAll.closeRightPct >= 7.5,
+      `Expected #trophy-dialog content strictly inside modal_frame_sci_fi inner blue frame (>=13.5% top/bot, >=7.5% sides), got ${JSON.stringify(galleryBoundsAll)}`
+    );
+
+    await page.click('.trophy-filter-btn[data-trophy-filter="gold"]');
+    await sleep(120);
+    const goldState = await page.evaluate(() => ({
+      count: document.querySelectorAll('#trophy-cards-grid .trophy-card').length,
+      shellH: Math.round(document.querySelector('#trophy-dialog .trophy-shell')?.getBoundingClientRect().height || 0),
+    }));
+    check(goldState.count === 3, `Expected 3 gold trophy cards under gold filter, got ${goldState.count}`);
+    check(
+      Math.abs(goldState.shellH - galleryBoundsAll.shellH) <= 1,
+      `Expected fixed trophy dialog height across filters (all=${galleryBoundsAll.shellH}px, gold=${goldState.shellH}px)`
+    );
+
+    await page.click('.trophy-filter-btn[data-trophy-filter="locked"]');
+    await sleep(120);
+    const lockedState = await page.evaluate(() => ({
+      count: document.querySelectorAll('#trophy-cards-grid .trophy-card').length,
+      shellH: Math.round(document.querySelector('#trophy-dialog .trophy-shell')?.getBoundingClientRect().height || 0),
+    }));
+    check(lockedState.count === 0, `Expected 0 locked cards at 20/20 unlocked, got ${lockedState.count}`);
+    check(
+      Math.abs(lockedState.shellH - galleryBoundsAll.shellH) <= 1,
+      `Expected fixed trophy dialog height even on empty filter (all=${galleryBoundsAll.shellH}px, locked=${lockedState.shellH}px)`
+    );
+    await page.keyboard.press('Escape');
+    await sleep(180);
+    const trophyClosed = await page.evaluate(() => !document.getElementById('trophy-dialog')?.hasAttribute('open'));
+    check(trophyClosed === true, 'Expected #trophy-dialog closed on Escape');
+    passedChecks += 23;
 
     // ==================== STAGE 8: Zero Error Invariant ====================
     console.log('[e2e] Stage 8: Zero HTTP/Page/Console Error Verification...');

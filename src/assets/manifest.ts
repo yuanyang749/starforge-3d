@@ -6,6 +6,7 @@ export type ModelKey =
   | 'boss_act1_skywing'
   | 'boss_act1_mech'
   | 'boss_act2_crab'
+  | 'boss_act4_scarab'
   | 'boss_act3_carrier'
   | 'enemy_drone'
   | 'enemy_turret'
@@ -17,7 +18,7 @@ export type ModelKey =
   | 'prop_gate';
 
 export type ShipId = 'astra' | 'opus' | 'morph' | 'aero';
-export type BossId = 'act1' | 'act2' | 'act3' | 'act4';
+export type BossId = 'act1' | 'act2' | 'act3' | 'act4' | 'act5';
 
 export interface OrientationOffset {
   yaw: number;
@@ -84,6 +85,8 @@ export interface BossPartSpec {
     | 'rightCannon'
     | 'leftClaw'
     | 'rightClaw'
+    | 'leftSolarCannon'
+    | 'rightSolarCannon'
     | 'dorsalTurret'
     | 'bowCrane';
 }
@@ -161,10 +164,17 @@ export const MODEL_ASSETS: Record<ModelKey, ModelAssetSpec> = {
     targetSize: 10.5,
     orientation: { yaw: 0 },
   },
+  boss_act4_scarab: {
+    key: 'boss_act4_scarab',
+    url: './models/boss_act4_scarab.glb',
+    bootLog: '[INTEL] 第 4 战区烈阳沙暴堡垒特征已载入：日冕圣甲虫悬浮堡垒',
+    targetSize: 12.2,
+    orientation: { yaw: 0 },
+  },
   boss_act3_carrier: {
     key: 'boss_act3_carrier',
     url: './models/boss_act3_carrier.glb',
-    bootLog: '[INTEL] 第 4 战区旗舰级目标特征已载入：龙骨桁架星际母舰',
+    bootLog: '[INTEL] 第 5 战区旗舰级目标特征已载入：龙骨桁架星际母舰',
     targetSize: 14.5,
     orientation: { yaw: 0 },
     stripNodes: ['Stand_DisplayBase', 'Stand_Pylons'],
@@ -461,13 +471,44 @@ export const BOSSES: Record<BossId, BossConfig> = {
   act4: {
     id: 'act4',
     act: 4,
+    modelKey: 'boss_act4_scarab',
+    nameZh: '日冕圣甲虫悬浮堡垒',
+    codeName: 'SOLAR SCARAB',
+    subtitle: '第 4 幕关底 · 烈阳沙暴聚光峡谷守卫',
+    threatTag: '威胁 VI 级 · 烈阳堡垒',
+    tacticalIntel: '战术弱点：优先摧毁左右日冕聚光炮，瓦解双联高能电浆齐射',
+    maxHp: 2150,
+    accentColor: '#ffb326',
+    accentHex: 0xffb326,
+    destructibleParts: [
+      {
+        id: 'solar_cannon_l',
+        nodeName: 'SolarCannon_L',
+        labelZh: '左日冕聚光炮',
+        hp: 430,
+        hitRadius: 2.35,
+        weaponEffectKey: 'leftSolarCannon',
+      },
+      {
+        id: 'solar_cannon_r',
+        nodeName: 'SolarCannon_R',
+        labelZh: '右日冕聚光炮',
+        hp: 430,
+        hitRadius: 2.35,
+        weaponEffectKey: 'rightSolarCannon',
+      },
+    ],
+  },
+  act5: {
+    id: 'act5',
+    act: 5,
     modelKey: 'boss_act3_carrier',
     nameZh: '龙骨桁架星际母舰',
     codeName: 'OVERLORD FLAGSHIP',
-    subtitle: '第 4 幕终极决战 · 深空封锁舰队旗舰',
+    subtitle: '第 5 幕终极决战 · 深空封锁舰队旗舰',
     threatTag: '终极威胁 · 封锁旗舰',
     tacticalIntel: '战术弱点：优先击破背脊防空主炮与舰首投射臂，瘫痪舰载机投送',
-    maxHp: 2550,
+    maxHp: 2680,
     accentColor: '#ff4757',
     accentHex: 0xff4757,
     destructibleParts: [
@@ -531,7 +572,16 @@ export const ACT_THEMES: ActTheme[] = [
   },
   {
     act: 4,
-    titleZh: 'ACT IV · 龙骨母舰空域',
+    titleZh: 'ACT IV · 烈阳沙暴峡谷',
+    subtitle: 'SOLAR CANYON SANDSTORM',
+    fogColor: 0x3a2314,
+    bgColor: 0x1e130c,
+    gridColor: 0xd97706,
+    accentColor: 0xffb326,
+  },
+  {
+    act: 5,
+    titleZh: 'ACT V · 龙骨母舰空域',
     subtitle: 'CRIMSON DREADNOUGHT CITADEL',
     fogColor: 0x2d0f16,
     bgColor: 0x21090e,

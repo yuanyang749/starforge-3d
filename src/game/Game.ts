@@ -22,6 +22,16 @@ import { EnvironmentSystem } from './EnvironmentSystem';
 import { ProjectileVisuals } from './ProjectileVisuals';
 import { SaveStore, type GraphicsPreset } from './SaveStore';
 import {
+  TIER_META,
+  TROPHY_DEFS,
+  TROPHY_LOCKED_ICON,
+  TrophySystem,
+  formatTrophyTimestamp,
+  type TrophyDef,
+  type TrophyId,
+  type TrophyTier,
+} from './TrophySystem';
+import {
   UPGRADE_CARDS,
   applyUpgradeCard,
   createInitialUpgradeState,
@@ -35,6 +45,7 @@ import {
   type ActiveBoss,
   type ActiveEnemy,
   type BossPartRuntime,
+  type CombatScalingSnapshot,
 } from './WaveDirector';
 
 export type GameState = 'boot' | 'hangar' | 'playing' | 'upgrade' | 'paused' | 'result';
@@ -113,6 +124,8 @@ export interface StarforgeSnapshot {
   activeGateCount: number;
   pickupCount: number;
   enemyCount: number;
+  enemyMaxHpSample: number;
+  combatScaling: CombatScalingSnapshot;
   enemyBulletCount: number;
   playerBulletCount: number;
   upgrades: Record<string, number>;
@@ -128,10 +141,22 @@ export interface StarforgeSnapshot {
   internalHeight: number;
   hardware: HardwareProfile;
   audio: AudioTelemetrySnapshot;
+  trophies: {
+    unlockedCount: number;
+    total: number;
+    percent: number;
+    points: number;
+    unlockedIds: TrophyId[];
+    broadcastCount: number;
+    lastBroadcastId: TrophyId | null;
+    toastVisible: boolean;
+    queuedCount: number;
+  };
   dialogs: {
     upgradeOpen: boolean;
     pauseOpen: boolean;
     resultOpen: boolean;
+    trophyOpen: boolean;
   };
 }
 
@@ -154,6 +179,10 @@ export interface StarforgeQaApi {
   spawnBoostRingNow(x?: number, y?: number, z?: number): void;
   triggerPickupFeedbackDemo?(): void;
   setPlayerHp(hp: number): void;
+  openTrophyDialog(): void;
+  unlockTrophyForQa(id: TrophyId): boolean;
+  resetTrophiesForQa(): void;
+  setEndlessWaveForQa(wave: number, upgradeStacks?: number): void;
 }
 
 declare global {
@@ -281,6 +310,7 @@ export class Game {
   private readonly loader = new AssetLoader();
   private readonly sound: SoundEngine;
   private readonly save = new SaveStore();
+  private readonly trophies = new TrophySystem();
   private readonly envSystem: EnvironmentSystem;
   private readonly projectileVisuals: ProjectileVisuals;
   private readonly vfx: VfxSystem;
@@ -355,6 +385,19 @@ export class Game {
   private readonly keys = new Set<string>();
   private upgrades: UpgradeState = createInitialUpgradeState();
   private currentUpgradeChoices: UpgradeCard[] = [];
+  private runUpgradesCount = 0;
+  private bossFightTookDamage = false;
+
+  // Trophy UI & Real-Time Broadcast Queue
+  private trophyFilter: 'all' | 'unlocked' | 'locked' | TrophyTier = 'all';
+  private readonly trophyToastQueue: TrophyDef[] = [];
+  private activeTrophyToast: TrophyDef | null = null;
+  private trophyToastTimer: number | null = null;
+  private trophyToastLeaveTimer: number | null = null;
+  private trophyToastFocusPaused = false;
+  private trophyToastPreFocusEl: HTMLElement | null = null;
+  private trophyBroadcastCount = 0;
+  private lastTrophyBroadcastId: TrophyId | null = null;
 
   private readonly playerBullets: PlayerBullet[] = [];
   private readonly enemyBullets: EnemyBullet[] = [];
@@ -374,6 +417,7 @@ export class Game {
     result: HTMLDialogElement;
     settings: HTMLDialogElement;
     guide: HTMLDialogElement;
+    trophy: HTMLDialogElement;
   };
 
   private waveCalloutTimer = 0;
@@ -646,6 +690,8 @@ export class Game {
       'boot-enter-btn',
       'hangar-ui',
       'hangar-career-stats',
+      'hangar-trophy-btn',
+      'hangar-trophy-count',
       'hangar-guide-btn',
       'hangar-settings-btn',
       'hangar-mute-btn',
@@ -742,6 +788,25 @@ export class Game {
       'guide-tab-combat',
       'guide-panel-controls',
       'guide-panel-combat',
+      'trophy-live-region',
+      'trophy-toast',
+      'trophy-toast-medal',
+      'trophy-toast-tier-icon',
+      'trophy-toast-kicker',
+      'trophy-toast-title',
+      'trophy-toast-close',
+      'trophy-toast-progress-bar',
+      'result-trophies-strip',
+      'trophy-ring-arc',
+      'trophy-pct-val',
+      'trophy-unlocked-count',
+      'trophy-points-val',
+      'trophy-cnt-platinum',
+      'trophy-cnt-gold',
+      'trophy-cnt-silver',
+      'trophy-cnt-bronze',
+      'trophy-filter-tabs',
+      'trophy-cards-grid',
     ]);
 
     this.dialogs = {
@@ -750,11 +815,13 @@ export class Game {
       result: this.requireEl<HTMLDialogElement>('result-dialog'),
       settings: this.requireEl<HTMLDialogElement>('settings-dialog'),
       guide: this.requireEl<HTMLDialogElement>('guide-dialog'),
+      trophy: this.requireEl<HTMLDialogElement>('trophy-dialog'),
     };
 
     this.syncHardwarePanelStaticInfo();
     this.bindResolutionMediaQuery();
     this.bindEvents();
+    this.setupTrophySystem();
     this.registerQaHook();
   }
 
@@ -1361,6 +1428,7 @@ export class Game {
     if (this.dialogs.result.open) this.dialogs.result.close();
     if (this.dialogs.settings.open) this.dialogs.settings.close();
     if (this.dialogs.guide.open) this.dialogs.guide.close();
+    if (this.dialogs.trophy.open) this.dialogs.trophy.close();
   }
 
   private bindEvents(): void {
@@ -1438,6 +1506,7 @@ export class Game {
       this.startSortie(this.selectedGameMode);
     });
 
+    this.els['hangar-trophy-btn'].addEventListener('click', () => this.openTrophyDialog());
     this.els['hangar-guide-btn'].addEventListener('click', () => this.openGuideDialog());
     this.els['hangar-settings-btn'].addEventListener('click', () => this.openSettingsDialog());
     this.els['hangar-mute-btn'].addEventListener('click', () => this.toggleMute());
@@ -1665,6 +1734,7 @@ export class Game {
 
     this.dialogs.upgrade.addEventListener('close', () => {
       this.dialogs.upgrade.returnValue = '';
+      this.scheduleTrophyQueueFlush();
     });
 
     this.dialogs.pause.addEventListener('cancel', (e) => {
@@ -1677,7 +1747,10 @@ export class Game {
       this.clearPauseEscGuard();
       const val = this.dialogs.pause.returnValue;
       this.dialogs.pause.returnValue = '';
-      if (this.state !== 'paused') return;
+      if (this.state !== 'paused') {
+        this.scheduleTrophyQueueFlush();
+        return;
+      }
       if (val === 'settings') {
         this.openSettingsDialog(true);
       } else if (val === 'hangar') {
@@ -1688,13 +1761,17 @@ export class Game {
         // '' (Esc) or 'resume' -> resume combat
         this.sound.setMuffled(false);
         this.setScreenState('playing');
+        this.scheduleTrophyQueueFlush();
       }
     });
 
     this.dialogs.result.addEventListener('close', () => {
       const val = this.dialogs.result.returnValue;
       this.dialogs.result.returnValue = '';
-      if (this.state !== 'result') return;
+      if (this.state !== 'result') {
+        this.scheduleTrophyQueueFlush();
+        return;
+      }
       if (val === 'endless') {
         this.enterEndlessMode();
       } else if (val === 'retry') {
@@ -1702,6 +1779,7 @@ export class Game {
       } else {
         this.enterHangar();
       }
+      this.scheduleTrophyQueueFlush();
     });
 
     this.dialogs.settings.addEventListener('close', () => {
@@ -1716,12 +1794,31 @@ export class Game {
         this.promoteFpsHudToTopLayer();
       } else {
         this.settingsOpenedFromPause = false;
+        this.scheduleTrophyQueueFlush();
       }
     });
 
     this.dialogs.guide.addEventListener('close', () => {
       this.dialogs.guide.returnValue = '';
       this.sound.playUiClick();
+      this.scheduleTrophyQueueFlush();
+    });
+
+    this.dialogs.trophy.addEventListener('close', () => {
+      this.dialogs.trophy.returnValue = '';
+      this.sound.playUiClick();
+      this.scheduleTrophyQueueFlush();
+    });
+
+    this.els['trophy-filter-tabs'].addEventListener('click', (e) => {
+      const btn = (e.target as Element | null)?.closest<HTMLButtonElement>('.trophy-filter-btn[data-trophy-filter]');
+      if (!btn) return;
+      const filter = btn.dataset.trophyFilter as typeof this.trophyFilter | undefined;
+      if (!filter) return;
+      this.trophyFilter = filter;
+      this.sound.unlock();
+      this.sound.playUiClick();
+      this.renderTrophyDialog();
     });
 
     if (!('closedBy' in HTMLDialogElement.prototype)) {
@@ -1950,6 +2047,7 @@ export class Game {
   }
 
   private openSettingsDialog(fromPause = false): void {
+    this.suppressActiveTrophyToastForModal();
     this.closeAllDialogs(!fromPause);
     this.settingsOpenedFromPause = fromPause;
     this.clearInputState();
@@ -1966,6 +2064,7 @@ export class Game {
   }
 
   private openGuideDialog(): void {
+    this.suppressActiveTrophyToastForModal();
     this.closeAllDialogs();
     this.clearInputState();
     this.sound.unlock();
@@ -1975,6 +2074,356 @@ export class Game {
     if (!this.dialogs.guide.open) {
       this.dialogs.guide.showModal();
     }
+  }
+
+  // ==================== PS5-STYLE TROPHY SYSTEM & BROADCAST ====================
+
+  private setupTrophySystem(): void {
+    this.syncHangarTrophyBadge();
+
+    this.trophies.onUnlock((def) => {
+      this.syncHangarTrophyBadge();
+      if (this.dialogs.trophy.open) {
+        this.renderTrophyDialog();
+      }
+      this.trophyToastQueue.push(def);
+      this.pumpTrophyToastQueue();
+    });
+
+    const toastEl = this.els['trophy-toast'];
+    toastEl.addEventListener('focusin', () => {
+      if (!this.activeTrophyToast) return;
+      this.trophyToastFocusPaused = true;
+      if (this.trophyToastTimer !== null) {
+        window.clearTimeout(this.trophyToastTimer);
+        this.trophyToastTimer = null;
+      }
+      this.els['trophy-toast-progress-bar'].style.animationPlayState = 'paused';
+    });
+
+    toastEl.addEventListener('focusout', () => {
+      if (!this.activeTrophyToast || !this.trophyToastFocusPaused) return;
+      if (toastEl.contains(document.activeElement)) return;
+      this.trophyToastFocusPaused = false;
+      this.els['trophy-toast-progress-bar'].style.animationPlayState = 'running';
+      this.armTrophyToastAutoDismiss(2400);
+    });
+
+    const closeBtn = this.els['trophy-toast-close'];
+    closeBtn.addEventListener('click', () => {
+      if (!Object.hasOwn(HTMLElement.prototype, 'popover')) {
+        this.dismissActiveTrophyToast(true);
+      } else {
+        this.onTrophyToastDismissed(true);
+      }
+    });
+
+    toastEl.addEventListener('toggle', (ev: Event) => {
+      const te = ev as ToggleEvent;
+      if (te.newState === 'closed' && this.activeTrophyToast) {
+        this.onTrophyToastDismissed(false);
+      }
+    });
+  }
+
+  private syncHangarTrophyBadge(): void {
+    const summary = this.trophies.getSummary();
+    this.els['hangar-trophy-count'].textContent = `${summary.unlockedCount}/${summary.total}`;
+    this.els['hangar-trophy-btn'].classList.toggle(
+      'is-platinum-complete',
+      summary.tiers.platinum.unlocked > 0
+    );
+  }
+
+  private isAnyModalDialogOpen(): boolean {
+    return (
+      this.dialogs.upgrade.open ||
+      this.dialogs.pause.open ||
+      this.dialogs.result.open ||
+      this.dialogs.settings.open ||
+      this.dialogs.guide.open ||
+      this.dialogs.trophy.open
+    );
+  }
+
+  private isTrophyToastVisible(): boolean {
+    const toastEl = this.els['trophy-toast'];
+    if (Object.hasOwn(HTMLElement.prototype, 'popover')) {
+      try {
+        return toastEl.matches(':popover-open');
+      } catch {
+        return toastEl.classList.contains(':popover-open');
+      }
+    }
+    return toastEl.classList.contains(':popover-open');
+  }
+
+  private showTrophyToastElement(): void {
+    const toastEl = this.els['trophy-toast'] as HTMLElement & {
+      showPopover?: () => void;
+      hidePopover?: () => void;
+    };
+    if (Object.hasOwn(HTMLElement.prototype, 'popover') && typeof toastEl.showPopover === 'function') {
+      try {
+        if (toastEl.matches(':popover-open')) {
+          toastEl.hidePopover?.();
+        }
+        toastEl.showPopover();
+        return;
+      } catch {
+        // Fallback below
+      }
+    }
+    toastEl.classList.add(':popover-open');
+  }
+
+  private hideTrophyToastElement(): void {
+    const toastEl = this.els['trophy-toast'] as HTMLElement & {
+      hidePopover?: () => void;
+    };
+    if (Object.hasOwn(HTMLElement.prototype, 'popover') && typeof toastEl.hidePopover === 'function') {
+      try {
+        if (toastEl.matches(':popover-open')) {
+          toastEl.hidePopover();
+        }
+      } catch {
+        // Safe no-op
+      }
+    }
+    toastEl.classList.remove(':popover-open');
+  }
+
+  private announceTrophyVisibleText(message: string): void {
+    const doc = document as Document & {
+      ariaNotify?: (text: string, options?: { priority?: 'normal' | 'high' }) => void;
+    };
+    if (typeof doc.ariaNotify === 'function') {
+      try {
+        doc.ariaNotify(message, { priority: 'normal' });
+        return;
+      } catch {
+        // Fall through to live region
+      }
+    }
+    const live = this.els['trophy-live-region'];
+    live.textContent = '';
+    window.setTimeout(() => {
+      live.textContent = message;
+    }, 30);
+  }
+
+  private armTrophyToastAutoDismiss(delayMs: number): void {
+    if (this.trophyToastTimer !== null) {
+      window.clearTimeout(this.trophyToastTimer);
+    }
+    this.trophyToastTimer = window.setTimeout(() => {
+      this.trophyToastTimer = null;
+      const toastEl = this.els['trophy-toast'];
+      if (toastEl.contains(document.activeElement)) {
+        this.trophyToastFocusPaused = true;
+        return;
+      }
+      this.dismissActiveTrophyToast(false);
+    }, delayMs);
+  }
+
+  private suppressActiveTrophyToastForModal(): void {
+    if (!this.activeTrophyToast && !this.isTrophyToastVisible()) return;
+    if (this.trophyToastTimer !== null) {
+      window.clearTimeout(this.trophyToastTimer);
+      this.trophyToastTimer = null;
+    }
+    if (this.trophyToastLeaveTimer !== null) {
+      window.clearTimeout(this.trophyToastLeaveTimer);
+      this.trophyToastLeaveTimer = null;
+    }
+    this.trophyToastFocusPaused = false;
+    this.activeTrophyToast = null;
+    this.hideTrophyToastElement();
+  }
+
+  private scheduleTrophyQueueFlush(): void {
+    if (this.trophyToastQueue.length === 0) return;
+    window.setTimeout(() => {
+      this.pumpTrophyToastQueue();
+    }, 240);
+  }
+
+  private dismissActiveTrophyToast(fromKeyboardClick: boolean): void {
+    if (!this.activeTrophyToast && !this.isTrophyToastVisible()) return;
+    this.hideTrophyToastElement();
+    this.onTrophyToastDismissed(fromKeyboardClick);
+  }
+
+  private onTrophyToastDismissed(restoreFocus: boolean): void {
+    if (this.trophyToastTimer !== null) {
+      window.clearTimeout(this.trophyToastTimer);
+      this.trophyToastTimer = null;
+    }
+    this.trophyToastFocusPaused = false;
+    const prevFocus = this.trophyToastPreFocusEl;
+    this.trophyToastPreFocusEl = null;
+    this.activeTrophyToast = null;
+
+    if (restoreFocus && this.trophyToastQueue.length === 0 && prevFocus && prevFocus.isConnected) {
+      try {
+        prevFocus.focus();
+      } catch {
+        // Ignore non-focusable element
+      }
+    }
+
+    if (this.trophyToastLeaveTimer !== null) {
+      window.clearTimeout(this.trophyToastLeaveTimer);
+    }
+    this.trophyToastLeaveTimer = window.setTimeout(() => {
+      this.trophyToastLeaveTimer = null;
+      this.pumpTrophyToastQueue();
+    }, 320);
+  }
+
+  private pumpTrophyToastQueue(): void {
+    if (this.activeTrophyToast) return;
+    if (this.trophyToastQueue.length === 0) return;
+    if (this.isAnyModalDialogOpen()) return;
+    if (this.state === 'boot') return;
+
+    const def = this.trophyToastQueue.shift();
+    if (!def) return;
+
+    this.activeTrophyToast = def;
+    this.trophyToastFocusPaused = false;
+    this.trophyToastPreFocusEl =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+
+    const tierMeta = TIER_META[def.tier];
+    const toastEl = this.els['trophy-toast'];
+    toastEl.classList.remove('is-bronze', 'is-silver', 'is-gold', 'is-platinum');
+    toastEl.classList.add(`is-${def.tier}`);
+
+    (this.els['trophy-toast-medal'] as HTMLImageElement).src = def.icon;
+    (this.els['trophy-toast-tier-icon'] as HTMLImageElement).src = def.tierIcon;
+    this.els['trophy-toast-kicker'].textContent =
+      def.tier === 'platinum' ? '白金奖杯解锁' : `${tierMeta.labelZh}已解锁`;
+    this.els['trophy-toast-title'].textContent = def.nameZh;
+
+    const durationMs = def.tier === 'platinum' ? 4600 : def.tier === 'gold' ? 3900 : 3500;
+    const barEl = this.els['trophy-toast-progress-bar'];
+    barEl.style.animation = 'none';
+    void barEl.offsetWidth;
+    barEl.style.animation = `trophy-toast-countdown ${durationMs}ms linear forwards`;
+    barEl.style.animationPlayState = 'running';
+
+    this.trophyBroadcastCount += 1;
+    this.lastTrophyBroadcastId = def.id;
+
+    document.body.classList.toggle(
+      'has-boss-hud',
+      this.state === 'playing' && !this.els['boss-hud'].hidden
+    );
+    this.showTrophyToastElement();
+    this.sound.playTrophyUnlock(def.tier);
+    this.announceTrophyVisibleText(`${tierMeta.labelZh}已解锁：${def.nameZh}`);
+    this.armTrophyToastAutoDismiss(durationMs);
+  }
+
+  private openTrophyDialog(): void {
+    this.suppressActiveTrophyToastForModal();
+    this.closeAllDialogs();
+    this.clearInputState();
+    this.sound.unlock();
+    this.sound.playHudDeploy();
+    this.trophyFilter = 'all';
+    this.renderTrophyDialog();
+    this.dialogs.trophy.returnValue = '';
+    if (!this.dialogs.trophy.open) {
+      this.dialogs.trophy.showModal();
+    }
+    this.promoteFpsHudToTopLayer();
+  }
+
+  private renderTrophyDialog(): void {
+    const summary = this.trophies.getSummary();
+    const circumference = 2 * Math.PI * 35;
+    const arcEl = this.els['trophy-ring-arc'];
+    arcEl.style.strokeDasharray = `${circumference.toFixed(2)}`;
+    arcEl.style.strokeDashoffset = `${(circumference * (1 - summary.percent / 100)).toFixed(2)}`;
+
+    this.els['trophy-pct-val'].textContent = `${summary.percent}%`;
+    this.els['trophy-unlocked-count'].textContent = String(summary.unlockedCount);
+    this.els['trophy-points-val'].textContent = `荣誉点数 ${summary.points} / ${summary.maxPoints} PTS`;
+    this.els['trophy-cnt-platinum'].textContent = `${summary.tiers.platinum.unlocked} / ${summary.tiers.platinum.total}`;
+    this.els['trophy-cnt-gold'].textContent = `${summary.tiers.gold.unlocked} / ${summary.tiers.gold.total}`;
+    this.els['trophy-cnt-silver'].textContent = `${summary.tiers.silver.unlocked} / ${summary.tiers.silver.total}`;
+    this.els['trophy-cnt-bronze'].textContent = `${summary.tiers.bronze.unlocked} / ${summary.tiers.bronze.total}`;
+
+    const filterBtns = this.els['trophy-filter-tabs'].querySelectorAll<HTMLButtonElement>(
+      '.trophy-filter-btn[data-trophy-filter]'
+    );
+    filterBtns.forEach((btn) => {
+      const f = btn.dataset.trophyFilter;
+      const active = f === this.trophyFilter;
+      btn.classList.toggle('is-active', active);
+      btn.setAttribute('aria-selected', active ? 'true' : 'false');
+      if (f === 'unlocked') btn.textContent = `已解锁 ${summary.unlockedCount}`;
+      else if (f === 'locked') btn.textContent = `未解锁 ${summary.total - summary.unlockedCount}`;
+    });
+
+    const filtered = TROPHY_DEFS.filter((def) => {
+      const unlocked = this.trophies.isUnlocked(def.id);
+      if (this.trophyFilter === 'all') return true;
+      if (this.trophyFilter === 'unlocked') return unlocked;
+      if (this.trophyFilter === 'locked') return !unlocked;
+      return def.tier === this.trophyFilter;
+    });
+
+    const grid = this.els['trophy-cards-grid'];
+    if (filtered.length === 0) {
+      grid.innerHTML = `<div class="trophy-empty-state">当前筛选条件下暂无对应奖杯记录</div>`;
+      return;
+    }
+
+    grid.innerHTML = filtered
+      .map((def) => {
+        const rec = this.trophies.getUnlockRecord(def.id);
+        const unlocked = Boolean(rec);
+        const tierMeta = TIER_META[def.tier];
+        const prog = this.trophies.getProgressFor(def);
+        const statusMarkup = unlocked && rec
+          ? `<div class="trophy-card-unlocked-meta"><span>已达成</span><time>${formatTrophyTimestamp(rec.unlockedAt)}</time></div>`
+          : `<div class="trophy-card-progress">
+               <div class="trophy-card-prog-track"><div class="trophy-card-prog-fill" style="width:${prog.pct}%"></div></div>
+               <span class="trophy-card-prog-label">${prog.label}</span>
+             </div>`;
+        const lockOverlay = unlocked
+          ? ''
+          : `<img src="${TROPHY_LOCKED_ICON}" class="trophy-card-lock-seal" alt="" aria-hidden="true" width="64" height="64" />`;
+
+        return `
+          <article class="trophy-card is-${def.tier} ${unlocked ? 'is-unlocked' : 'is-locked'}" data-trophy-id="${def.id}">
+            <div class="trophy-card-emblem">
+              <img src="${def.icon}" class="trophy-card-medal" alt="" width="128" height="128" loading="lazy" />
+              ${lockOverlay}
+            </div>
+            <div class="trophy-card-body">
+              <div class="trophy-card-head">
+                <span class="trophy-card-tier-pill is-${def.tier}">
+                  <img src="${def.tierIcon}" alt="" width="24" height="24" />
+                  <span>${tierMeta.labelZh.replace('奖杯', '')}</span>
+                </span>
+                <span class="trophy-card-pts">+${def.points} PTS</span>
+              </div>
+              <div class="trophy-card-title-row">
+                <strong class="trophy-card-name">${def.nameZh}</strong>
+                <span class="trophy-card-callsign">${def.callsign}</span>
+              </div>
+              <p class="trophy-card-desc">${def.descZh}</p>
+              ${statusMarkup}
+            </div>
+          </article>
+        `;
+      })
+      .join('');
   }
 
   // ==================== HANGAR ====================
@@ -1997,6 +2446,7 @@ export class Game {
     this.els['hangar-ui'].hidden = false;
     this.els['hud-ui'].hidden = true;
     this.els['boss-hud'].hidden = true;
+    document.body.classList.remove('has-boss-hud');
     this.hangarPedestal.visible = true;
     this.beamGroup.visible = false;
     this.cameraRoll = 0;
@@ -2020,6 +2470,9 @@ export class Game {
 
     this.renderHangarShipList();
     this.selectHangarShip(this.selectedShipIndex);
+    this.syncHangarTrophyBadge();
+    this.trophies.flushPersistence();
+    this.scheduleTrophyQueueFlush();
   }
 
   private renderHangarShipList(): void {
@@ -2164,7 +2617,7 @@ export class Game {
     const rec = this.save.getShipRecord(this.activeShip.id);
     const endlessUnlocked = this.save.isEndlessUnlocked();
     this.els['hangar-mode-arcade-badge'].textContent =
-      rec.clears > 0 ? `已通关 ${rec.clears} 次` : '4 幕战役';
+      rec.clears > 0 ? `已通关 ${rec.clears} 次` : '5 幕战役';
     this.els['hangar-mode-endless-badge'].textContent =
       rec.bestEndlessWave > 0
         ? `最高 W${rec.bestEndlessWave}`
@@ -2292,11 +2745,17 @@ export class Game {
     this.els['hangar-ui'].hidden = true;
     this.els['hud-ui'].hidden = false;
     this.els['boss-hud'].hidden = true;
+    document.body.classList.remove('has-boss-hud');
     this.hideWaveCallout();
 
     const ship = SHIPS[this.selectedShipIndex];
     this.activeShip = ship;
     this.upgrades = createInitialUpgradeState(ship.id);
+    this.waves.setPlayerUpgradeStacks(this.getTotalUpgradeStacks());
+    this.runUpgradesCount = 0;
+    this.bossFightTookDamage = false;
+    this.trophies.beginRunSession();
+    this.trophies.recordShipSortie(ship.id);
     this.score = 0;
     this.kills = 0;
     this.recordedKillsThisRun = 0;
@@ -2378,6 +2837,7 @@ export class Game {
     this.els['hud-ui'].hidden = false;
     this.els['boss-hud'].hidden = true;
     this.playerHp = this.playerMaxHp;
+    this.waves.setPlayerUpgradeStacks(this.getTotalUpgradeStacks());
     const ev = this.waves.startEndlessMode();
     this.sound.setBgmTrack('act3');
     this.envSystem.setAct(this.waves.getAct(), true);
@@ -2567,6 +3027,7 @@ export class Game {
 
     const id: ShipId = this.activeShip.id;
     this.ultimateCharge = 0;
+    this.trophies.recordUltimate();
     this.sound.playUltimate(id as WeaponVoice);
     this.boostFovTimer = Math.max(this.boostFovTimer, 2.2);
     this.screenShake = Math.max(this.screenShake, 0.55);
@@ -2659,6 +3120,7 @@ export class Game {
 
   private openPauseDialog(fromEscape = false): void {
     if (this.state !== 'playing' || this.playerDying) return;
+    this.suppressActiveTrophyToastForModal();
     this.closeAllDialogs();
     this.clearInputState();
     this.setScreenState('paused');
@@ -2676,6 +3138,7 @@ export class Game {
   }
 
   private openUpgradeDialog(): void {
+    this.suppressActiveTrophyToastForModal();
     this.closeAllDialogs();
     this.hideWaveCallout();
     this.clearInputState();
@@ -2737,6 +3200,9 @@ export class Game {
 
     this.sound.setMuffled(false);
     this.sound.playUpgrade();
+    this.runUpgradesCount += 1;
+    this.waves.setPlayerUpgradeStacks(this.getTotalUpgradeStacks());
+    this.trophies.recordUpgradeInRun(this.runUpgradesCount);
     this.renderChipStrip();
     if (this.dialogs.upgrade.open) {
       this.dialogs.upgrade.close(cardId);
@@ -2767,6 +3233,8 @@ export class Game {
     this.clearLaunchCountdown(false);
     this.clearBossIntroOverlayImmediate();
     this.hideWaveCallout();
+    this.suppressActiveTrophyToastForModal();
+    this.trophies.flushPersistence();
     this.closeAllDialogs();
     this.clearInputState();
     this.setScreenState('result');
@@ -2829,6 +3297,31 @@ export class Game {
 
     const endlessBtn = this.els['result-endless-btn'] as HTMLButtonElement;
     endlessBtn.hidden = !victory || this.waves.isEndless();
+
+    const runTrophies = this.trophies.getRunUnlockedTrophies();
+    const trophyStrip = this.els['result-trophies-strip'];
+    if (runTrophies.length > 0) {
+      trophyStrip.hidden = false;
+      trophyStrip.innerHTML = `
+        <div class="result-trophies-head">本次出击解锁奖杯 (${runTrophies.length})</div>
+        <div class="result-trophies-pills">
+          ${runTrophies
+            .slice(0, 6)
+            .map(
+              (t) => `
+            <span class="result-trophy-pill is-${t.tier}">
+              <img src="${t.tierIcon}" alt="" width="20" height="20" />
+              <strong>${t.nameZh}</strong>
+            </span>
+          `
+            )
+            .join('')}
+        </div>
+      `;
+    } else {
+      trophyStrip.hidden = true;
+      trophyStrip.innerHTML = '';
+    }
 
     this.dialogs.result.returnValue = '';
     if (!this.dialogs.result.open) {
@@ -2984,19 +3477,22 @@ export class Game {
         waveStep: ev.waveInAct === 2 ? 2 : 1,
       });
     } else if (ev.type === 'endless_wave') {
+      this.trophies.recordEndlessWave(ev.endlessWave);
       this.envSystem.setAct(ev.act, false);
       this.sound.setBgmTrack('act3');
       const theme = ACT_THEMES[Math.min(ACT_THEMES.length - 1, Math.max(0, ev.act - 1))];
+      const sc = this.waves.getCombatScaling();
       this.showWaveCallout({
         sector: `无尽深空 · ${theme.titleZh.replace(/^ACT [IV]+\s*·\s*/, '')}`,
         title: `第 ${ev.endlessWave} 波`,
         fraction: `WAVE ${String(ev.endlessWave).padStart(2, '0')}`,
-        sub: '敌群火力持续强化 · 全力突破极限',
+        sub: `敌群装甲 ×${sc.enemyHpMult.toFixed(1)} · 火力 ×${sc.enemyFireRateMult.toFixed(2)} · 全力突破极限`,
         isEndless: true,
       });
     } else if (ev.type === 'upgrade_prompt') {
       this.openUpgradeDialog();
     } else if (ev.type === 'boss_intro' && ev.bossConfig) {
+      this.bossFightTookDamage = false;
       this.envSystem.setAct(ev.act, false);
       const boss = this.waves.activeBoss;
       if (boss && boss.entering) {
@@ -3014,6 +3510,7 @@ export class Game {
   private showBossHud(cfg: BossConfig, playChargeAnim = false): void {
     const hud = this.els['boss-hud'];
     hud.hidden = false;
+    document.body.classList.add('has-boss-hud');
     this.els['boss-hud-name'].textContent = cfg.nameZh;
     this.els['boss-hud-threat-badge'].textContent = cfg.threatTag;
     this.els['boss-hud-intel'].textContent = cfg.tacticalIntel;
@@ -3038,6 +3535,7 @@ export class Game {
     const boss = this.waves.activeBoss;
     if (!boss) {
       this.els['boss-hud'].hidden = true;
+      document.body.classList.remove('has-boss-hud');
       return;
     }
     const pct = Math.max(0, (boss.hp / boss.maxHp) * 100);
@@ -3516,6 +4014,7 @@ export class Game {
           this.addUltimateCharge(15);
           this.score += Math.round(250 * this.combo);
           this.comboTimer = 3.5;
+          this.trophies.recordBoostRing(this.score, this.combo);
           this.sound.playPickup();
           this.flashDamageVignette('boost');
           this.spawnFloatingText(
@@ -3653,6 +4152,7 @@ export class Game {
           this.enemyBullets.splice(i, 1);
           this.sound.playRoll(true, this.worldXToPan(eb.pos.x));
           this.score += Math.round(80 * this.combo);
+          this.trophies.recordDeflect(this.score, this.combo);
         }
       }
     } else {
@@ -3905,6 +4405,7 @@ export class Game {
     for (let i = this.waves.activeEnemies.length - 1; i >= 0; i--) {
       if (i >= this.waves.activeEnemies.length) continue;
       const e = this.waves.activeEnemies[i];
+      if (!this.isEnemyEngageable(e)) continue;
       if (
         e.pos.z < this.playerPos.z &&
         Math.hypot(e.pos.x - this.playerPos.x, e.pos.y - this.playerPos.y) < e.hitRadius + 2.6
@@ -3930,6 +4431,19 @@ export class Game {
     }
   }
 
+  private getTotalUpgradeStacks(): number {
+    let total = 0;
+    for (const v of Object.values(this.upgrades.stacks)) {
+      if (typeof v === 'number' && v > 0) total += v;
+    }
+    return total;
+  }
+
+  private isEnemyEngageable(e: ActiveEnemy): boolean {
+    // Prevent off-screen horizon spawn-sniping while enemies warp in from z = -128
+    return e.pos.z >= -80;
+  }
+
   private updateEnemies(dt: number): void {
     for (let i = this.waves.activeEnemies.length - 1; i >= 0; i--) {
       const e = this.waves.activeEnemies[i];
@@ -3937,8 +4451,9 @@ export class Game {
       e.flashTimer = Math.max(0, e.flashTimer - dt);
       this.applyHitFlashVisuals(e.instance, e.flashTimer);
 
-      // Forward approach + archetype flight trajectory
-      e.pos.z = THREE.MathUtils.lerp(e.pos.z, e.targetZ, Math.min(1, dt * 1.65));
+      // Brisk warp-in approach until entering visual arena, then smooth formation hold
+      const zApproachRate = e.pos.z < -74 ? 3.4 : 1.65;
+      e.pos.z = THREE.MathUtils.lerp(e.pos.z, e.targetZ, Math.min(1, dt * zApproachRate));
       if (e.kind === 'enemy_drone') {
         e.pos.x = e.baseX + Math.sin(e.age * 2.4 + e.phase) * 3.4;
         e.pos.y = e.baseY + Math.cos(e.age * 1.8 + e.phase) * 1.3;
@@ -3982,36 +4497,39 @@ export class Game {
   }
 
   private fireEnemyWeapon(e: ActiveEnemy): void {
-    const actMult = 1 + (this.waves.getAct() - 1) * 0.14;
+    const sc = this.waves.getCombatScaling();
+    const rateMult = sc.enemyFireRateMult;
+    const speedMult = sc.enemyBulletSpeedMult;
+    const dmgScale = (base: number): number => Math.round(base * sc.enemyDamageMult);
     if (e.kind === 'enemy_turret') {
-      e.fireTimer = Math.max(1.5, 2.5 / actMult);
+      e.fireTimer = Math.max(0.95, 2.5 / rateMult);
       const centerDir = this.safeDirectionToPlayer(e.pos);
       this.projectileVisuals.spawnMuzzleFlash(e.pos, centerDir, 0xff9f43, 0.9);
       for (const offset of [-0.14, 0, 0.14]) {
         const dir = centerDir.clone();
         dir.x += offset;
         dir.normalize();
-        this.spawnEnemyBullet(e.pos.clone(), dir.multiplyScalar(28 * actMult), 13, 0xff9f43);
+        this.spawnEnemyBullet(e.pos.clone(), dir.multiplyScalar(28 * speedMult), dmgScale(13), 0xff9f43);
       }
     } else if (e.kind === 'enemy_foldwing') {
-      e.fireTimer = Math.max(1.2, 2.0 / actMult);
+      e.fireTimer = Math.max(0.85, 2.0 / rateMult);
       for (const side of [-0.7, 0.7]) {
         const origin = e.pos.clone().add(new THREE.Vector3(side, 0, 1.0));
         const dir = this.safeDirectionToPlayer(origin);
         this.projectileVisuals.spawnMuzzleFlash(origin, dir, 0xff4757, 0.85);
-        this.spawnEnemyBullet(origin, dir.multiplyScalar(36 * actMult), 12, 0xff4757);
+        this.spawnEnemyBullet(origin, dir.multiplyScalar(36 * speedMult), dmgScale(12), 0xff4757);
       }
     } else if (e.kind === 'enemy_rover') {
-      e.fireTimer = Math.max(1.4, 2.3 / actMult);
+      e.fireTimer = Math.max(0.95, 2.3 / rateMult);
       const muzzlePos = e.pos.clone().add(new THREE.Vector3(0, 0.8, 1));
       const dir = this.safeDirectionToPlayer(muzzlePos);
       this.projectileVisuals.spawnMuzzleFlash(muzzlePos, dir, 0xfbbf24, 1.0);
-      this.spawnEnemyBullet(muzzlePos, dir.multiplyScalar(31 * actMult), 16, 0xfbbf24);
+      this.spawnEnemyBullet(muzzlePos, dir.multiplyScalar(31 * speedMult), dmgScale(16), 0xfbbf24);
     } else {
-      e.fireTimer = Math.max(1.5, 2.6 / actMult);
+      e.fireTimer = Math.max(1.0, 2.6 / rateMult);
       const dir = this.safeDirectionToPlayer(e.pos);
       this.projectileVisuals.spawnMuzzleFlash(e.pos, dir, 0x38bdf8, 0.72);
-      this.spawnEnemyBullet(e.pos.clone(), dir.multiplyScalar(26 * actMult), 10, 0x38bdf8);
+      this.spawnEnemyBullet(e.pos.clone(), dir.multiplyScalar(26 * speedMult), dmgScale(10), 0x38bdf8);
     }
   }
 
@@ -4063,9 +4581,11 @@ export class Game {
         this.projectileVisuals.syncEnemyProjectiles(this.enemyBullets, 0, this.globalElapsed);
         this.invulnTimer = Math.max(this.invulnTimer, 2.0);
         this.els['boss-hud'].hidden = true;
+        document.body.classList.remove('has-boss-hud');
         this.addUltimateCharge(45);
         this.score += Math.round(2500 * boss.config.act * this.combo);
         this.kills += 1;
+        this.trophies.recordKill(this.score, this.combo);
         const missingHp = Math.max(0, this.playerMaxHp - this.playerHp);
         this.playerHp = this.playerMaxHp;
         if (missingHp > 0) {
@@ -4124,6 +4644,13 @@ export class Game {
           (1 - easeOutQuart) * 0.44,
           (1 - easeOutQuart) * -0.18
         );
+      } else if (boss.config.act === 4) {
+        // Solar Scarab: predatory high-desert swoop leveling out with golden wings flaring open
+        boss.instance.root.rotation.set(
+          (1 - easeOutQuart) * 0.28,
+          Math.sin(entryT * Math.PI) * 0.14 * boss.introSweepSign,
+          Math.sin(entryT * Math.PI) * -0.18 * boss.introSweepSign
+        );
       } else {
         boss.instance.root.rotation.set((1 - easeOutQuart) * 0.08, 0, 0);
       }
@@ -4148,7 +4675,7 @@ export class Game {
         this.vfx.spawnSparks(boss.pos, 16, 0xffd27a, 22);
         this.screenShake = Math.max(this.screenShake, 0.28);
         boss.rig.triggerBossFire();
-        if (boss.config.act === 4) {
+        if (boss.config.act === 5) {
           boss.rig.triggerCarrierLaunch();
         }
       }
@@ -4198,7 +4725,7 @@ export class Game {
     this.applyHitFlashVisuals(boss.instance, boss.flashTimer);
 
     // Boss hovering patrol in front of player
-    const patrolZ = boss.config.act === 4 ? -40 : -38;
+    const patrolZ = boss.config.act === 5 ? -40 : boss.config.act === 4 ? -37.5 : -38;
     boss.pos.z = THREE.MathUtils.lerp(boss.pos.z, patrolZ, Math.min(1, bdt * 1.4));
     boss.pos.x = Math.sin(boss.age * 0.72) * 8.5;
     boss.pos.y = 1.6 + Math.cos(boss.age * 1.05) * 1.8;
@@ -4209,6 +4736,13 @@ export class Game {
         Math.sin(boss.age * 1.05) * 0.08,
         Math.cos(boss.age * 0.72) * 0.08,
         -Math.cos(boss.age * 0.72) * 0.24
+      );
+    } else if (boss.config.act === 4) {
+      // Predatory desert hover banking for Solar Scarab above the sandstorm canyon
+      boss.instance.root.rotation.set(
+        0.06 + Math.sin(boss.age * 1.1) * 0.06,
+        Math.cos(boss.age * 0.72) * 0.1,
+        -Math.cos(boss.age * 0.72) * 0.14
       );
     } else {
       boss.instance.root.rotation.set(0, 0, 0);
@@ -4240,7 +4774,7 @@ export class Game {
 
     boss.escortTimer -= bdt;
     if (boss.escortTimer <= 0 && boss.pos.z > -65) {
-      boss.escortTimer = boss.config.act === 4 && !boss.disabledParts.has('bow_crane') ? 7.5 : 10.5;
+      boss.escortTimer = boss.config.act === 5 && !boss.disabledParts.has('bow_crane') ? 7.5 : 10.5;
       boss.rig.triggerCarrierLaunch();
       const escortKind = boss.config.act <= 2 ? 'enemy_drone' : 'enemy_foldwing';
       this.waves.spawnEscortEnemy(escortKind, boss.pos);
@@ -4253,12 +4787,22 @@ export class Game {
     boss.rig.triggerBossFire();
     const act = boss.config.act;
     const intactCount = boss.parts.filter((p) => !p.destroyed).length;
-    boss.fireTimer = Math.max(1.15, 2.2 - act * 0.18 + (boss.parts.length - intactCount) * 0.45);
+    const sc = this.waves.getCombatScaling();
+    const bossRateDiv = this.waves.isEndless() ? Math.min(1.85, sc.enemyFireRateMult) : 1.0;
+    const bossSpdMult = this.waves.isEndless() ? Math.min(1.55, sc.enemyBulletSpeedMult) : 1.0;
+    const bossDmg = (base: number): number => Math.round(base * sc.enemyDamageMult);
+    const baseTimer = Math.max(1.15, 2.2 - act * 0.18 + (boss.parts.length - intactCount) * 0.45);
+    boss.fireTimer = Math.max(0.75, baseTimer / bossRateDiv);
 
     const originMain = boss.pos.clone().add(new THREE.Vector3(0, 0.5, 2));
     const toPlayer = this.safeDirectionToPlayer(originMain);
     this.projectileVisuals.spawnMuzzleFlash(originMain, toPlayer, boss.config.accentHex, 1.45);
-    this.spawnEnemyBullet(originMain, toPlayer.multiplyScalar(act === 1 ? 32 : 34), act === 1 ? 14 : 16, boss.config.accentHex);
+    this.spawnEnemyBullet(
+      originMain,
+      toPlayer.multiplyScalar((act === 1 ? 32 : 34) * bossSpdMult),
+      bossDmg(act === 1 ? 14 : 16),
+      boss.config.accentHex
+    );
 
     // Part-driven attacks
     for (const part of boss.parts) {
@@ -4271,18 +4815,26 @@ export class Game {
           const d = dir.clone();
           d.x += a;
           d.normalize();
-          this.spawnEnemyBullet(pOrigin, d.multiplyScalar(35), 12, 0x38e8ff);
+          this.spawnEnemyBullet(pOrigin, d.multiplyScalar(35 * bossSpdMult), bossDmg(12), 0x38e8ff);
         }
       } else if (part.weaponEffectKey === 'leftCannon' || part.weaponEffectKey === 'rightCannon') {
         this.projectileVisuals.spawnMuzzleFlash(pOrigin, dir, 0xff9f43, 1.25);
-        this.spawnEnemyBullet(pOrigin, dir.multiplyScalar(38), 15, 0xff9f43);
+        this.spawnEnemyBullet(pOrigin, dir.multiplyScalar(38 * bossSpdMult), bossDmg(15), 0xff9f43);
       } else if (part.weaponEffectKey === 'leftClaw' || part.weaponEffectKey === 'rightClaw') {
         this.projectileVisuals.spawnMuzzleFlash(pOrigin, dir, 0x00f0ff, 1.15);
         for (const a of [-0.12, 0.12]) {
           const d = dir.clone();
           d.x += a;
           d.normalize();
-          this.spawnEnemyBullet(pOrigin, d.multiplyScalar(33), 13, 0x00f0ff);
+          this.spawnEnemyBullet(pOrigin, d.multiplyScalar(33 * bossSpdMult), bossDmg(13), 0x00f0ff);
+        }
+      } else if (part.weaponEffectKey === 'leftSolarCannon' || part.weaponEffectKey === 'rightSolarCannon') {
+        this.projectileVisuals.spawnMuzzleFlash(pOrigin, dir, 0x00f0ff, 1.35);
+        for (const a of [-0.075, 0.075]) {
+          const d = dir.clone();
+          d.x += a;
+          d.normalize();
+          this.spawnEnemyBullet(pOrigin, d.multiplyScalar(40 * bossSpdMult), bossDmg(15), 0x00f0ff);
         }
       } else if (part.weaponEffectKey === 'dorsalTurret') {
         this.projectileVisuals.spawnMuzzleFlash(pOrigin, dir, 0xff4757, 1.35);
@@ -4290,11 +4842,11 @@ export class Game {
           const d = dir.clone();
           d.x += a;
           d.normalize();
-          this.spawnEnemyBullet(pOrigin, d.multiplyScalar(39), 15, 0xff4757);
+          this.spawnEnemyBullet(pOrigin, d.multiplyScalar(39 * bossSpdMult), bossDmg(15), 0xff4757);
         }
       } else if (part.weaponEffectKey === 'bowCrane') {
         this.projectileVisuals.spawnMuzzleFlash(pOrigin, dir, 0xffb347, 1.3);
-        this.spawnEnemyBullet(pOrigin, dir.multiplyScalar(42), 18, 0xffb347);
+        this.spawnEnemyBullet(pOrigin, dir.multiplyScalar(42 * bossSpdMult), bossDmg(18), 0xffb347);
       }
     }
   }
@@ -4334,7 +4886,7 @@ export class Game {
       for (let ei = this.waves.activeEnemies.length - 1; ei >= 0; ei--) {
         if (ei >= this.waves.activeEnemies.length) continue;
         const e = this.waves.activeEnemies[ei];
-        if (b.hitIds.has(e.id)) continue;
+        if (!this.isEnemyEngageable(e) || b.hitIds.has(e.id)) continue;
         if (b.pos.distanceToSquared(e.pos) <= (e.hitRadius + 0.55) * (e.hitRadius + 0.55)) {
           b.hitIds.add(e.id);
           const hitOrigin = e.pos.clone();
@@ -4425,7 +4977,7 @@ export class Game {
 
     for (let i = 0; i < this.waves.activeEnemies.length; i++) {
       const candidate = this.waves.activeEnemies[i];
-      if (candidate.id === skipEnemyId || candidate.hp <= 0) continue;
+      if (candidate.id === skipEnemyId || candidate.hp <= 0 || !this.isEnemyEngageable(candidate)) continue;
       const d2 = origin.distanceToSquared(candidate.pos);
       if (d2 <= bestDistSq) {
         bestDistSq = d2;
@@ -4471,6 +5023,7 @@ export class Game {
       this.kills += 1;
       this.combo = Math.min(8.0, +(this.combo + 0.2).toFixed(1));
       this.comboTimer = 4.0;
+      this.trophies.recordKill(this.score, this.combo);
       this.addUltimateCharge(e.isElite ? 12 : 7);
 
       this.vfx.spawnExplosion(
@@ -4504,6 +5057,14 @@ export class Game {
     this.projectileVisuals.syncEnemyProjectiles(this.enemyBullets, 0, this.globalElapsed);
     this.invulnTimer = Math.max(this.invulnTimer, 3.0);
     this.sound.playExplosion('boss', this.worldXToPan(boss.pos.x));
+    const expectedBonus = Math.round(2500 * boss.config.act * this.combo);
+    this.trophies.recordBossDefeated({
+      act: boss.config.act,
+      tookDamageDuringBoss: this.bossFightTookDamage,
+      score: this.score + expectedBonus,
+      combo: this.combo,
+      isEndless: this.waves.isEndless(),
+    });
     this.updateBossHud();
   }
 
@@ -4544,6 +5105,7 @@ export class Game {
       this.sound.playPartBreak(this.worldXToPan(part.worldPos.x));
       this.addUltimateCharge(22);
       this.score += Math.round(600 * this.combo);
+      this.trophies.recordPartBreak(this.score, this.combo);
       this.spawnFloatingText(part.worldPos, `${part.labelZh} 击碎!`, 'part');
       this.spawnPickup('repair', part.worldPos.clone().add(new THREE.Vector3(-1.2, 0, 2)));
       this.spawnPickup('energy', part.worldPos.clone().add(new THREE.Vector3(1.2, 0, 2)));
@@ -4601,7 +5163,7 @@ export class Game {
       if (jumps >= this.upgrades.chainJumps) break;
       if (i >= this.waves.activeEnemies.length) continue;
       const candidate = this.waves.activeEnemies[i];
-      if (candidate.id === skipId || candidate.hp <= 0) continue;
+      if (candidate.id === skipId || candidate.hp <= 0 || !this.isEnemyEngageable(candidate)) continue;
       if (candidate.pos.distanceTo(origin) <= 18) {
         points.push(candidate.pos.clone());
         this.damageEnemy(candidate, i, arcDamage, false, true);
@@ -4631,6 +5193,7 @@ export class Game {
     let bestD2 = Infinity;
 
     for (const e of this.waves.activeEnemies) {
+      if (!this.isEnemyEngageable(e)) continue;
       const d2 = from.distanceToSquared(e.pos);
       if (d2 < bestD2) {
         bestD2 = d2;
@@ -4736,6 +5299,9 @@ export class Game {
 
   private applyPlayerDamage(dmg: number): void {
     if (this.playerDying) return;
+    if (this.waves.activeBoss && !this.waves.activeBoss.dying && !this.waves.activeBoss.entering) {
+      this.bossFightTookDamage = true;
+    }
     this.playerHp = Math.max(0, this.playerHp - dmg);
     this.invulnTimer = 0.55;
     this.timeSinceHit = 0;
@@ -4834,6 +5400,7 @@ export class Game {
       const d2 = pk.pos.distanceToSquared(this.playerPos);
       if (d2 < 2.2 * 2.2) {
         this.sound.playPickup(this.worldXToPan(pk.pos.x));
+        this.trophies.recordPickup();
         if (pk.kind === 'repair') {
           this.playerHp = Math.min(this.playerMaxHp, this.playerHp + 22);
           this.flashDamageVignette('heal');
@@ -4940,8 +5507,8 @@ export class Game {
       }
 
       const arcT = THREE.MathUtils.clamp((t - 0.22) / 1.75, 0, 1);
-      const isFlagship = introBoss.config.act === 4;
-      const camDist = isFlagship ? 20.5 : introBoss.config.act === 1 ? 19.5 : 18.8;
+      const isFlagship = introBoss.config.act === 5;
+      const camDist = isFlagship ? 20.5 : introBoss.config.act === 4 ? 19.2 : introBoss.config.act === 1 ? 19.5 : 18.8;
       const sideSpan = isFlagship ? 12.2 : 8.6;
       const sideX = introBoss.introSweepSign * THREE.MathUtils.lerp(-sideSpan, sideSpan, arcT);
       this.tmpHeroCamPos.set(
@@ -5184,6 +5751,8 @@ export class Game {
           activeGateCount: this.waves.getActiveGateCount(),
           pickupCount: this.pickups.length,
           enemyCount: this.waves.activeEnemies.length,
+          enemyMaxHpSample: this.waves.activeEnemies[0]?.maxHp ?? 0,
+          combatScaling: this.waves.getCombatScaling(),
           enemyBulletCount: this.enemyBullets.length,
           playerBulletCount: this.playerBullets.length,
           upgrades: { ...this.upgrades.stacks },
@@ -5199,10 +5768,25 @@ export class Game {
           internalHeight: this.internalHeight,
           hardware: { ...this.hardwareProfile },
           audio: this.sound.getTelemetry(),
+          trophies: (() => {
+            const sum = this.trophies.getSummary();
+            return {
+              unlockedCount: sum.unlockedCount,
+              total: sum.total,
+              percent: sum.percent,
+              points: sum.points,
+              unlockedIds: TROPHY_DEFS.filter((t) => this.trophies.isUnlocked(t.id)).map((t) => t.id),
+              broadcastCount: this.trophyBroadcastCount,
+              lastBroadcastId: this.lastTrophyBroadcastId,
+              toastVisible: this.isTrophyToastVisible(),
+              queuedCount: this.trophyToastQueue.length,
+            };
+          })(),
           dialogs: {
             upgradeOpen: this.dialogs.upgrade.open,
             pauseOpen: this.dialogs.pause.open,
             resultOpen: this.dialogs.result.open,
+            trophyOpen: this.dialogs.trophy.open,
           },
         };
       },
@@ -5250,7 +5834,7 @@ export class Game {
         }
       },
 
-      spawnBossNow: (act: 1 | 2 | 3 | 4, opts?: { playIntro?: boolean }): void => {
+      spawnBossNow: (act: 1 | 2 | 3 | 4 | 5, opts?: { playIntro?: boolean }): void => {
         if (this.state === 'boot') {
           this.openHangarFromBoot(true);
         }
@@ -5436,6 +6020,42 @@ export class Game {
           this.playerMaxHp
         );
         this.playerHp = clamped;
+        this.updateHud();
+      },
+
+      openTrophyDialog: (): void => {
+        if (this.state === 'boot') {
+          this.openHangarFromBoot(true);
+        }
+        this.openTrophyDialog();
+      },
+
+      unlockTrophyForQa: (id: TrophyId): boolean => {
+        return this.trophies.unlock(id);
+      },
+
+      resetTrophiesForQa: (): void => {
+        this.suppressActiveTrophyToastForModal();
+        this.trophyToastQueue.length = 0;
+        this.trophyBroadcastCount = 0;
+        this.lastTrophyBroadcastId = null;
+        this.trophies.resetAllForDebug();
+        this.syncHangarTrophyBadge();
+        if (this.dialogs.trophy.open) {
+          this.renderTrophyDialog();
+        }
+      },
+
+      setEndlessWaveForQa: (wave: number, upgradeStacks?: number): void => {
+        if (this.state === 'boot') {
+          this.openHangarFromBoot(true);
+        }
+        if (this.state === 'hangar' || this.state === 'result') {
+          this.startSortie('endless');
+        }
+        this.clearLaunchCountdown(false);
+        const ev = this.waves.forceSetEndlessWaveForQa(wave, upgradeStacks);
+        this.handleWaveEvent(ev);
         this.updateHud();
       },
     };

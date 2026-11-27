@@ -533,6 +533,76 @@ export class AnimationRig {
       return;
     }
 
+    if (this.key === 'boss_act4_scarab') {
+      const introBoost = input.introPulse ?? 0;
+
+      // Parabolic Imperial Gold solar wings majestic hovering flare
+      for (const [wingName, sign] of [
+        ['SolarWing_L', 1],
+        ['SolarWing_R', -1],
+      ] as const) {
+        const w = this.nodes.get(wingName);
+        const wBase = this.baseRotations.get(wingName);
+        if (w && wBase) {
+          const flare = Math.sin(elapsed * 2.1) * 0.065 + introBoost * 0.18 + this.bossFirePulse * 0.075;
+          w.rotation.z = wBase.z + sign * flare;
+          w.rotation.y = wBase.y - sign * (flare * 0.45);
+        }
+      }
+
+      // Articulated desert mandibles subtle predatory pinch rhythm
+      for (const [mName, sign] of [
+        ['Mandible_L', 1],
+        ['Mandible_R', -1],
+      ] as const) {
+        const m = this.nodes.get(mName);
+        const mBase = this.baseRotations.get(mName);
+        if (m && mBase) {
+          const pinch = Math.sin(elapsed * 2.7) * 0.09 + this.bossFirePulse * 0.14 + introBoost * 0.22;
+          m.rotation.y = mBase.y + sign * pinch;
+        }
+      }
+
+      // Glowing amber faceted solar core subtle overdrive breath
+      const core = this.nodes.get('SolarCore_Prism');
+      if (core) {
+        const s = 1.0 + Math.sin(elapsed * 5.2) * 0.035 + introBoost * 0.11 + this.bossFirePulse * 0.09;
+        core.scale.setScalar(s);
+      }
+
+      // Twin dorsal turbo-plasma rotors spinning continuously (glTF Z axis = Blender Y axis)
+      for (const rName of ['ThrusterRotor_L', 'ThrusterRotor_R']) {
+        const r = this.nodes.get(rName);
+        if (r) r.rotation.z += dt * (20 + introBoost * 16);
+      }
+
+      // Dual destructible accelerated cyan plasma cannons recoil & target aim tracking
+      const aimYaw =
+        playerPos && worldPos
+          ? THREE.MathUtils.clamp(
+              Math.atan2(playerPos.x - worldPos.x, Math.max(12, playerPos.z - worldPos.z)) * 0.45,
+              -0.32,
+              0.32
+            )
+          : 0;
+      for (const [id, nodeName] of [
+        ['solar_cannon_l', 'SolarCannon_L'],
+        ['solar_cannon_r', 'SolarCannon_R'],
+      ]) {
+        if (disabledParts?.has(id)) continue;
+        const cNode = this.nodes.get(nodeName);
+        const cBasePos = this.basePositions.get(nodeName);
+        const cBaseRot = this.baseRotations.get(nodeName);
+        if (cNode && cBasePos) {
+          cNode.position.z = cBasePos.z - (this.bossFirePulse * 0.26 + introBoost * 0.14);
+        }
+        if (cNode && cBaseRot) {
+          cNode.rotation.y = THREE.MathUtils.lerp(cNode.rotation.y, cBaseRot.y + aimYaw, Math.min(1, dt * 5));
+        }
+      }
+      return;
+    }
+
     if (this.key === 'boss_act3_carrier') {
       const introBoost = input.introPulse ?? 0;
       const dish = this.nodes.get('SensorMast_DishArray');
