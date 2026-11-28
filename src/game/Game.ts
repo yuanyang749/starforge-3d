@@ -4,7 +4,9 @@ import { OutputPass } from 'three/examples/jsm/postprocessing/OutputPass.js';
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass.js';
 import {
+  ACT_ENEMY_POOLS,
   ACT_THEMES,
+  ENEMY_ROSTER,
   SHIPS,
   type BossConfig,
   type ShipConfig,
@@ -124,6 +126,8 @@ export interface StarforgeSnapshot {
   activeGateCount: number;
   pickupCount: number;
   enemyCount: number;
+  activeEnemyKinds: string[];
+  actEnemyPools: Record<1 | 2 | 3 | 4 | 5, string[]>;
   enemyMaxHpSample: number;
   combatScaling: CombatScalingSnapshot;
   enemyBulletCount: number;
@@ -166,8 +170,10 @@ export interface StarforgeQaApi {
   setGameMode(mode: GameMode): void;
   startSortie(mode?: GameMode): void;
   forceUpgradeModal(): void;
-  spawnBossNow(act: 1 | 2 | 3 | 4, opts?: { playIntro?: boolean }): void;
+  spawnBossNow(act: 1 | 2 | 3 | 4 | 5, opts?: { playIntro?: boolean }): void;
   skipBossIntro(): void;
+  showcaseActEnemies(act: 1 | 2 | 3 | 4 | 5): string[];
+  sampleActRandomEnemies(act: 1 | 2 | 3 | 4 | 5, count?: number): string[];
   damageBossPart(partId: string, dmg: number): boolean;
   damageBossCore(dmg: number): boolean;
   fillUltimate(): void;
@@ -3157,7 +3163,7 @@ export class Game {
       btn.dataset.spotlight = '';
       if (idx === 0) btn.autofocus = true;
       btn.innerHTML = `
-        <img src="./ui/card_chip_frame.png" class="chip-card-bg" alt="" />
+        <img src="./ui/card_chip_frame.webp" class="chip-card-bg" alt="" />
         <img src="${card.icon}" class="chip-socket-icon" alt="" />
         <span class="ui-spotlight" aria-hidden="true"></span>
         <span class="ui-corners" aria-hidden="true"></span>
@@ -3223,7 +3229,7 @@ export class Game {
     const cardMap = new Map(UPGRADE_CARDS.map((c) => [c.id, c]));
     strip.innerHTML = entries
       .map(([id, cnt]) => {
-        const icon = cardMap.get(id)?.icon ?? `./ui/icons/icon_${id}.png`;
+        const icon = cardMap.get(id)?.icon ?? `./ui/icons/icon_${id}.webp`;
         return `<span class="hud-chip-mini"><img src="${icon}" alt="" /><em>x${cnt}</em></span>`;
       })
       .join('');
@@ -3272,8 +3278,8 @@ export class Game {
     });
 
     (this.els['result-medal-img'] as HTMLImageElement).src = victory
-      ? './ui/icons/medal_victory.png'
-      : './ui/icons/medal_defeat.png';
+      ? './ui/icons/medal_victory.webp'
+      : './ui/icons/medal_defeat.webp';
     this.els['result-dialog-title'].textContent = victory
       ? '战役凯旋 · CAMPAIGN CLEARED'
       : '机体战损 · SIGNAL LOST';
@@ -4021,14 +4027,14 @@ export class Game {
             this.playerPos,
             '+10 护盾 · 穿环加速',
             'pickup-boost',
-            './ui/icons/icon_thruster.png'
+            './ui/icons/icon_thruster.webp'
           );
           this.showPickupToast(
             'boost',
             '+10 护盾',
             '穿环加速 · 能量+15%',
             'SLIPSTREAM OVERBOOST',
-            './ui/icons/icon_thruster.png'
+            './ui/icons/icon_thruster.webp'
           );
         }
       }
@@ -4451,20 +4457,30 @@ export class Game {
       e.flashTimer = Math.max(0, e.flashTimer - dt);
       this.applyHitFlashVisuals(e.instance, e.flashTimer);
 
-      // Brisk warp-in approach until entering visual arena, then smooth formation hold
+      // Brisk warp-in approach until entering visual arena, then locomotion-authentic formation hold
       const zApproachRate = e.pos.z < -74 ? 3.4 : 1.65;
       e.pos.z = THREE.MathUtils.lerp(e.pos.z, e.targetZ, Math.min(1, dt * zApproachRate));
-      if (e.kind === 'enemy_drone') {
-        e.pos.x = e.baseX + Math.sin(e.age * 2.4 + e.phase) * 3.4;
-        e.pos.y = e.baseY + Math.cos(e.age * 1.8 + e.phase) * 1.3;
-      } else if (e.kind === 'enemy_foldwing') {
-        e.pos.x = e.baseX + Math.sin(e.age * 3.0 + e.phase) * 4.5;
-        e.pos.y = e.baseY + Math.sin(e.age * 2.1) * 2.0;
-        e.instance.root.rotation.z = Math.cos(e.age * 3.0 + e.phase) * 0.45;
-      } else if (e.kind === 'enemy_rover') {
-        e.pos.x = e.baseX + Math.sin(e.age * 1.3 + e.phase) * 2.5;
+      const spec = ENEMY_ROSTER[e.kind];
+      if (spec.locomotion === 'ground') {
+        // Walkers, tanks, spider turrets & desert scorpions advance along lower corridor with mechanical stride bob
+        const lateralAmp = spec.archetype === 'tank' ? 1.8 : 2.6;
+        const lateralFreq = spec.archetype === 'tank' ? 0.95 : 1.35;
+        e.pos.x = e.baseX + Math.sin(e.age * lateralFreq + e.phase) * lateralAmp;
+        const strideBob = spec.archetype === 'tank' ? 0.08 : 0.22;
+        e.pos.y = e.baseY + Math.abs(Math.sin(e.age * 5.2 + e.phase)) * strideBob;
+        e.instance.root.rotation.z = Math.cos(e.age * lateralFreq + e.phase) * 0.06;
+      } else if (spec.locomotion === 'air') {
+        const ampX = spec.archetype === 'mech' ? 3.8 : 4.4;
+        const freqX = spec.archetype === 'mech' ? 2.3 : 2.85;
+        e.pos.x = e.baseX + Math.sin(e.age * freqX + e.phase) * ampX;
+        e.pos.y = e.baseY + Math.cos(e.age * 1.9 + e.phase) * 1.65;
+        e.instance.root.rotation.z = Math.cos(e.age * freqX + e.phase) * 0.42;
       } else {
-        e.pos.x = e.baseX + Math.sin(e.age * 0.9 + e.phase) * 1.2;
+        // Hover gunships, obelisks, riot enforcers, dreadnought destroyers
+        const ampX = spec.archetype === 'turret' ? 1.5 : 2.5;
+        e.pos.x = e.baseX + Math.sin(e.age * 1.25 + e.phase) * ampX;
+        e.pos.y = e.baseY + Math.sin(e.age * 1.6 + e.phase) * 0.65;
+        e.instance.root.rotation.z = Math.cos(e.age * 1.25 + e.phase) * 0.14;
       }
 
       e.rig.update({
@@ -4501,35 +4517,59 @@ export class Game {
     const rateMult = sc.enemyFireRateMult;
     const speedMult = sc.enemyBulletSpeedMult;
     const dmgScale = (base: number): number => Math.round(base * sc.enemyDamageMult);
-    if (e.kind === 'enemy_turret') {
-      e.fireTimer = Math.max(0.95, 2.5 / rateMult);
+    const spec = ENEMY_ROSTER[e.kind];
+    e.fireTimer = Math.max(0.75, spec.fireInterval / rateMult);
+    const spd = spec.bulletSpeed * speedMult;
+    const dmg = dmgScale(spec.bulletDamage);
+    const col = spec.bulletColor;
+
+    if (spec.firePattern === 'spread3') {
       const centerDir = this.safeDirectionToPlayer(e.pos);
-      this.projectileVisuals.spawnMuzzleFlash(e.pos, centerDir, 0xff9f43, 0.9);
+      this.projectileVisuals.spawnMuzzleFlash(e.pos, centerDir, col, 0.95);
       for (const offset of [-0.14, 0, 0.14]) {
         const dir = centerDir.clone();
         dir.x += offset;
         dir.normalize();
-        this.spawnEnemyBullet(e.pos.clone(), dir.multiplyScalar(28 * speedMult), dmgScale(13), 0xff9f43);
+        this.spawnEnemyBullet(e.pos.clone(), dir.multiplyScalar(spd), dmg, col);
       }
-    } else if (e.kind === 'enemy_foldwing') {
-      e.fireTimer = Math.max(0.85, 2.0 / rateMult);
-      for (const side of [-0.7, 0.7]) {
-        const origin = e.pos.clone().add(new THREE.Vector3(side, 0, 1.0));
+    } else if (spec.firePattern === 'twin') {
+      for (const side of [-0.75, 0.75]) {
+        const origin = e.pos.clone().add(new THREE.Vector3(side, 0.15, 1.0));
         const dir = this.safeDirectionToPlayer(origin);
-        this.projectileVisuals.spawnMuzzleFlash(origin, dir, 0xff4757, 0.85);
-        this.spawnEnemyBullet(origin, dir.multiplyScalar(36 * speedMult), dmgScale(12), 0xff4757);
+        this.projectileVisuals.spawnMuzzleFlash(origin, dir, col, 0.88);
+        this.spawnEnemyBullet(origin, dir.multiplyScalar(spd), dmg, col);
       }
-    } else if (e.kind === 'enemy_rover') {
-      e.fireTimer = Math.max(0.95, 2.3 / rateMult);
-      const muzzlePos = e.pos.clone().add(new THREE.Vector3(0, 0.8, 1));
+    } else if (spec.firePattern === 'heavy') {
+      const muzzlePos = e.pos.clone().add(new THREE.Vector3(0, 0.65, 1.1));
       const dir = this.safeDirectionToPlayer(muzzlePos);
-      this.projectileVisuals.spawnMuzzleFlash(muzzlePos, dir, 0xfbbf24, 1.0);
-      this.spawnEnemyBullet(muzzlePos, dir.multiplyScalar(31 * speedMult), dmgScale(16), 0xfbbf24);
+      this.projectileVisuals.spawnMuzzleFlash(muzzlePos, dir, col, 1.15);
+      this.spawnEnemyBullet(muzzlePos, dir.multiplyScalar(spd), dmg, col);
+    } else if (spec.firePattern === 'burst') {
+      const centerDir = this.safeDirectionToPlayer(e.pos);
+      this.projectileVisuals.spawnMuzzleFlash(e.pos, centerDir, col, 0.85);
+      for (const zLead of [0.8, 1.6]) {
+        const origin = e.pos.clone().add(new THREE.Vector3(0, 0.1, zLead));
+        this.spawnEnemyBullet(origin, centerDir.clone().multiplyScalar(spd * (zLead > 1 ? 1.08 : 0.94)), dmg, col);
+      }
+    } else if (spec.firePattern === 'radial4') {
+      const centerDir = this.safeDirectionToPlayer(e.pos);
+      this.projectileVisuals.spawnMuzzleFlash(e.pos, centerDir, col, 1.0);
+      for (const [ox, oy] of [
+        [-0.14, 0.08],
+        [0.14, 0.08],
+        [-0.14, -0.08],
+        [0.14, -0.08],
+      ] as const) {
+        const dir = centerDir.clone();
+        dir.x += ox;
+        dir.y += oy;
+        dir.normalize();
+        this.spawnEnemyBullet(e.pos.clone(), dir.multiplyScalar(spd), dmg, col);
+      }
     } else {
-      e.fireTimer = Math.max(1.0, 2.6 / rateMult);
       const dir = this.safeDirectionToPlayer(e.pos);
-      this.projectileVisuals.spawnMuzzleFlash(e.pos, dir, 0x38bdf8, 0.72);
-      this.spawnEnemyBullet(e.pos.clone(), dir.multiplyScalar(26 * speedMult), dmgScale(10), 0x38bdf8);
+      this.projectileVisuals.spawnMuzzleFlash(e.pos, dir, col, 0.78);
+      this.spawnEnemyBullet(e.pos.clone(), dir.multiplyScalar(spd), dmg, col);
     }
   }
 
@@ -4594,14 +4634,14 @@ export class Game {
             this.playerPos,
             '通关整备 · 护盾全满',
             'pickup-repair',
-            './ui/icons/icon_shield.png'
+            './ui/icons/icon_shield.webp'
           );
           this.showPickupToast(
             'full_repair',
             'MAX',
             '通关修复 · 护盾全满',
             'FULL ARMOR RESTORATION',
-            './ui/icons/icon_shield.png'
+            './ui/icons/icon_shield.webp'
           );
         }
         this.updateHud();
@@ -4776,7 +4816,7 @@ export class Game {
     if (boss.escortTimer <= 0 && boss.pos.z > -65) {
       boss.escortTimer = boss.config.act === 5 && !boss.disabledParts.has('bow_crane') ? 7.5 : 10.5;
       boss.rig.triggerCarrierLaunch();
-      const escortKind = boss.config.act <= 2 ? 'enemy_drone' : 'enemy_foldwing';
+      const escortKind = this.waves.pickEscortEnemyKind(boss.config.act);
       this.waves.spawnEscortEnemy(escortKind, boss.pos);
     }
 
@@ -5408,14 +5448,14 @@ export class Game {
             this.playerPos,
             '+22 装甲修复',
             'pickup-repair',
-            './ui/icons/icon_pickup_repair.png'
+            './ui/icons/icon_pickup_repair.webp'
           );
           this.showPickupToast(
             'repair',
             '+22',
             '装甲修复',
             'HULL INTEGRITY RESTORED',
-            './ui/icons/icon_pickup_repair.png'
+            './ui/icons/icon_pickup_repair.webp'
           );
         } else {
           this.addUltimateCharge(25);
@@ -5423,14 +5463,14 @@ export class Game {
             this.playerPos,
             '+25% 超频能量',
             'pickup-energy',
-            './ui/icons/icon_pickup_energy.png'
+            './ui/icons/icon_pickup_energy.webp'
           );
           this.showPickupToast(
             'energy',
             '+25%',
             '超频能量',
             'OVERDRIVE CAPACITOR CHARGED',
-            './ui/icons/icon_pickup_energy.png'
+            './ui/icons/icon_pickup_energy.webp'
           );
         }
         this.releasePickup(pk);
@@ -5751,6 +5791,8 @@ export class Game {
           activeGateCount: this.waves.getActiveGateCount(),
           pickupCount: this.pickups.length,
           enemyCount: this.waves.activeEnemies.length,
+          activeEnemyKinds: this.waves.activeEnemies.map((e) => e.kind),
+          actEnemyPools: ACT_ENEMY_POOLS,
           enemyMaxHpSample: this.waves.activeEnemies[0]?.maxHp ?? 0,
           combatScaling: this.waves.getCombatScaling(),
           enemyBulletCount: this.enemyBullets.length,
@@ -5899,6 +5941,40 @@ export class Game {
         }
       },
 
+      showcaseActEnemies: (act: 1 | 2 | 3 | 4 | 5): string[] => {
+        if (this.state === 'boot') {
+          this.openHangarFromBoot(true);
+        }
+        if (this.state === 'hangar' || this.state === 'result') {
+          this.startSortie();
+        } else if (this.state === 'paused' || this.state === 'upgrade') {
+          this.closeAllDialogs();
+          this.clearInputState();
+          this.setScreenState('playing');
+        }
+        this.clearBossIntroOverlayImmediate();
+        this.clearLaunchCountdown(false);
+        this.playerDying = false;
+        this.playerDeathTimer = 0;
+        if (this.playerInstance) {
+          this.playerInstance.root.visible = true;
+        }
+        this.enemyBullets.length = 0;
+        this.projectileVisuals.syncEnemyProjectiles(this.enemyBullets, 0, this.globalElapsed);
+        const kinds = this.waves.forceShowcaseActEnemies(act);
+        this.waves.setCombatActive(true);
+        this.envSystem.setMode('combat');
+        this.envSystem.setAct(act, true);
+        this.waves.updateEnvironment(0, 1.0);
+        this.envSystem.update(0, this.globalElapsed, 36, this.camera, 1.0);
+        this.updateBossHud();
+        return kinds;
+      },
+
+      sampleActRandomEnemies: (act: 1 | 2 | 3 | 4 | 5, count = 12): string[] => {
+        return this.waves.sampleRandomEnemyKindsForAct(act, count);
+      },
+
       damageBossPart: (partId: string, dmg: number): boolean => {
         const boss = this.waves.activeBoss;
         if (!boss || boss.dying) return false;
@@ -5976,40 +6052,40 @@ export class Game {
           this.playerPos,
           '+22 装甲修复',
           'pickup-repair',
-          './ui/icons/icon_pickup_repair.png'
+          './ui/icons/icon_pickup_repair.webp'
         );
         this.showPickupToast(
           'repair',
           '+22',
           '装甲修复',
           'HULL INTEGRITY RESTORED',
-          './ui/icons/icon_pickup_repair.png'
+          './ui/icons/icon_pickup_repair.webp'
         );
         this.spawnFloatingText(
           this.playerPos,
           '+25% 超频能量',
           'pickup-energy',
-          './ui/icons/icon_pickup_energy.png'
+          './ui/icons/icon_pickup_energy.webp'
         );
         this.showPickupToast(
           'energy',
           '+25%',
           '超频能量',
           'OVERDRIVE CAPACITOR CHARGED',
-          './ui/icons/icon_pickup_energy.png'
+          './ui/icons/icon_pickup_energy.webp'
         );
         this.spawnFloatingText(
           this.playerPos,
           '+10 护盾 · 穿环加速',
           'pickup-boost',
-          './ui/icons/icon_thruster.png'
+          './ui/icons/icon_thruster.webp'
         );
         this.showPickupToast(
           'boost',
           '+10 护盾',
           '穿环加速 · 能量+15%',
           'SLIPSTREAM OVERBOOST',
-          './ui/icons/icon_thruster.png'
+          './ui/icons/icon_thruster.webp'
         );
       },
 

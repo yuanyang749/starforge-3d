@@ -34,6 +34,17 @@ export class AnimationRig {
   private carrierLaunchPulse = 0;
   private baseRotations = new Map<string, THREE.Euler>();
   private basePositions = new Map<string, THREE.Vector3>();
+  private readonly isBiomeEnemy: boolean;
+  private readonly spinZNodes: THREE.Object3D[] = [];
+  private readonly spinYNodes: THREE.Object3D[] = [];
+  private readonly spinXNodes: THREE.Object3D[] = [];
+  private readonly legNodes: { node: THREE.Object3D; base: THREE.Euler; phase: number; isSpider: boolean }[] = [];
+  private readonly wingNodes: { node: THREE.Object3D; base: THREE.Euler; side: number }[] = [];
+  private readonly pulseNodes: { node: THREE.Object3D; baseScale: THREE.Vector3 }[] = [];
+  private turretHeadNode: THREE.Object3D | null = null;
+  private turretHeadBase: THREE.Euler | null = null;
+  private tailArticNode: THREE.Object3D | null = null;
+  private tailArticBase: THREE.Euler | null = null;
 
   constructor(
     key: ModelKey,
@@ -44,6 +55,7 @@ export class AnimationRig {
     this.key = key;
     this.root = root;
     this.mode = initialMode;
+    this.isBiomeEnemy = /^e[1-5]_/.test(key);
     this.mixer = new THREE.AnimationMixer(root);
 
     root.traverse((obj) => {
@@ -51,6 +63,41 @@ export class AnimationRig {
         this.nodes.set(obj.name, obj);
         this.baseRotations.set(obj.name, obj.rotation.clone());
         this.basePositions.set(obj.name, obj.position.clone());
+        if (this.isBiomeEnemy) {
+          const n = obj.name;
+          if (n.startsWith('SpinZ_')) this.spinZNodes.push(obj);
+          else if (n.startsWith('SpinY_')) this.spinYNodes.push(obj);
+          else if (n.startsWith('SpinX_')) this.spinXNodes.push(obj);
+          else if (n === 'Turret_Head') {
+            this.turretHeadNode = obj;
+            this.turretHeadBase = obj.rotation.clone();
+          } else if (n === 'Tail_Artic') {
+            this.tailArticNode = obj;
+            this.tailArticBase = obj.rotation.clone();
+          } else if (/^Leg_[LR][1-3]$/.test(n)) {
+            const isRight = n[4] === 'R';
+            const idx = Number(n[5]) || 1;
+            const isSpider =
+              key === 'e2_spider_turret' ||
+              key === 'e3_hull_crawler' ||
+              key === 'e4_dune_scorpion' ||
+              key === 'e5_deck_bastion';
+            this.legNodes.push({
+              node: obj,
+              base: obj.rotation.clone(),
+              phase: (isRight ? Math.PI : 0) + (idx - 1) * 1.15,
+              isSpider,
+            });
+          } else if (n === 'Wing_L' || n === 'Wing_R') {
+            this.wingNodes.push({
+              node: obj,
+              base: obj.rotation.clone(),
+              side: n === 'Wing_L' ? -1 : 1,
+            });
+          } else if (n.startsWith('Core_Pulse')) {
+            this.pulseNodes.push({ node: obj, baseScale: obj.scale.clone() });
+          }
+        }
       }
       if (
         key === 'prop_gate' &&
@@ -217,36 +264,6 @@ export class AnimationRig {
         action.timeScale = 2.5;
         action.play();
       }
-    } else if (this.key === 'enemy_drone') {
-      for (const action of this.actions.values()) {
-        action.reset().setLoop(THREE.LoopOnce, 1);
-        action.clampWhenFinished = true;
-        action.timeScale = 1.6;
-        action.play();
-      }
-    } else if (this.key === 'enemy_turret') {
-      for (const action of this.actions.values()) {
-        action.reset().setLoop(THREE.LoopRepeat, Infinity);
-        action.timeScale = 1.45;
-        action.play();
-      }
-    } else if (this.key === 'enemy_rover') {
-      // Skip 'SAMPLE | animated canister' — animate only the 6 robotic arm joints rapidly
-      for (const [name, action] of this.actions.entries()) {
-        if (name.toLowerCase().includes('sample')) continue;
-        action.reset().setLoop(THREE.LoopRepeat, Infinity);
-        action.timeScale = 2.6;
-        action.play();
-      }
-    } else if (this.key === 'enemy_foldwing') {
-      // Verified keyframes: t=0.033s is spread flight state, t=5.033s is 80-deg folded state
-      for (const action of this.actions.values()) {
-        action.reset().setLoop(THREE.LoopOnce, 1);
-        action.clampWhenFinished = true;
-        action.time = 5.0;
-        action.timeScale = -2.4;
-        action.play();
-      }
     } else if (this.key === 'boss_act1_skywing') {
       // Deterministic scrubbing of WingFold_Pivot_L/R: t=0.033s spread combat wings, t=5.0s folded dive wings
       for (const action of this.actions.values()) {
@@ -408,7 +425,7 @@ export class AnimationRig {
       return;
     }
 
-    if (this.key === 'ship_aero' || this.key === 'enemy_foldwing') {
+    if (this.key === 'ship_aero') {
       const prop = this.nodes.get('Propeller');
       if (prop) prop.rotation.z += dt * 36;
       return;
@@ -428,28 +445,6 @@ export class AnimationRig {
         const basePos = this.basePositions.get(nodeName);
         if (n && basePos) {
           n.position.z = basePos.z - recoil;
-        }
-      }
-      return;
-    }
-
-    if (this.key === 'enemy_drone') {
-      const turret = this.nodes.get('Turret | faceted multi-camera optical head');
-      if (turret) {
-        turret.rotation.y = Math.sin(elapsed * 3.1) * 0.55;
-      }
-      for (const [name, node] of this.nodes.entries()) {
-        if (name.startsWith('Wheel |')) {
-          node.rotation.x += dt * 11;
-        }
-      }
-      return;
-    }
-
-    if (this.key === 'enemy_rover') {
-      for (const [name, node] of this.nodes.entries()) {
-        if (name.startsWith('07 |')) {
-          node.rotation.x += dt * 9.5;
         }
       }
       return;
@@ -638,6 +633,65 @@ export class AnimationRig {
             fNode.position.z = fBase.z + launchZ + phaseOffset;
           }
         }
+      }
+      return;
+    }
+
+    if (this.isBiomeEnemy) {
+      // Blender Z-up -> glTF Y-up mapping: SpinZ -> rotation.y, SpinY -> rotation.z, SpinX -> rotation.x
+      for (let i = 0; i < this.spinZNodes.length; i++) {
+        const node = this.spinZNodes[i];
+        const isFastFan = node.name.includes('Fan');
+        const speed = isFastFan ? 18.0 : i % 2 === 0 ? 2.4 : -2.1;
+        node.rotation.y += dt * speed;
+      }
+      for (let i = 0; i < this.spinYNodes.length; i++) {
+        const node = this.spinYNodes[i];
+        const speed = node.name.includes('BladeHalo') ? 1.85 : 14.0;
+        node.rotation.z += dt * speed;
+      }
+      for (let i = 0; i < this.spinXNodes.length; i++) {
+        this.spinXNodes[i].rotation.x += dt * 3.2;
+      }
+
+      if (this.turretHeadNode && this.turretHeadBase) {
+        const aimYaw =
+          playerPos && worldPos
+            ? THREE.MathUtils.clamp((playerPos.x - worldPos.x) * 0.045, -0.68, 0.68)
+            : Math.sin(elapsed * 1.4) * 0.35;
+        this.turretHeadNode.rotation.y = THREE.MathUtils.lerp(
+          this.turretHeadNode.rotation.y,
+          this.turretHeadBase.y + aimYaw,
+          Math.min(1, dt * 6.0)
+        );
+      }
+
+      for (let i = 0; i < this.legNodes.length; i++) {
+        const leg = this.legNodes[i];
+        if (leg.isSpider) {
+          const lift = Math.sin(elapsed * 6.2 + leg.phase);
+          leg.node.rotation.z = leg.base.z + lift * 0.14;
+          leg.node.rotation.y = leg.base.y + Math.cos(elapsed * 6.2 + leg.phase) * 0.10;
+        } else {
+          const stride = Math.sin(elapsed * 5.2 + leg.phase);
+          leg.node.rotation.x = leg.base.x + stride * 0.28;
+        }
+      }
+
+      for (let i = 0; i < this.wingNodes.length; i++) {
+        const w = this.wingNodes[i];
+        const sway = Math.sin(elapsed * 3.1 + w.side * 0.4) * 0.08;
+        w.node.rotation.z = w.base.z + w.side * sway;
+      }
+
+      if (this.tailArticNode && this.tailArticBase) {
+        this.tailArticNode.rotation.x = this.tailArticBase.x + Math.sin(elapsed * 3.8) * 0.14;
+      }
+
+      for (let i = 0; i < this.pulseNodes.length; i++) {
+        const p = this.pulseNodes[i];
+        const s = 1.0 + Math.sin(elapsed * 5.6 + i * 0.7) * 0.10;
+        p.node.scale.set(p.baseScale.x * s, p.baseScale.y * s, p.baseScale.z * s);
       }
     }
   }

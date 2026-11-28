@@ -1552,6 +1552,64 @@ async function runTests() {
     );
     await page.mouse.move(720, 450);
 
+    // ==================== STAGE 6c: 30-Enemy 5-Act Biome Roster & Randomized 6-per-Act Verification ====================
+    console.log('[e2e] Stage 6c: 30-Enemy 5-Act Biome Roster & Randomized 6-per-Act Showcase...');
+    const allSeenBiomeKinds = new Set();
+    for (const actNum of [1, 2, 3, 4, 5]) {
+      const randomCheck = await page.evaluate((a) => {
+        const snap = window.__STARFORGE__.getSnapshot();
+        const pool = snap.actEnemyPools[a] || [];
+        const drawn = window.__STARFORGE__.sampleActRandomEnemies(a, 12);
+        return { pool, drawn };
+      }, actNum);
+      check(
+        randomCheck.pool.length === 6,
+        `Expected Act ${actNum} to have exactly 6 biome enemies, got ${randomCheck.pool.length}`
+      );
+      const poolSet = new Set(randomCheck.pool);
+      const drawnUnique = new Set(randomCheck.drawn);
+      for (const k of randomCheck.drawn) {
+        check(
+          poolSet.has(k),
+          `Expected Act ${actNum} random enemy "${k}" to belong to Act ${actNum} pool`
+        );
+      }
+      check(
+        drawnUnique.size === 6,
+        `Expected Act ${actNum} randomized 12-draw shuffle-bag to cover all 6 enemies, got ${drawnUnique.size}`
+      );
+      for (let idx = 1; idx < randomCheck.drawn.length; idx++) {
+        check(
+          randomCheck.drawn[idx] !== randomCheck.drawn[idx - 1],
+          `Expected Act ${actNum} shuffle-bag to avoid consecutive duplicates at index ${idx}`
+        );
+      }
+      for (const k of randomCheck.pool) allSeenBiomeKinds.add(k);
+
+      await page.evaluate((a) => window.__STARFORGE__.showcaseActEnemies(a), actNum);
+      await sleep(320);
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      const showSnap = await page.evaluate(() => window.__STARFORGE__.getSnapshot());
+      check(
+        showSnap.act === actNum && showSnap.enemyCount === 6,
+        `Expected Act ${actNum} showcase to render all 6 biome enemies, got act=${showSnap.act} count=${showSnap.enemyCount}`
+      );
+      const showSet = new Set(showSnap.activeEnemyKinds);
+      check(
+        showSet.size === 6,
+        `Expected 6 unique active enemy kinds in Act ${actNum} showcase, got ${JSON.stringify(showSnap.activeEnemyKinds)}`
+      );
+      const shotName = `v6_act${actNum}_enemies_6.png`;
+      await page.screenshot({ path: path.join(SCREENSHOT_DIR, shotName) });
+      console.log(`[e2e] Saved ${shotName} (${showSnap.activeEnemyKinds.join(', ')})`);
+      passedChecks += 5;
+    }
+    check(
+      allSeenBiomeKinds.size === 30,
+      `Expected 30 distinct biome enemies across 5 Acts, got ${allSeenBiomeKinds.size}`
+    );
+    passedChecks += 1;
+
     // ==================== STAGE 7: 1280x720 Responsive Bounds Check ====================
     console.log('[e2e] Stage 7: 1280x720 Responsive Bounds & Overlap Checks...');
     await page.setViewportSize({ width: 1280, height: 720 });

@@ -1,15 +1,19 @@
 import * as THREE from 'three';
 import {
+  ACT_ENEMY_POOLS,
   ACT_THEMES,
   BOSSES,
+  ENEMY_ROSTER,
+  type BiomeEnemyKey,
   type BossConfig,
   type BossId,
+  type EnemyKind,
   type ModelKey,
 } from '../assets/manifest';
 import { AssetLoader, type PooledModelInstance } from '../engine/AssetLoader';
 import { AnimationRig } from '../engine/AnimationRig';
 
-export type EnemyKind = 'enemy_drone' | 'enemy_turret' | 'enemy_rover' | 'enemy_foldwing';
+export type { EnemyKind };
 
 export interface ActiveEnemy {
   id: number;
@@ -234,13 +238,6 @@ const GATE_DOOR_CENTER_DZ = -0.330 * GATE_SCALE;
 const GATE_DOOR_R = 1.47 * GATE_SCALE;
 const GATE_DOOR_HALF_THICK = 0.51 * GATE_SCALE;
 
-const ENEMY_CAPS: Record<EnemyKind, number> = {
-  enemy_drone: 8,
-  enemy_turret: 5,
-  enemy_rover: 3,
-  enemy_foldwing: 4,
-};
-
 export class WaveDirector {
   private readonly scene: THREE.Scene;
   private readonly loader: AssetLoader;
@@ -287,6 +284,8 @@ export class WaveDirector {
   activeBoss: ActiveBoss | null = null;
   private bossScaleFactor = 1.0;
   private playerUpgradeStacks = 0;
+  private readonly actShuffleBags = new Map<number, BiomeEnemyKey[]>();
+  private lastSpawnedKind: EnemyKind | null = null;
 
   private currentFogColor = new THREE.Color(ACT_THEMES[0].fogColor);
   private targetFogColor = new THREE.Color(ACT_THEMES[0].fogColor);
@@ -613,10 +612,71 @@ export class WaveDirector {
     }
     this.waveInAct = 2;
     const ev = this.beginWave(themeAct, 2);
-    // Spawn an immediate enemy sample for deterministic inspection
-    this.spawnEnemyInstance('enemy_drone', 0, 0, -128);
+    // Spawn an immediate biome-matched enemy sample for deterministic inspection
+    this.spawnEnemyInstance(this.pickAllowedEnemyKind(), 0, -1.0, -128);
     this.spawnedInWave += 1;
     return ev;
+  }
+
+  forceShowcaseActEnemies(act: 1 | 2 | 3 | 4 | 5): BiomeEnemyKey[] {
+    this.clearCombatEntities();
+    this.combatActive = true;
+    this.envGroup.visible = true;
+    this.endlessMode = false;
+    this.currentAct = act;
+    this.waveInAct = 2;
+    this.phaseState = 'awaiting_clear';
+    this.applyActTheme(act, true);
+
+    const pool = ACT_ENEMY_POOLS[act];
+    // Arrange all 6 biome-themed enemies cleanly across foreground air & lower ground lanes
+    const airSlots: [number, number, number][] = [
+      [-9.2, 2.8, -26],
+      [0.0, 3.3, -29],
+      [9.2, 2.8, -26],
+      [-5.6, 0.3, -23],
+      [5.6, 0.3, -23],
+      [0.0, -0.4, -22],
+    ];
+    const groundSlots: [number, number, number][] = [
+      [-8.4, -3.5, -24],
+      [0.0, -3.7, -26],
+      [8.4, -3.5, -24],
+      [-4.2, -3.3, -21],
+      [4.2, -3.3, -21],
+      [0.0, -3.2, -20],
+    ];
+    let airIdx = 0;
+    let groundIdx = 0;
+    for (const kind of pool) {
+      const spec = ENEMY_ROSTER[kind];
+      const slot =
+        spec.locomotion === 'ground'
+          ? groundSlots[groundIdx++ % groundSlots.length]
+          : airSlots[airIdx++ % airSlots.length];
+      this.spawnEnemyInstance(kind, slot[0], slot[1], slot[2]);
+      const spawned = this.activeEnemies[this.activeEnemies.length - 1];
+      if (spawned) {
+        spawned.targetZ = slot[2];
+        spawned.baseX = slot[0];
+        spawned.baseY = slot[1];
+      }
+    }
+    return [...pool];
+  }
+
+  sampleRandomEnemyKindsForAct(act: 1 | 2 | 3 | 4 | 5, count: number): BiomeEnemyKey[] {
+    const prevAct = this.currentAct;
+    const prevLast = this.lastSpawnedKind;
+    this.currentAct = act;
+    this.actShuffleBags.delete(act);
+    const drawn: BiomeEnemyKey[] = [];
+    for (let i = 0; i < count; i++) {
+      drawn.push(this.drawFromActShuffleBag(act));
+    }
+    this.currentAct = prevAct;
+    this.lastSpawnedKind = prevLast;
+    return drawn;
   }
 
   forceSpawnBoss(act: 1 | 2 | 3 | 4 | 5): WaveEvent {
@@ -1096,48 +1156,88 @@ export class WaveDirector {
   }
 
   private getEnemyCap(kind: EnemyKind): number {
-    if (!this.endlessMode) return ENEMY_CAPS[kind];
-    const extra = kind === 'enemy_rover'
+    const baseCap = ENEMY_ROSTER[kind]?.cap ?? 4;
+    if (!this.endlessMode) return baseCap;
+    const isHeavy = ENEMY_ROSTER[kind]?.isElite ?? false;
+    const extra = isHeavy
       ? Math.min(2, Math.floor(this.endlessWave / 4))
-      : Math.min(4, Math.floor(this.endlessWave / 3));
-    return ENEMY_CAPS[kind] + extra;
+      : Math.min(3, Math.floor(this.endlessWave / 3));
+    return baseCap + extra;
   }
 
-  private pickAllowedEnemyKind(): EnemyKind {
-    const candidates: EnemyKind[] =
-      this.currentAct === 1 && !this.endlessMode
-        ? ['enemy_drone', 'enemy_turret', 'enemy_rover', 'enemy_foldwing']
-        : ['enemy_foldwing', 'enemy_turret', 'enemy_rover', 'enemy_drone'];
+  private getActPool(act: number): BiomeEnemyKey[] {
+    const clamped = Math.max(1, Math.min(5, Math.floor(act))) as 1 | 2 | 3 | 4 | 5;
+    return ACT_ENEMY_POOLS[clamped];
+  }
 
-    const weighted: EnemyKind[] = [];
-    const heavyEndless = this.endlessMode && this.endlessWave >= 3;
-    const lateEndless = this.endlessMode && this.endlessWave >= 6;
-    for (const k of candidates) {
-      if (this.countKind(k) >= this.getEnemyCap(k)) continue;
-      if (k === 'enemy_drone') {
-        if (lateEndless) weighted.push(k);
-        else if (heavyEndless) weighted.push(k, k);
-        else weighted.push(k, k, k);
-      } else if (k === 'enemy_turret') {
-        weighted.push(k, k);
-        if (heavyEndless) weighted.push(k);
-      } else if (k === 'enemy_foldwing') {
-        weighted.push(k, k);
-        if (heavyEndless) weighted.push(k);
-      } else if (k === 'enemy_rover' && (this.endlessMode || this.currentAct >= 2 || this.waveInAct >= 2)) {
-        weighted.push(k);
-        if (lateEndless) weighted.push(k);
+  private refillActShuffleBag(act: number): BiomeEnemyKey[] {
+    const pool = [...this.getActPool(act)];
+    // Fisher-Yates unbiased random shuffle so all 6 biome enemies rotate unpredictably every Act
+    for (let i = pool.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      const tmp = pool[i];
+      pool[i] = pool[j];
+      pool[j] = tmp;
+    }
+    // Avoid immediate duplicate across shuffle-bag boundary
+    if (pool.length > 1 && pool[pool.length - 1] === this.lastSpawnedKind) {
+      const tmp = pool[0];
+      pool[0] = pool[pool.length - 1];
+      pool[pool.length - 1] = tmp;
+    }
+    this.actShuffleBags.set(act, pool);
+    return pool;
+  }
+
+  private drawFromActShuffleBag(act: number): BiomeEnemyKey {
+    let bag = this.actShuffleBags.get(act);
+    if (!bag || bag.length === 0) {
+      bag = this.refillActShuffleBag(act);
+    }
+    const picked = bag.pop()!;
+    this.lastSpawnedKind = picked;
+    return picked;
+  }
+
+  pickEscortEnemyKind(act: number): BiomeEnemyKey {
+    const pool = this.getActPool(act);
+    // Prefer agile interceptors/gunships/mechs as boss escorts while still drawing randomly from this Act's 6 units
+    const agile = pool.filter((k) => ENEMY_ROSTER[k].locomotion !== 'ground');
+    const source = agile.length > 0 ? agile : pool;
+    const available = source.filter((k) => this.countKind(k) < this.getEnemyCap(k));
+    const list = available.length > 0 ? available : source;
+    return list[Math.floor(Math.random() * list.length)];
+  }
+
+  private pickAllowedEnemyKind(): BiomeEnemyKey {
+    const act = Math.max(1, Math.min(5, this.currentAct));
+    // First pull from the shuffled 6-unit biome bag so every Act exhibits all 6 matching enemies naturally
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const candidate = this.drawFromActShuffleBag(act);
+      if (this.countKind(candidate) < this.getEnemyCap(candidate)) {
+        return candidate;
       }
     }
-
-    if (weighted.length === 0) return 'enemy_drone';
+    // Fallback weighted random pick among uncapped units of the current Act
+    const pool = this.getActPool(act);
+    const weighted: BiomeEnemyKey[] = [];
+    for (const k of pool) {
+      if (this.countKind(k) >= this.getEnemyCap(k)) continue;
+      const w = Math.max(1, ENEMY_ROSTER[k].weight);
+      for (let i = 0; i < w; i++) weighted.push(k);
+    }
+    if (weighted.length === 0) return pool[Math.floor(Math.random() * pool.length)];
     return weighted[Math.floor(Math.random() * weighted.length)];
   }
 
   spawnEscortEnemy(kind: EnemyKind, originPos: THREE.Vector3): void {
     if (this.countKind(kind) >= this.getEnemyCap(kind)) return;
+    const spec = ENEMY_ROSTER[kind];
     const clampedX = THREE.MathUtils.clamp(originPos.x + (Math.random() - 0.5) * 9, -11.5, 11.5);
-    const clampedY = THREE.MathUtils.clamp(originPos.y, -6.2, 6.2);
+    const clampedY =
+      spec.locomotion === 'ground'
+        ? THREE.MathUtils.clamp(-3.8 + (Math.random() - 0.5) * 1.4, -4.8, -2.6)
+        : THREE.MathUtils.clamp(originPos.y + (Math.random() - 0.5) * 2.4, -2.5, 5.2);
     this.spawnEnemyInstance(kind, clampedX, clampedY, originPos.z + 4);
   }
 
@@ -1152,11 +1252,14 @@ export class WaveDirector {
     for (let i = 0; i < batch && this.spawnedInWave < this.targetSpawnsInWave; i++) {
       const kind = this.pickAllowedEnemyKind();
       if (this.countKind(kind) >= this.getEnemyCap(kind)) continue;
+      const spec = ENEMY_ROSTER[kind];
       const x = (Math.random() - 0.5) * 20;
       const y =
-        kind === 'enemy_rover'
-          ? -3.5 + (Math.random() - 0.5) * 2.5
-          : (Math.random() - 0.5) * 10;
+        spec.locomotion === 'ground'
+          ? -3.8 + (Math.random() - 0.5) * 1.6
+          : spec.locomotion === 'hover'
+            ? 0.4 + (Math.random() - 0.5) * 4.6
+            : 1.4 + (Math.random() - 0.5) * 5.8;
       this.spawnEnemyInstance(kind, x, y, -128 - i * 10);
       this.spawnedInWave += 1;
     }
@@ -1167,35 +1270,9 @@ export class WaveDirector {
     const rig = new AnimationRig(kind, inst.modelRoot, inst.animations, 'combat');
 
     const scaling = this.getCombatScaling();
-    const scale = scaling.enemyHpMult;
-    let baseHp = 45;
-    let hitRadius = 1.8;
-    let score = 120;
-    let targetZ = -26;
-    let isElite = false;
-
-    if (kind === 'enemy_turret') {
-      baseHp = 95;
-      hitRadius = 2.2;
-      score = 220;
-      targetZ = -32;
-      isElite = true;
-    } else if (kind === 'enemy_rover') {
-      baseHp = 135;
-      hitRadius = 2.35;
-      score = 320;
-      targetZ = -24;
-      isElite = true;
-    } else if (kind === 'enemy_foldwing') {
-      baseHp = 78;
-      hitRadius = 2.1;
-      score = 240;
-      targetZ = -28;
-      isElite = true;
-    }
-
-    const hp = Math.round(baseHp * scale);
-    const scaledScore = Math.round(score * scaling.scoreMult);
+    const spec = ENEMY_ROSTER[kind];
+    const hp = Math.round(spec.baseHp * scaling.enemyHpMult);
+    const scaledScore = Math.round(spec.scoreValue * scaling.scoreMult);
     inst.root.position.set(x, y, z);
     this.scene.add(inst.root);
 
@@ -1206,17 +1283,20 @@ export class WaveDirector {
       rig,
       hp,
       maxHp: hp,
-      hitRadius,
+      hitRadius: spec.hitRadius,
       scoreValue: scaledScore,
       pos: inst.root.position,
       baseX: THREE.MathUtils.clamp(x, -11.5, 11.5),
-      baseY: THREE.MathUtils.clamp(y, -6.2, 6.2),
-      targetZ: targetZ + (Math.random() - 0.5) * 9,
+      baseY:
+        spec.locomotion === 'ground'
+          ? THREE.MathUtils.clamp(y, -4.8, -2.5)
+          : THREE.MathUtils.clamp(y, -4.2, 5.6),
+      targetZ: spec.targetZ + (Math.random() - 0.5) * 8,
       age: 0,
-      fireTimer: Math.max(0.55, (0.9 + Math.random() * 1.1) / scaling.enemyFireRateMult),
+      fireTimer: Math.max(0.55, (spec.fireInterval * (0.45 + Math.random() * 0.45)) / scaling.enemyFireRateMult),
       phase: Math.random() * Math.PI * 2,
       flashTimer: 0,
-      isElite,
+      isElite: spec.isElite,
     });
   }
 

@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { DRACOLoader } from 'three/examples/jsm/loaders/DRACOLoader.js';
 import * as SkeletonUtils from 'three/examples/jsm/utils/SkeletonUtils.js';
 import {
   deinterleaveGeometry,
@@ -41,7 +42,6 @@ export interface PooledModelInstance {
 const BATCH_WHITELIST = new Set<ModelKey>([
   'pickup_repair',
   'pickup_energy',
-  'enemy_foldwing',
   'boss_act1_skywing',
   'ship_astra',
 ]);
@@ -86,29 +86,29 @@ const DYNAMIC_NODE_KEYWORDS = [
 
 const UI_PRELOAD_URLS = [
   './ui/bootloader_bg.webp',
-  './ui/logo_emblem.png',
-  './ui/card_chip_frame.png',
-  './ui/icons/badge_boss_alert.png',
-  './ui/icons/badge_astra.png',
-  './ui/icons/badge_opus.png',
-  './ui/icons/badge_morph.png',
-  './ui/icons/badge_aero.png',
-  './ui/icons/medal_victory.png',
-  './ui/icons/medal_defeat.png',
-  './ui/icons/icon_pickup_repair.png',
-  './ui/icons/icon_pickup_energy.png',
-  './ui/icons/icon_barrel_roll.png',
-  './ui/icons/icon_crit.png',
-  './ui/icons/icon_deflect.png',
-  './ui/icons/icon_missile.png',
-  './ui/icons/icon_overcharge.png',
-  './ui/icons/icon_pierce.png',
-  './ui/icons/icon_prism.png',
-  './ui/icons/icon_shield.png',
-  './ui/icons/icon_tesla.png',
-  './ui/icons/icon_thruster.png',
-  './ui/icons/icon_ultimate.png',
-  './ui/icons/icon_wingman.png',
+  './ui/logo_emblem.webp',
+  './ui/card_chip_frame.webp',
+  './ui/icons/badge_boss_alert.webp',
+  './ui/icons/badge_astra.webp',
+  './ui/icons/badge_opus.webp',
+  './ui/icons/badge_morph.webp',
+  './ui/icons/badge_aero.webp',
+  './ui/icons/medal_victory.webp',
+  './ui/icons/medal_defeat.webp',
+  './ui/icons/icon_pickup_repair.webp',
+  './ui/icons/icon_pickup_energy.webp',
+  './ui/icons/icon_barrel_roll.webp',
+  './ui/icons/icon_crit.webp',
+  './ui/icons/icon_deflect.webp',
+  './ui/icons/icon_missile.webp',
+  './ui/icons/icon_overcharge.webp',
+  './ui/icons/icon_pierce.webp',
+  './ui/icons/icon_prism.webp',
+  './ui/icons/icon_shield.webp',
+  './ui/icons/icon_tesla.webp',
+  './ui/icons/icon_thruster.webp',
+  './ui/icons/icon_ultimate.webp',
+  './ui/icons/icon_wingman.webp',
   './ui/frames/panel_frame_tall.webp',
   './ui/frames/modal_frame_sci_fi.webp',
   './ui/frames/card_slot_cyan.webp',
@@ -135,6 +135,8 @@ interface EnvTextureSpec {
   mipmaps?: boolean;
   linear?: boolean;
   transparentFallback?: boolean;
+  repeat?: boolean;
+  flipY?: boolean;
 }
 
 const ENV_TEXTURE_SPECS: ReadonlyArray<EnvTextureSpec> = [
@@ -306,13 +308,6 @@ const ENV_TEXTURE_SPECS: ReadonlyArray<EnvTextureSpec> = [
     mipmaps: true,
   },
   {
-    key: 'act5_keel_arch',
-    url: './env/act3_keel_arch.webp',
-    fallbackHex: 0x000000,
-    mipmaps: true,
-    transparentFallback: true,
-  },
-  {
     key: 'act5_bastion_a',
     url: './env/act3_bastion_a.webp',
     fallbackHex: 0x000000,
@@ -333,6 +328,28 @@ const ENV_TEXTURE_SPECS: ReadonlyArray<EnvTextureSpec> = [
     mipmaps: true,
     transparentFallback: true,
   },
+  // Shared 5-Act 1K HD Codex PBR texture sets bound across all 30 enemy GLBs (eliminates 6x GPU VRAM duplication)
+  ...([1, 2, 3, 4, 5] as const).flatMap((act): EnvTextureSpec[] => {
+    const base: EnvTextureSpec[] = [
+      { key: `enemy_pbr_a${act}_armor`, url: `./env/enemy_pbr/act${act}_armor_albedo.webp`, fallbackHex: 0x808080, mipmaps: true, repeat: true, flipY: false },
+      { key: `enemy_pbr_a${act}_trim`, url: `./env/enemy_pbr/act${act}_trim_albedo.webp`, fallbackHex: 0x606060, mipmaps: true, repeat: true, flipY: false },
+      { key: `enemy_pbr_a${act}_normal`, url: `./env/enemy_pbr/act${act}_normal.webp`, fallbackHex: 0x8080ff, mipmaps: true, linear: true, repeat: true, flipY: false },
+      { key: `enemy_pbr_a${act}_rough`, url: `./env/enemy_pbr/act${act}_roughness.webp`, fallbackHex: 0x666666, mipmaps: true, linear: true, repeat: true, flipY: false },
+      { key: `enemy_pbr_a${act}_metal`, url: `./env/enemy_pbr/act${act}_metallic.webp`, fallbackHex: 0x808080, mipmaps: true, linear: true, repeat: true, flipY: false },
+      { key: `enemy_pbr_a${act}_hex`, url: `./env/enemy_pbr/act${act}_hex.webp`, fallbackHex: 0x22ccff, mipmaps: true, repeat: true, flipY: false },
+    ];
+    if (act === 2 || act === 3 || act === 5) {
+      base.push({
+        key: `enemy_pbr_a${act}_emissive`,
+        url: `./env/enemy_pbr/act${act}_emissive.webp`,
+        fallbackHex: 0x000000,
+        mipmaps: true,
+        repeat: true,
+        flipY: false,
+      });
+    }
+    return base;
+  }),
 ];
 
 const MAX_POOL_PER_KEY = 24;
@@ -543,27 +560,196 @@ function stripNamedNodes(root: THREE.Object3D, stripList?: string[]): void {
   }
 }
 
-function tintEnemyFoldwing(root: THREE.Object3D): void {
-  const seen = new Map<THREE.Material, THREE.Material>();
+interface EnemyActPbrConfig {
+  armorNormal: number;
+  trimNormal: number;
+  armorEmissiveIntensity: number;
+  frameRgb: readonly [number, number, number];
+  frameMetalness: number;
+  metalRgb: readonly [number, number, number];
+  metalMetalness: number;
+  metalRoughness: number;
+  hexEmissiveIntensity: number;
+  hexMetalness: number;
+  hexRoughness: number;
+}
+
+const ENEMY_ACT_PBR_CONFIG: Record<number, EnemyActPbrConfig> = {
+  1: {
+    armorNormal: 1.05,
+    trimNormal: 0.95,
+    armorEmissiveIntensity: 0,
+    frameRgb: [0.14, 0.17, 0.22],
+    frameMetalness: 0.8,
+    metalRgb: [0.58, 0.64, 0.7],
+    metalMetalness: 0.92,
+    metalRoughness: 0.22,
+    hexEmissiveIntensity: 2.4,
+    hexMetalness: 0.2,
+    hexRoughness: 0.15,
+  },
+  2: {
+    armorNormal: 1.1,
+    trimNormal: 1.0,
+    armorEmissiveIntensity: 2.2,
+    frameRgb: [0.2, 0.22, 0.28],
+    frameMetalness: 0.76,
+    metalRgb: [0.62, 0.68, 0.76],
+    metalMetalness: 0.9,
+    metalRoughness: 0.2,
+    hexEmissiveIntensity: 2.3,
+    hexMetalness: 0.2,
+    hexRoughness: 0.14,
+  },
+  3: {
+    armorNormal: 1.1,
+    trimNormal: 1.0,
+    armorEmissiveIntensity: 2.4,
+    frameRgb: [0.2, 0.19, 0.3],
+    frameMetalness: 0.76,
+    metalRgb: [0.68, 0.64, 0.8],
+    metalMetalness: 0.9,
+    metalRoughness: 0.18,
+    hexEmissiveIntensity: 2.4,
+    hexMetalness: 0.2,
+    hexRoughness: 0.14,
+  },
+  4: {
+    armorNormal: 1.15,
+    trimNormal: 1.05,
+    armorEmissiveIntensity: 0,
+    frameRgb: [0.2, 0.17, 0.15],
+    frameMetalness: 0.76,
+    metalRgb: [0.7, 0.56, 0.34],
+    metalMetalness: 0.9,
+    metalRoughness: 0.22,
+    hexEmissiveIntensity: 2.2,
+    hexMetalness: 0.25,
+    hexRoughness: 0.14,
+  },
+  5: {
+    armorNormal: 1.15,
+    trimNormal: 1.05,
+    armorEmissiveIntensity: 2.5,
+    frameRgb: [0.19, 0.17, 0.19],
+    frameMetalness: 0.78,
+    metalRgb: [0.6, 0.58, 0.62],
+    metalMetalness: 0.9,
+    metalRoughness: 0.2,
+    hexEmissiveIntensity: 2.3,
+    hexMetalness: 0.2,
+    hexRoughness: 0.14,
+  },
+};
+
+function bindSharedEnemyPbrTextures(
+  root: THREE.Object3D,
+  act: number,
+  envTextures: Map<string, THREE.Texture>
+): void {
+  const cfg = ENEMY_ACT_PBR_CONFIG[act];
+  if (!cfg) return;
+
+  const armorTex = envTextures.get(`enemy_pbr_a${act}_armor`) ?? null;
+  const trimTex = envTextures.get(`enemy_pbr_a${act}_trim`) ?? null;
+  const normalTex = envTextures.get(`enemy_pbr_a${act}_normal`) ?? null;
+  const roughTex = envTextures.get(`enemy_pbr_a${act}_rough`) ?? null;
+  const metalTex = envTextures.get(`enemy_pbr_a${act}_metal`) ?? null;
+  const hexTex = envTextures.get(`enemy_pbr_a${act}_hex`) ?? null;
+  const emissiveTex = envTextures.get(`enemy_pbr_a${act}_emissive`) ?? null;
+
+  const seen = new Set<THREE.Material>();
   root.traverse((obj) => {
     const mesh = obj as THREE.Mesh;
     if (!mesh.isMesh || !mesh.material) return;
-    const tintOne = (m: THREE.Material): THREE.Material => {
-      const existing = seen.get(m);
-      if (existing) return existing;
-      const c = m.clone();
-      if (c instanceof THREE.MeshStandardMaterial) {
-        c.color.lerp(new THREE.Color(0xff4d6d), 0.32);
-        c.emissive.setHex(0x660b1d);
-        c.emissiveIntensity = Math.max(c.emissiveIntensity, 0.35);
+    const hasVertexColor = Boolean(mesh.geometry?.attributes?.color);
+    const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
+    for (const mat of mats) {
+      if (seen.has(mat)) continue;
+      seen.add(mat);
+      if (!(mat instanceof THREE.MeshStandardMaterial)) continue;
+
+      const name = mat.name || '';
+      if (name.endsWith('_Armor')) {
+        mat.color.setHex(0xffffff);
+        mat.map = armorTex;
+        mat.normalMap = normalTex;
+        mat.normalScale.set(cfg.armorNormal, cfg.armorNormal);
+        mat.roughnessMap = roughTex;
+        mat.roughness = 1.0;
+        mat.metalnessMap = metalTex;
+        mat.metalness = 1.0;
+        mat.vertexColors = hasVertexColor;
+        if (emissiveTex && cfg.armorEmissiveIntensity > 0) {
+          mat.emissive.setHex(0xffffff);
+          mat.emissiveMap = emissiveTex;
+          mat.emissiveIntensity = cfg.armorEmissiveIntensity;
+        } else {
+          mat.emissive.setHex(0x000000);
+          mat.emissiveMap = null;
+          mat.emissiveIntensity = 0;
+        }
+        mat.needsUpdate = true;
+      } else if (name.endsWith('_Trim')) {
+        mat.color.setHex(0xffffff);
+        mat.map = trimTex;
+        mat.normalMap = normalTex;
+        mat.normalScale.set(cfg.trimNormal, cfg.trimNormal);
+        mat.roughnessMap = roughTex;
+        mat.roughness = 1.0;
+        mat.metalnessMap = metalTex;
+        mat.metalness = 1.0;
+        mat.vertexColors = hasVertexColor;
+        mat.emissive.setHex(0x000000);
+        mat.emissiveMap = null;
+        mat.emissiveIntensity = 0;
+        mat.needsUpdate = true;
+      } else if (name.endsWith('_Frame')) {
+        mat.color.setRGB(cfg.frameRgb[0], cfg.frameRgb[1], cfg.frameRgb[2]);
+        mat.map = null;
+        mat.normalMap = normalTex;
+        mat.normalScale.set(0.65, 0.65);
+        mat.roughnessMap = roughTex;
+        mat.roughness = 1.0;
+        mat.metalnessMap = null;
+        mat.metalness = cfg.frameMetalness;
+        mat.vertexColors = false;
+        mat.needsUpdate = true;
+      } else if (name.endsWith('_Metal')) {
+        mat.color.setRGB(cfg.metalRgb[0], cfg.metalRgb[1], cfg.metalRgb[2]);
+        mat.map = null;
+        mat.normalMap = normalTex;
+        mat.normalScale.set(0.35, 0.35);
+        mat.roughnessMap = null;
+        mat.roughness = cfg.metalRoughness;
+        mat.metalnessMap = null;
+        mat.metalness = cfg.metalMetalness;
+        mat.vertexColors = false;
+        mat.needsUpdate = true;
+      } else if (name.endsWith('_Hex')) {
+        mat.color.setHex(0xffffff);
+        mat.map = hexTex;
+        mat.emissive.setHex(0xffffff);
+        mat.emissiveMap = hexTex;
+        mat.emissiveIntensity = cfg.hexEmissiveIntensity;
+        mat.metalness = cfg.hexMetalness;
+        mat.roughness = cfg.hexRoughness;
+        mat.vertexColors = false;
+        mat.needsUpdate = true;
+      } else if (act === 4 && name === 'A4_Glass') {
+        mat.color.setHex(0xffffff);
+        mat.map = hexTex;
+        mat.emissive.setHex(0xffffff);
+        mat.emissiveMap = hexTex;
+        mat.emissiveIntensity = 2.0;
+        mat.metalness = 0.84;
+        mat.roughness = 0.08;
+        mat.vertexColors = false;
+        mat.needsUpdate = true;
+      } else if (name.endsWith('_Glow') || name.endsWith('_Optic') || name.endsWith('_Glass')) {
+        mat.vertexColors = false;
+        mat.needsUpdate = true;
       }
-      seen.set(m, c);
-      return c;
-    };
-    if (Array.isArray(mesh.material)) {
-      mesh.material = mesh.material.map(tintOne);
-    } else {
-      mesh.material = tintOne(mesh.material);
     }
   });
 }
@@ -993,15 +1179,18 @@ function applyTextureSharpness(root: THREE.Object3D, maxAnisotropy: number): voi
 
 function configureEnvTexture(
   tex: THREE.Texture,
-  opts?: Pick<EnvTextureSpec, 'mipmaps' | 'linear'>
+  opts?: Pick<EnvTextureSpec, 'mipmaps' | 'linear' | 'repeat' | 'flipY'>
 ): THREE.Texture {
   const isData = tex instanceof THREE.DataTexture;
   const useMipmaps = Boolean(opts?.mipmaps) && !isData;
   tex.colorSpace = opts?.linear ? THREE.NoColorSpace : THREE.SRGBColorSpace;
   tex.magFilter = THREE.LinearFilter;
   tex.minFilter = useMipmaps ? THREE.LinearMipmapLinearFilter : THREE.LinearFilter;
-  tex.wrapS = THREE.ClampToEdgeWrapping;
-  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.wrapS = opts?.repeat ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
+  tex.wrapT = opts?.repeat ? THREE.RepeatWrapping : THREE.ClampToEdgeWrapping;
+  if (opts?.flipY !== undefined) {
+    tex.flipY = opts.flipY;
+  }
   tex.generateMipmaps = useMipmaps;
   tex.needsUpdate = true;
   return tex;
@@ -1122,10 +1311,16 @@ function captureNodeRestStates(root: THREE.Object3D): NodeRestState[] {
 
 export class AssetLoader {
   private loader = new GLTFLoader();
+  private dracoLoader = new DRACOLoader();
   private prototypes = new Map<ModelKey, LoadedModelPrototype>();
   private pools = new Map<ModelKey, PooledModelInstance[]>();
   private snapshots = new WeakMap<PooledModelInstance, InstanceSnapshot>();
   private envTextures = new Map<string, THREE.Texture>();
+
+  constructor() {
+    this.dracoLoader.setDecoderPath('./draco/');
+    this.loader.setDRACOLoader(this.dracoLoader);
+  }
 
   async preloadAll(onProgress: (info: ModelLoadProgress) => void): Promise<void> {
     const keys = Object.keys(MODEL_ASSETS) as ModelKey[];
@@ -1161,7 +1356,7 @@ export class AssetLoader {
     );
 
     let done = 0;
-    for (const key of keys) {
+    const loadOneModel = async (key: ModelKey): Promise<void> => {
       const spec = MODEL_ASSETS[key];
       const gltf = await this.loader.loadAsync(spec.url);
       const rawScene = gltf.scene;
@@ -1171,9 +1366,7 @@ export class AssetLoader {
       if (BATCH_WHITELIST.has(key)) {
         batchStaticMeshes(rawScene, gltf.animations);
       }
-      if (key === 'enemy_foldwing') {
-        tintEnemyFoldwing(rawScene);
-      } else if (key === 'boss_act1_skywing') {
+      if (key === 'boss_act1_skywing') {
         enhanceBossSkywing(rawScene);
       } else if (key === 'ship_astra') {
         optimizeShipAstraCanopy(rawScene);
@@ -1255,9 +1448,30 @@ export class AssetLoader {
         drawCallsAfter: afterStats.drawCalls,
         message: spec.bootLog,
       });
-    }
+    };
+
+    // Bounded 6-way parallel GLB loading keeps 47-model preload fast and smooth
+    let cursor = 0;
+    const workerCount = Math.min(6, keys.length);
+    await Promise.all(
+      Array.from({ length: workerCount }, async () => {
+        while (cursor < keys.length) {
+          const nextKey = keys[cursor++];
+          await loadOneModel(nextKey);
+        }
+      })
+    );
 
     await Promise.all([uiPromise, envPromise]);
+
+    // Bind shared 5-Act 1K HD Codex PBR textures onto all 30 enemy prototypes before pool cloning
+    for (const [key, proto] of this.prototypes.entries()) {
+      const m = /^e([1-5])_/.exec(key);
+      if (m) {
+        bindSharedEnemyPbrTextures(proto.prototype, Number(m[1]), this.envTextures);
+      }
+    }
+
     done += 1;
     onProgress({
       loaded: done,
@@ -1284,10 +1498,36 @@ export class AssetLoader {
       boss_act2_crab: 1,
       boss_act4_scarab: 1,
       boss_act3_carrier: 1,
-      enemy_drone: 10,
-      enemy_turret: 5,
-      enemy_rover: 3,
-      enemy_foldwing: 5,
+      e1_wasp_dart: 2,
+      e1_gyro_rotor: 2,
+      e1_sky_jelly: 2,
+      e1_lance_bomber: 2,
+      e1_aegis_prism: 2,
+      e1_valkyrie_mech: 2,
+      e2_road_strider: 2,
+      e2_siege_tank: 2,
+      e2_spider_turret: 2,
+      e2_neon_blade: 2,
+      e2_riot_enforcer: 2,
+      e2_swarmer_pod: 2,
+      e3_void_mantis: 2,
+      e3_crystal_obelisk: 2,
+      e3_hull_crawler: 2,
+      e3_rift_frigate: 2,
+      e3_grav_ram: 2,
+      e3_wraith_frame: 2,
+      e4_dune_scorpion: 2,
+      e4_sand_juggernaut: 2,
+      e4_canyon_walker: 2,
+      e4_scarab_drone: 2,
+      e4_mirage_wasp: 2,
+      e4_solar_obelisk: 2,
+      e5_iron_goliath: 2,
+      e5_deck_bastion: 2,
+      e5_furnace_roller: 2,
+      e5_crimson_reaper: 2,
+      e5_eclipse_sentinel: 2,
+      e5_dread_gunship: 2,
       ally_biplane: 2,
       pickup_repair: 12,
       pickup_energy: 12,
@@ -1313,8 +1553,10 @@ export class AssetLoader {
         bucket = [];
         this.pools.set(key, bucket);
       }
+      const needsClonedMaterials =
+        key.startsWith('enemy_') || key.startsWith('boss_') || /^e[1-5]_/.test(key);
       while (bucket.length < targetCount) {
-        const inst = this.createInstance(key, key.startsWith('enemy_') || key.startsWith('boss_'));
+        const inst = this.createInstance(key, needsClonedMaterials);
         bucket.push(inst);
       }
       if (bucket.length > 0) {
